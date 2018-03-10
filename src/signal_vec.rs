@@ -94,7 +94,6 @@ pub trait SignalVec {
         where F: FnMut(Self::Item) -> Option<A>,
               Self: Sized {
         FilterMap {
-            length: 0,
             indexes: vec![],
             signal: self,
             callback,
@@ -246,7 +245,7 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
                     }))
                 },
                 Async::Ready(None) => if self.signals.len() == 0 {
-                    return Async::Ready(None)
+                    return Async::Ready(None);
                 },
                 Async::NotReady => {
                     self.signal = Some(signal);
@@ -347,44 +346,26 @@ impl<A: SignalVec> Stream for SignalVecStream<A> {
 
     #[inline]
     fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        match self.signal.poll() {
-            Async::Ready(some) => Ok(Async::Ready(some)),
-            Async::NotReady => Ok(Async::NotReady),
-        }
+        Ok(self.signal.poll())
     }
 }
 
 
 pub struct FilterMap<A, B> {
-    length: usize,
-    indexes: Vec<Option<usize>>,
+    // TODO use a bit vec for smaller size
+    indexes: Vec<bool>,
     signal: A,
     callback: B,
 }
 
 impl<A, B> FilterMap<A, B> {
-    fn increment_indexes(&mut self, index: usize) -> usize {
-        let mut first = None;
-
-        for index in &mut self.indexes[index..] {
-            if let Some(i) = *index {
-                if let None = first {
-                    first = Some(i);
-                }
-
-                *index = Some(i + 1);
-            }
-        }
-
-        first.unwrap_or(self.length)
+    fn find_index(&self, index: usize) -> usize {
+        self.indexes[0..index].into_iter().filter(|x| **x).count()
     }
 
-    fn decrement_indexes(&mut self, index: usize) {
-        for index in &mut self.indexes[index..] {
-            if let Some(i) = *index {
-                *index = Some(i - 1);
-            }
-        }
+    #[cfg(test)]
+    fn len(&self) -> usize {
+        self.indexes.iter().filter(|x| **x).count()
     }
 }
 
@@ -393,30 +374,20 @@ impl<A, B, F> SignalVec for FilterMap<A, F>
           F: FnMut(A::Item) -> Option<B> {
     type Item = B;
 
-    // TODO figure out a faster implementation of this
     fn poll(&mut self) -> Async<Option<VecChange<Self::Item>>> {
         loop {
             return match self.signal.poll() {
-                Async::NotReady => return Async::NotReady,
-                Async::Ready(None) => return Async::Ready(None),
+                Async::NotReady => Async::NotReady,
+                Async::Ready(None) => Async::Ready(None),
                 Async::Ready(Some(change)) => match change {
                     VecChange::Replace { values } => {
-                        self.length = 0;
                         self.indexes = Vec::with_capacity(values.len());
 
                         Async::Ready(Some(VecChange::Replace {
                             values: values.into_iter().filter_map(|value| {
                                 let value = (self.callback)(value);
 
-                                match value {
-                                    Some(_) => {
-                                        self.indexes.push(Some(self.length));
-                                        self.length += 1;
-                                    },
-                                    None => {
-                                        self.indexes.push(None);
-                                    },
-                                }
+                                self.indexes.push(value.is_some());
 
                                 value
                             }).collect()
@@ -426,15 +397,11 @@ impl<A, B, F> SignalVec for FilterMap<A, F>
                     VecChange::InsertAt { index, value } => {
                         match (self.callback)(value) {
                             Some(value) => {
-                                let new_index = self.increment_indexes(index);
-
-                                self.indexes.insert(index, Some(new_index));
-                                self.length += 1;
-
-                                Async::Ready(Some(VecChange::InsertAt { index: new_index, value }))
+                                self.indexes.insert(index, true);
+                                Async::Ready(Some(VecChange::InsertAt { index: self.find_index(index), value }))
                             },
                             None => {
-                                self.indexes.insert(index, None);
+                                self.indexes.insert(index, false);
                                 continue;
                             },
                         }
@@ -442,80 +409,56 @@ impl<A, B, F> SignalVec for FilterMap<A, F>
 
                     VecChange::UpdateAt { index, value } => {
                         match (self.callback)(value) {
-                            Some(value) => {
-                                match self.indexes[index] {
-                                    Some(old_index) => {
-                                        Async::Ready(Some(VecChange::UpdateAt { index: old_index, value }))
-                                    },
-                                    None => {
-                                        let new_index = self.increment_indexes(index + 1);
+                            Some(value) => if self.indexes[index] {
+                                Async::Ready(Some(VecChange::UpdateAt { index: self.find_index(index), value }))
 
-                                        self.indexes[index] = Some(new_index);
-                                        self.length += 1;
-
-                                        Async::Ready(Some(VecChange::InsertAt { index: new_index, value }))
-                                    },
-                                }
+                            } else {
+                                self.indexes[index] = true;
+                                Async::Ready(Some(VecChange::InsertAt { index: self.find_index(index), value }))
                             },
-                            None => {
-                                match self.indexes[index] {
-                                    Some(old_index) => {
-                                        self.indexes[index] = None;
 
-                                        self.decrement_indexes(index + 1);
-                                        self.length -= 1;
+                            None => if self.indexes[index] {
+                                self.indexes[index] = false;
+                                Async::Ready(Some(VecChange::RemoveAt { index: self.find_index(index) }))
 
-                                        Async::Ready(Some(VecChange::RemoveAt { index: old_index }))
-                                    },
-                                    None => {
-                                        continue;
-                                    },
-                                }
+                            } else {
+                                continue;
                             },
                         }
                     },
 
                     VecChange::RemoveAt { index } => {
-                        match self.indexes.remove(index) {
-                            Some(old_index) => {
-                                self.decrement_indexes(index);
-                                self.length -= 1;
+                        if self.indexes.remove(index) {
+                            Async::Ready(Some(VecChange::RemoveAt { index: self.find_index(index) }))
 
-                                Async::Ready(Some(VecChange::RemoveAt { index: old_index }))
-                            },
-                            None => {
-                                continue;
-                            },
+                        } else {
+                            continue;
                         }
                     },
 
                     VecChange::Push { value } => {
                         match (self.callback)(value) {
                             Some(value) => {
-                                self.indexes.push(Some(self.length));
-                                self.length += 1;
+                                self.indexes.push(true);
                                 Async::Ready(Some(VecChange::Push { value }))
                             },
                             None => {
-                                self.indexes.push(None);
+                                self.indexes.push(false);
                                 continue;
                             },
                         }
                     },
 
                     VecChange::Pop {} => {
-                        match self.indexes.pop().expect("Cannot pop from empty vec") {
-                            Some(_) => {
-                                Async::Ready(Some(VecChange::Pop {}))
-                            },
-                            None => {
-                                continue;
-                            },
+                        if self.indexes.pop().expect("Cannot pop from empty vec") {
+                            Async::Ready(Some(VecChange::Pop {}))
+
+                        } else {
+                            continue;
                         }
                     },
 
                     VecChange::Clear {} => {
-                        self.length = 0;
                         self.indexes = vec![];
                         Async::Ready(Some(VecChange::Clear {}))
                     },
@@ -1097,7 +1040,7 @@ mod tests {
         #[derive(Debug, PartialEq, Eq)]
         struct Change {
             length: usize,
-            indexes: Vec<Option<usize>>,
+            indexes: Vec<bool>,
             change: VecChange<u32>,
         }
 
@@ -1142,29 +1085,29 @@ mod tests {
             }
         });
 
-        assert_eq!(output.length, 0);
+        assert_eq!(FilterMap::len(&output), 0);
         assert_eq!(output.indexes, vec![]);
 
         let changes = run(output, |output, change| {
             Change {
                 change: change,
-                length: output.length,
+                length: FilterMap::len(&output),
                 indexes: output.indexes.clone(),
             }
         });
 
         assert_eq!(changes, vec![
-            Change { length: 2, indexes: vec![None, None, None, Some(0), Some(1), None], change: VecChange::Replace { values: vec![103, 104] } },
-            Change { length: 3, indexes: vec![Some(0), None, None, None, Some(1), Some(2), None], change: VecChange::InsertAt { index: 0, value: 106 } },
-            Change { length: 4, indexes: vec![Some(0), None, Some(1), None, None, Some(2), Some(3), None], change: VecChange::InsertAt { index: 1, value: 107 } },
-            Change { length: 5, indexes: vec![Some(0), None, Some(1), None, None, Some(2), Some(3), Some(4), None], change: VecChange::InsertAt { index: 2, value: 108 } },
-            Change { length: 6, indexes: vec![Some(0), None, Some(1), None, None, Some(2), Some(3), Some(4), Some(5), None], change: VecChange::InsertAt { index: 4, value: 109 } },
-            Change { length: 7, indexes: vec![Some(0), None, Some(1), None, None, Some(2), Some(3), Some(4), Some(5), Some(6), None], change: VecChange::InsertAt { index: 6, value: 110 } },
-            Change { length: 8, indexes: vec![Some(0), None, Some(1), None, None, Some(2), Some(3), Some(4), Some(5), Some(6), None, Some(7)], change: VecChange::InsertAt { index: 7, value: 111 } },
-            Change { length: 9, indexes: vec![None, None, Some(0), None, Some(1), Some(2), None, None, None, Some(3), Some(4), Some(5), Some(6), Some(7), None, Some(8)], change: VecChange::InsertAt { index: 2, value: 112 } },
-            Change { length: 8, indexes: vec![None, Some(0), Some(1), None, None, None, Some(2), Some(3), Some(4), Some(5), Some(6), None, Some(7)], change: VecChange::RemoveAt { index: 0 } },
-            Change { length: 7, indexes: vec![None, Some(0), None, None, None, Some(1), Some(2), Some(3), Some(4), Some(5), None, Some(6)], change: VecChange::RemoveAt { index: 0 } },
-            Change { length: 6, indexes: vec![None, None, None, Some(0), Some(1), Some(2), Some(3), Some(4), None, Some(5)], change: VecChange::RemoveAt { index: 0 } },
+            Change { length: 2, indexes: vec![false, false, false, true, true, false], change: VecChange::Replace { values: vec![103, 104] } },
+            Change { length: 3, indexes: vec![true, false, false, false, true, true, false], change: VecChange::InsertAt { index: 0, value: 106 } },
+            Change { length: 4, indexes: vec![true, false, true, false, false, true, true, false], change: VecChange::InsertAt { index: 1, value: 107 } },
+            Change { length: 5, indexes: vec![true, false, true, false, false, true, true, true, false], change: VecChange::InsertAt { index: 2, value: 108 } },
+            Change { length: 6, indexes: vec![true, false, true, false, false, true, true, true, true, false], change: VecChange::InsertAt { index: 4, value: 109 } },
+            Change { length: 7, indexes: vec![true, false, true, false, false, true, true, true, true, true, false], change: VecChange::InsertAt { index: 6, value: 110 } },
+            Change { length: 8, indexes: vec![true, false, true, false, false, true, true, true, true, true, false, true], change: VecChange::InsertAt { index: 7, value: 111 } },
+            Change { length: 9, indexes: vec![false, false, true, false, true, true, false, false, false, true, true, true, true, true, false, true], change: VecChange::InsertAt { index: 2, value: 112 } },
+            Change { length: 8, indexes: vec![false, true, true, false, false, false, true, true, true, true, true, false, true], change: VecChange::RemoveAt { index: 0 } },
+            Change { length: 7, indexes: vec![false, true, false, false, false, true, true, true, true, true, false, true], change: VecChange::RemoveAt { index: 0 } },
+            Change { length: 6, indexes: vec![false, false, false, true, true, true, true, true, false, true], change: VecChange::RemoveAt { index: 0 } },
         ]);
     }
 }
