@@ -131,6 +131,16 @@ pub trait Signal {
     }
 
     #[inline]
+    fn wait_for(self, value: Self::Item) -> WaitFor<Self>
+        where Self::Item: PartialEq,
+              Self: Sized {
+        WaitFor {
+            signal: self,
+            value: value,
+        }
+    }
+
+    #[inline]
     fn as_mut(&mut self) -> &mut Self where Self: Sized {
         self
     }
@@ -294,6 +304,37 @@ impl<A, B, C> Signal for Map<A, B>
     #[inline]
     fn poll(&mut self) -> State<Self::Item> {
         self.signal.poll().map(|value| (self.callback)(value))
+    }
+}
+
+
+pub struct WaitFor<A>
+    where A: Signal,
+          A::Item: PartialEq {
+    signal: A,
+    value: A::Item,
+}
+
+impl<A> Future for WaitFor<A>
+    where A: Signal,
+          A::Item: PartialEq {
+
+    type Item = A::Item;
+    type Error = ();
+
+    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        loop {
+            return match self.signal.poll() {
+                State::Changed(value) => if value == self.value {
+                    Ok(Async::Ready(value))
+
+                } else {
+                    continue;
+                },
+
+                State::NotChanged => Ok(Async::NotReady),
+            }
+        }
     }
 }
 
@@ -512,8 +553,10 @@ pub mod unsync {
                 if let Some(receiver) = receiver.upgrade() {
                     receiver.has_changed.set(true);
 
-                    if let Some(task) = receiver.task.borrow_mut().take() {
-                        // TODO drop the mutable borrow before calling task.notify()
+                    let mut borrow = receiver.task.borrow_mut();
+
+                    if let Some(task) = borrow.take() {
+                        drop(borrow);
                         task.notify();
                     }
 
