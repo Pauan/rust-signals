@@ -638,6 +638,21 @@ pub mod unsync {
 
     pub struct MutableSignal<A: Clone>(Rc<MutableSignalState<A>>);
 
+    impl<A: Clone> Clone for MutableSignal<A> {
+        // TODO code duplication with the Mutable::signal method
+        fn clone(&self) -> Self {
+            let state = Rc::new(MutableSignalState {
+                has_changed: Cell::new(true),
+                task: RefCell::new(None),
+                state: self.0.state.clone(),
+            });
+
+            self.0.state.borrow_mut().receivers.push(Rc::downgrade(&state));
+
+            MutableSignal(state)
+        }
+    }
+
     impl<A: Clone> Signal for MutableSignal<A> {
         type Item = A;
 

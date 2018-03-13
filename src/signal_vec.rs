@@ -257,6 +257,7 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
         let mut iter = self.signals.as_mut_slice().into_iter();
         let mut index = 0;
 
+        // TODO make this more efficient (e.g. using a similar strategy as FuturesUnordered)
         loop {
             match iter.next() {
                 Some(signal) => match signal.poll() {
