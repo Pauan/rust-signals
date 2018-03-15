@@ -1,5 +1,5 @@
 use std::rc::{Rc, Weak};
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use futures::{Async, Poll, task};
 use futures::future::{Future, IntoFuture};
 use futures::stream::{Stream, ForEach};
@@ -182,23 +182,23 @@ pub fn always<A>(value: A) -> Always<A> {
 
 
 struct CancelableFutureState {
-    is_cancelled: bool,
-    task: Option<task::Task>,
+    is_cancelled: Cell<bool>,
+    task: RefCell<Option<task::Task>>,
 }
 
 
 pub struct CancelableFutureHandle {
-    state: Weak<RefCell<CancelableFutureState>>,
+    state: Weak<CancelableFutureState>,
 }
 
 impl Discard for CancelableFutureHandle {
     fn discard(self) {
         if let Some(state) = self.state.upgrade() {
-            let mut borrow = state.borrow_mut();
+            state.is_cancelled.set(true);
 
-            borrow.is_cancelled = true;
+            let mut borrow = state.task.borrow_mut();
 
-            if let Some(task) = borrow.task.take() {
+            if let Some(task) = borrow.take() {
                 drop(borrow);
                 task.notify();
             }
@@ -208,7 +208,7 @@ impl Discard for CancelableFutureHandle {
 
 
 pub struct CancelableFuture<A, B> {
-    state: Rc<RefCell<CancelableFutureState>>,
+    state: Rc<CancelableFutureState>,
     future: Option<A>,
     when_cancelled: Option<B>,
 }
@@ -223,20 +223,16 @@ impl<A, B> Future for CancelableFuture<A, B>
     // TODO should this inline ?
     #[inline]
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
-        let borrow = self.state.borrow();
-
-        if borrow.is_cancelled {
+        if self.state.is_cancelled.get() {
             let future = self.future.take().unwrap();
             let callback = self.when_cancelled.take().unwrap();
             // TODO figure out how to call the callback immediately when discard is called, e.g. using two Rc<RefCell<>>
             Ok(Async::Ready(callback(future)))
 
         } else {
-            drop(borrow);
-
             match self.future.as_mut().unwrap().poll() {
                 Ok(Async::NotReady) => {
-                    self.state.borrow_mut().task = Some(task::current());
+                    *self.state.task.borrow_mut() = Some(task::current());
                     Ok(Async::NotReady)
                 },
                 a => a,
@@ -253,10 +249,10 @@ pub fn cancelable_future<A, B>(future: A, when_cancelled: B) -> (DiscardOnDrop<C
     where A: Future,
           B: FnOnce(A) -> A::Item {
 
-    let state = Rc::new(RefCell::new(CancelableFutureState {
-        is_cancelled: false,
-        task: None,
-    }));
+    let state = Rc::new(CancelableFutureState {
+        is_cancelled: Cell::new(false),
+        task: RefCell::new(None),
+    });
 
     let cancel_handle = DiscardOnDrop::new(CancelableFutureHandle {
         state: Rc::downgrade(&state),
@@ -757,19 +753,20 @@ macro_rules! __internal_map_clone {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __internal_map2 {
-    ($f:expr, $old_pair:pat, $old_expr:expr, { $($lets:stmt);* }, let $name:ident: $t:ty = $value:expr;) => {
+    (($($move:tt)*), $f:expr, $old_pair:pat, $old_expr:expr, { $($lets:stmt);* }, let $name:ident: $t:ty = $value:expr;) => {
         $crate::signal::Signal::map2(
             $old_expr,
             $value,
-            |&mut $old_pair, $name| {
+            $($move)* |&mut $old_pair, $name| {
                 $($lets;)*
                 let $name: $t = __internal_map_clone!($name);
                 $f
             }
         )
     };
-    ($f:expr, $old_pair:pat, $old_expr:expr, { $($lets:stmt);* }, let $name:ident: $t:ty = $value:expr; $($args:tt)+) => {
+    (($($move:tt)*), $f:expr, $old_pair:pat, $old_expr:expr, { $($lets:stmt);* }, let $name:ident: $t:ty = $value:expr; $($args:tt)+) => {
         __internal_map2!(
+            ($($move)*),
             $f,
             ($old_pair, ref mut $name),
             $crate::signal::Signal::map2(
@@ -786,26 +783,27 @@ macro_rules! __internal_map2 {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __internal_map {
-    ($f:expr, let $name:ident: $t:ty = $value:expr;) => {
-        $crate::signal::Signal::map($value, |$name| {
+    (($($move:tt)*), $f:expr, let $name:ident: $t:ty = $value:expr;) => {
+        $crate::signal::Signal::map($value, $($move)* |$name| {
             let $name: $t = $name;
             $f
         })
     };
-    ($f:expr, let $name1:ident: $t1:ty = $value1:expr;
+    (($($move:tt)*), $f:expr, let $name1:ident: $t1:ty = $value1:expr;
               let $name2:ident: $t2:ty = $value2:expr;) => {
         $crate::signal::Signal::map2(
             $value1,
             $value2,
-            |$name1, $name2| {
+            $($move)* |$name1, $name2| {
                 let $name1: $t1 = __internal_map_clone!($name1);
                 let $name2: $t2 = __internal_map_clone!($name2);
                 $f
             }
         )
     };
-    ($f:expr, let $name:ident: $t:ty = $value:expr; $($args:tt)+) => {
+    (($($move:tt)*), $f:expr, let $name:ident: $t:ty = $value:expr; $($args:tt)+) => {
         __internal_map2!(
+            ($($move)*),
             $f,
             ref mut $name,
             $value,
@@ -818,17 +816,17 @@ macro_rules! __internal_map {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __internal_map_lets {
-    ($f:expr, { $($lets:tt)* },) => {
-        __internal_map!($f, $($lets)*)
+    (($($move:tt)*), $f:expr, { $($lets:tt)* },) => {
+        __internal_map!(($($move)*), $f, $($lets)*)
     };
-    ($f:expr, { $($lets:tt)* }, let $name:ident: $t:ty = $value:expr, $($args:tt)*) => {
-        __internal_map_lets!($f, { $($lets)* let $name: $t = $value; }, $($args)*)
+    (($($move:tt)*), $f:expr, { $($lets:tt)* }, let $name:ident: $t:ty = $value:expr, $($args:tt)*) => {
+        __internal_map_lets!(($($move)*), $f, { $($lets)* let $name: $t = $value; }, $($args)*)
     };
-    ($f:expr, { $($lets:tt)* }, let $name:ident = $value:expr, $($args:tt)*) => {
-        __internal_map_lets!($f, { $($lets)* let $name: _ = $value; }, $($args)*)
+    (($($move:tt)*), $f:expr, { $($lets:tt)* }, let $name:ident = $value:expr, $($args:tt)*) => {
+        __internal_map_lets!(($($move)*), $f, { $($lets)* let $name: _ = $value; }, $($args)*)
     };
-    ($f:expr, { $($lets:tt)* }, $name:ident, $($args:tt)*) => {
-        __internal_map_lets!($f, { $($lets)* let $name: _ = $name; }, $($args)*)
+    (($($move:tt)*), $f:expr, { $($lets:tt)* }, $name:ident, $($args:tt)*) => {
+        __internal_map_lets!(($($move)*), $f, { $($lets)* let $name: _ = $name; }, $($args)*)
     };
 }
 
@@ -836,8 +834,11 @@ macro_rules! __internal_map_lets {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __internal_map_split {
+    (($($before:tt)*), => move $f:expr) => {
+        __internal_map_lets!((move), $f, {}, $($before)*,)
+    };
     (($($before:tt)*), => $f:expr) => {
-        __internal_map_lets!($f, {}, $($before)*,)
+        __internal_map_lets!((), $f, {}, $($before)*,)
     };
     (($($before:tt)*), $t:tt $($after:tt)*) => {
         __internal_map_split!(($($before)* $t), $($after)*)
