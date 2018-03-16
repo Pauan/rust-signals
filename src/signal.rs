@@ -315,14 +315,14 @@ impl<A> Future for WaitFor<A>
     where A: Signal,
           A::Item: PartialEq {
 
-    type Item = A::Item;
+    type Item = ();
     type Error = ();
 
     fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
         loop {
             return match self.signal.poll() {
                 State::Changed(value) => if value == self.value {
-                    Ok(Async::Ready(value))
+                    Ok(Async::Ready(()))
 
                 } else {
                     continue;
