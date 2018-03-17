@@ -511,9 +511,9 @@ impl<A> Signal for Flatten<A>
 // TODO verify that this is correct
 pub mod unsync {
     use super::{Signal, State};
-    use std::mem::swap;
+    use std;
     use std::rc::{Rc, Weak};
-    use std::cell::{Cell, RefCell, RefMut};
+    use std::cell::{Cell, RefCell, RefMut, Ref};
     use futures::task;
     use futures::task::Task;
     use serde::{Serialize, Deserialize, Serializer, Deserializer};
@@ -530,6 +530,20 @@ pub mod unsync {
         task: RefCell<Option<Task>>,
         // TODO change this to Weak later
         state: Rc<RefCell<MutableState<A>>>,
+    }
+
+    impl<A> MutableSignalState<A> {
+        fn new(mutable_state: &Rc<RefCell<MutableState<A>>>) -> Rc<Self> {
+            let state = Rc::new(MutableSignalState {
+                has_changed: Cell::new(true),
+                task: RefCell::new(None),
+                state: mutable_state.clone(),
+            });
+
+            mutable_state.borrow_mut().receivers.push(Rc::downgrade(&state));
+
+            state
+        }
     }
 
 
@@ -572,14 +586,35 @@ pub mod unsync {
             Self::notify(&mut state);
         }*/
 
-        pub fn replace(&self, mut value: A) -> A {
+        pub fn replace(&self, value: A) -> A {
             let mut state = self.0.borrow_mut();
 
-            swap(&mut state.value, &mut value);
+            let value = std::mem::replace(&mut state.value, value);
 
             Self::notify(&mut state);
 
             value
+        }
+
+        pub fn replace_with<F>(&self, f: F) -> A where F: FnOnce(&mut A) -> A {
+            let mut state = self.0.borrow_mut();
+
+            let new_value = f(&mut state.value);
+            let value = std::mem::replace(&mut state.value, new_value);
+
+            Self::notify(&mut state);
+
+            value
+        }
+
+        pub fn swap(&self, other: &Mutable<A>) {
+            let mut state1 = self.0.borrow_mut();
+            let mut state2 = other.0.borrow_mut();
+
+            std::mem::swap(&mut state1.value, &mut state2.value);
+
+            Self::notify(&mut state1);
+            Self::notify(&mut state2);
         }
 
         pub fn set(&self, value: A) {
@@ -589,24 +624,35 @@ pub mod unsync {
 
             Self::notify(&mut state);
         }
+
+        // TODO should this take &mut self ?
+        #[inline]
+        pub fn borrow(&self) -> Ref<A> {
+            Ref::map(self.0.borrow(), |x| &x.value)
+        }
+    }
+
+    impl<A: Copy> Mutable<A> {
+        #[inline]
+        pub fn get(&self) -> A {
+            self.0.borrow().value
+        }
+
+        #[inline]
+        pub fn signal(&self) -> MutableSignal<A> {
+            MutableSignal(MutableSignalState::new(&self.0))
+        }
     }
 
     impl<A: Clone> Mutable<A> {
         #[inline]
-        pub fn get(&self) -> A {
+        pub fn get_clone(&self) -> A {
             self.0.borrow().value.clone()
         }
 
-        pub fn signal(&self) -> MutableSignal<A> {
-            let state = Rc::new(MutableSignalState {
-                has_changed: Cell::new(true),
-                task: RefCell::new(None),
-                state: self.0.clone(),
-            });
-
-            self.0.borrow_mut().receivers.push(Rc::downgrade(&state));
-
-            MutableSignal(state)
+        #[inline]
+        pub fn signal_clone(&self) -> MutableSignalClone<A> {
+            MutableSignalClone(MutableSignalState::new(&self.0))
         }
     }
 
@@ -632,26 +678,43 @@ pub mod unsync {
     }
 
 
-    pub struct MutableSignal<A: Clone>(Rc<MutableSignalState<A>>);
+    pub struct MutableSignal<A>(Rc<MutableSignalState<A>>);
 
-    impl<A: Clone> Clone for MutableSignal<A> {
-        // TODO code duplication with the Mutable::signal method
+    impl<A> Clone for MutableSignal<A> {
+        #[inline]
         fn clone(&self) -> Self {
-            let state = Rc::new(MutableSignalState {
-                has_changed: Cell::new(true),
-                task: RefCell::new(None),
-                state: self.0.state.clone(),
-            });
-
-            self.0.state.borrow_mut().receivers.push(Rc::downgrade(&state));
-
-            MutableSignal(state)
+            MutableSignal(MutableSignalState::new(&self.0.state))
         }
     }
 
-    impl<A: Clone> Signal for MutableSignal<A> {
+    impl<A: Copy> Signal for MutableSignal<A> {
         type Item = A;
 
+        fn poll(&mut self) -> State<Self::Item> {
+            if self.0.has_changed.replace(false) {
+                State::Changed(self.0.state.borrow().value)
+
+            } else {
+                *self.0.task.borrow_mut() = Some(task::current());
+                State::NotChanged
+            }
+        }
+    }
+
+
+    pub struct MutableSignalClone<A>(Rc<MutableSignalState<A>>);
+
+    impl<A> Clone for MutableSignalClone<A> {
+        #[inline]
+        fn clone(&self) -> Self {
+            MutableSignalClone(MutableSignalState::new(&self.0.state))
+        }
+    }
+
+    impl<A: Clone> Signal for MutableSignalClone<A> {
+        type Item = A;
+
+        // TODO code duplication with MutableSignal::poll
         fn poll(&mut self) -> State<Self::Item> {
             if self.0.has_changed.replace(false) {
                 State::Changed(self.0.state.borrow().value.clone())

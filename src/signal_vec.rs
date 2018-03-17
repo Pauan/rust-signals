@@ -100,6 +100,7 @@ pub trait SignalVec {
         }
     }
 
+    // TODO rename this to sort_by_clone
     #[inline]
     fn sort_by<F>(self, compare: F) -> SortBy<Self, F>
         where F: FnMut(&Self::Item, &Self::Item) -> Ordering,
@@ -551,6 +552,7 @@ impl<A, F> SortBy<A, F>
     }
 }
 
+// TODO implementation of this for Copy
 impl<A, F> SignalVec for SortBy<A, F>
     where A: SignalVec,
           F: FnMut(&A::Item, &A::Item) -> Ordering,
@@ -763,6 +765,47 @@ pub mod unsync {
         }
     }
 
+    impl<A: Copy> MutableVecState<A> {
+        fn signal_vec_copy(&mut self) -> MutableSignalVec<A> {
+            let (sender, receiver) = mpsc::unbounded();
+
+            if self.values.len() > 0 {
+                // This copies the Vec, but without calling clone
+                // TODO better implementation of this ?
+                let mut values: Vec<A> = vec![];
+                // TODO prove that this doesn't call clone
+                values.extend(&self.values);
+                sender.unbounded_send(VecChange::Replace { values }).unwrap();
+            }
+
+            self.senders.push(sender);
+
+            MutableSignalVec {
+                receiver
+            }
+        }
+
+        fn push_copy(&mut self, value: A) {
+            self.values.push(value);
+            self.notify(|| VecChange::Push { value });
+        }
+
+        fn insert_copy(&mut self, index: usize, value: A) {
+            if index == self.values.len() {
+                self.push_copy(value);
+
+            } else {
+                self.values.insert(index, value);
+                self.notify(|| VecChange::InsertAt { index, value });
+            }
+        }
+
+        fn set_copy(&mut self, index: usize, value: A) {
+            self.values[index] = value;
+            self.notify(|| VecChange::UpdateAt { index, value });
+        }
+    }
+
     impl<A: Clone> MutableVecState<A> {
         fn notify_clone<B, C>(&mut self, value: A, change: B, mut notify: C)
             where B: FnOnce(&mut Self, A),
@@ -797,7 +840,8 @@ pub mod unsync {
             }
         }
 
-        fn signal_vec(&mut self) -> MutableSignalVec<A> {
+        // TODO change this to return a MutableSignalVecClone ?
+        fn signal_vec_clone(&mut self) -> MutableSignalVec<A> {
             let (sender, receiver) = mpsc::unbounded();
 
             if self.values.len() > 0 {
@@ -811,15 +855,15 @@ pub mod unsync {
             }
         }
 
-        fn push(&mut self, value: A) {
+        fn push_clone(&mut self, value: A) {
             self.notify_clone(value,
                 |this, value| this.values.push(value),
                 |value| VecChange::Push { value });
         }
 
-        fn insert(&mut self, index: usize, value: A) {
+        fn insert_clone(&mut self, index: usize, value: A) {
             if index == self.values.len() {
-                self.push(value);
+                self.push_clone(value);
 
             } else {
                 self.notify_clone(value,
@@ -828,7 +872,7 @@ pub mod unsync {
             }
         }
 
-        fn set(&mut self, index: usize, value: A) {
+        fn set_clone(&mut self, index: usize, value: A) {
             self.notify_clone(value,
                 |this, value| this.values[index] = value,
                 |value| VecChange::UpdateAt { index, value });
@@ -889,26 +933,49 @@ pub mod unsync {
         }
     }
 
-    impl<A: Clone> MutableVec<A> {
+    impl<A: Copy> MutableVec<A> {
         #[inline]
         pub fn signal_vec(&self) -> MutableSignalVec<A> {
-            self.0.borrow_mut().signal_vec()
+            self.0.borrow_mut().signal_vec_copy()
         }
 
         #[inline]
         pub fn push(&self, value: A) {
-            self.0.borrow_mut().push(value)
+            self.0.borrow_mut().push_copy(value)
         }
 
         #[inline]
         pub fn insert(&self, index: usize, value: A) {
-            self.0.borrow_mut().insert(index, value)
+            self.0.borrow_mut().insert_copy(index, value)
         }
 
         // TODO replace this with something else, like entry or IndexMut or whatever
         #[inline]
         pub fn set(&self, index: usize, value: A) {
-            self.0.borrow_mut().set(index, value)
+            self.0.borrow_mut().set_copy(index, value)
+        }
+    }
+
+    impl<A: Clone> MutableVec<A> {
+        #[inline]
+        pub fn signal_vec_clone(&self) -> MutableSignalVec<A> {
+            self.0.borrow_mut().signal_vec_clone()
+        }
+
+        #[inline]
+        pub fn push_clone(&self, value: A) {
+            self.0.borrow_mut().push_clone(value)
+        }
+
+        #[inline]
+        pub fn insert_clone(&self, index: usize, value: A) {
+            self.0.borrow_mut().insert_clone(index, value)
+        }
+
+        // TODO replace this with something else, like entry or IndexMut or whatever
+        #[inline]
+        pub fn set_clone(&self, index: usize, value: A) {
+            self.0.borrow_mut().set_clone(index, value)
         }
     }
 
