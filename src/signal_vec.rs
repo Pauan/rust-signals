@@ -100,9 +100,8 @@ pub trait SignalVec {
         }
     }
 
-    // TODO rename this to sort_by_clone
     #[inline]
-    fn sort_by<F>(self, compare: F) -> SortBy<Self, F>
+    fn sort_by_cloned<F>(self, compare: F) -> SortBy<Self, F>
         where F: FnMut(&Self::Item, &Self::Item) -> Ordering,
               Self: Sized {
         SortBy {
@@ -958,23 +957,23 @@ pub mod unsync {
 
     impl<A: Clone> MutableVec<A> {
         #[inline]
-        pub fn signal_vec_clone(&self) -> MutableSignalVec<A> {
+        pub fn signal_vec_cloned(&self) -> MutableSignalVec<A> {
             self.0.borrow_mut().signal_vec_clone()
         }
 
         #[inline]
-        pub fn push_clone(&self, value: A) {
+        pub fn push_cloned(&self, value: A) {
             self.0.borrow_mut().push_clone(value)
         }
 
         #[inline]
-        pub fn insert_clone(&self, index: usize, value: A) {
+        pub fn insert_cloned(&self, index: usize, value: A) {
             self.0.borrow_mut().insert_clone(index, value)
         }
 
         // TODO replace this with something else, like entry or IndexMut or whatever
         #[inline]
-        pub fn set_clone(&self, index: usize, value: A) {
+        pub fn set_cloned(&self, index: usize, value: A) {
             self.0.borrow_mut().set_clone(index, value)
         }
     }

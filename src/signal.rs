@@ -646,12 +646,12 @@ pub mod unsync {
 
     impl<A: Clone> Mutable<A> {
         #[inline]
-        pub fn get_clone(&self) -> A {
+        pub fn get_cloned(&self) -> A {
             self.0.borrow().value.clone()
         }
 
         #[inline]
-        pub fn signal_clone(&self) -> MutableSignalClone<A> {
+        pub fn signal_cloned(&self) -> MutableSignalClone<A> {
             MutableSignalClone(MutableSignalState::new(&self.0))
         }
     }
@@ -702,6 +702,7 @@ pub mod unsync {
     }
 
 
+    // TODO it should have a single MutableSignal implementation for both Copy and Clone
     pub struct MutableSignalClone<A>(Rc<MutableSignalState<A>>);
 
     impl<A> Clone for MutableSignalClone<A> {
@@ -800,14 +801,14 @@ pub mod unsync {
 // TODO should this be hidden from the docs ?
 #[doc(hidden)]
 #[inline]
-pub fn pair_clone<'a, 'b, A: Clone, B: Clone>(left: &'a mut A, right: &'b mut B) -> (A, B) {
+pub fn pair_cloned<'a, 'b, A: Clone, B: Clone>(left: &'a mut A, right: &'b mut B) -> (A, B) {
     (left.clone(), right.clone())
 }
 
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __internal_map_clone {
+macro_rules! __internal_map_cloned {
     ($name:ident) => {
         ::std::clone::Clone::clone($name)
     };
@@ -822,7 +823,7 @@ macro_rules! __internal_map2 {
             $value,
             $($move)* |&mut $old_pair, $name| {
                 $($lets;)*
-                let $name: $t = __internal_map_clone!($name);
+                let $name: $t = __internal_map_cloned!($name);
                 $f
             }
         )
@@ -835,9 +836,9 @@ macro_rules! __internal_map2 {
             $crate::signal::Signal::map2(
                 $old_expr,
                 $value,
-                $crate::signal::pair_clone
+                $crate::signal::pair_cloned
             ),
-            { $($lets;)* let $name: $t = __internal_map_clone!($name) },
+            { $($lets;)* let $name: $t = __internal_map_cloned!($name) },
             $($args)+
         )
     };
@@ -858,8 +859,8 @@ macro_rules! __internal_map {
             $value1,
             $value2,
             $($move)* |$name1, $name2| {
-                let $name1: $t1 = __internal_map_clone!($name1);
-                let $name2: $t2 = __internal_map_clone!($name2);
+                let $name1: $t1 = __internal_map_cloned!($name1);
+                let $name2: $t2 = __internal_map_cloned!($name2);
                 $f
             }
         )
@@ -870,7 +871,7 @@ macro_rules! __internal_map {
             $f,
             ref mut $name,
             $value,
-            { let $name: $t = __internal_map_clone!($name) },
+            { let $name: $t = __internal_map_cloned!($name) },
             $($args)+
         )
     };
@@ -909,7 +910,7 @@ macro_rules! __internal_map_split {
 }
 
 #[macro_export]
-macro_rules! map_clone {
+macro_rules! map_cloned {
     ($($input:tt)*) => { __internal_map_split!((), $($input)*) };
 }
 
@@ -921,7 +922,7 @@ mod tests {
     fn map_macro_ident_1() {
         let a = super::always(1);
 
-        let mut s = map_clone!(a => {
+        let mut s = map_cloned!(a => {
             let a: u32 = a;
             a + 1
         });
@@ -935,7 +936,7 @@ mod tests {
         let a = super::always(1);
         let b = super::always(2);
 
-        let mut s = map_clone!(a, b => {
+        let mut s = map_cloned!(a, b => {
             let a: u32 = a;
             let b: u32 = b;
             a + b
@@ -951,7 +952,7 @@ mod tests {
         let b = super::always(2);
         let c = super::always(3);
 
-        let mut s = map_clone!(a, b, c => {
+        let mut s = map_cloned!(a, b, c => {
             let a: u32 = a;
             let b: u32 = b;
             let c: u32 = c;
@@ -969,7 +970,7 @@ mod tests {
         let c = super::always(3);
         let d = super::always(4);
 
-        let mut s = map_clone!(a, b, c, d => {
+        let mut s = map_cloned!(a, b, c, d => {
             let a: u32 = a;
             let b: u32 = b;
             let c: u32 = c;
@@ -989,7 +990,7 @@ mod tests {
         let d = super::always(4);
         let e = super::always(5);
 
-        let mut s = map_clone!(a, b, c, d, e => {
+        let mut s = map_cloned!(a, b, c, d, e => {
             let a: u32 = a;
             let b: u32 = b;
             let c: u32 = c;
@@ -1007,7 +1008,7 @@ mod tests {
     fn map_macro_let_1() {
         let a2 = super::always(1);
 
-        let mut s = map_clone!(let a = a2 => {
+        let mut s = map_cloned!(let a = a2 => {
             let a: u32 = a;
             a + 1
         });
@@ -1021,7 +1022,7 @@ mod tests {
         let a2 = super::always(1);
         let b2 = super::always(2);
 
-        let mut s = map_clone!(let a = a2, let b = b2 => {
+        let mut s = map_cloned!(let a = a2, let b = b2 => {
             let a: u32 = a;
             let b: u32 = b;
             a + b
@@ -1037,7 +1038,7 @@ mod tests {
         let b2 = super::always(2);
         let c2 = super::always(3);
 
-        let mut s = map_clone!(let a = a2, let b = b2, let c = c2 => {
+        let mut s = map_cloned!(let a = a2, let b = b2, let c = c2 => {
             let a: u32 = a;
             let b: u32 = b;
             let c: u32 = c;
@@ -1055,7 +1056,7 @@ mod tests {
         let c2 = super::always(3);
         let d2 = super::always(4);
 
-        let mut s = map_clone!(let a = a2, let b = b2, let c = c2, let d = d2 => {
+        let mut s = map_cloned!(let a = a2, let b = b2, let c = c2, let d = d2 => {
             let a: u32 = a;
             let b: u32 = b;
             let c: u32 = c;
@@ -1075,7 +1076,7 @@ mod tests {
         let d2 = super::always(4);
         let e2 = super::always(5);
 
-        let mut s = map_clone!(let a = a2, let b = b2, let c = c2, let d = d2, let e = e2 => {
+        let mut s = map_cloned!(let a = a2, let b = b2, let c = c2, let d = d2, let e = e2 => {
             let a: u32 = a;
             let b: u32 = b;
             let c: u32 = c;
@@ -1093,7 +1094,7 @@ mod tests {
     fn map_macro_let_type_1() {
         let a2 = super::always(1);
 
-        let mut s = map_clone! {
+        let mut s = map_cloned! {
             let a: u32 = a2 => {
                 let a: u32 = a;
                 a + 1
@@ -1109,7 +1110,7 @@ mod tests {
         let a2 = super::always(1);
         let b2 = super::always(2);
 
-        let mut s = map_clone! {
+        let mut s = map_cloned! {
             let a: u32 = a2,
             let b: u32 = b2 => {
                 let a: u32 = a;
@@ -1128,7 +1129,7 @@ mod tests {
         let b2 = super::always(2);
         let c2 = super::always(3);
 
-        let mut s = map_clone! {
+        let mut s = map_cloned! {
             let a: u32 = a2,
             let b: u32 = b2,
             let c: u32 = c2 => {
@@ -1150,7 +1151,7 @@ mod tests {
         let c2 = super::always(3);
         let d2 = super::always(4);
 
-        let mut s = map_clone! {
+        let mut s = map_cloned! {
             let a: u32 = a2,
             let b: u32 = b2,
             let c: u32 = c2,
@@ -1175,7 +1176,7 @@ mod tests {
         let d2 = super::always(4);
         let e2 = super::always(5);
 
-        let mut s = map_clone! {
+        let mut s = map_cloned! {
             let a: u32 = a2,
             let b: u32 = b2,
             let c: u32 = c2,
