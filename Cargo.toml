@@ -1,13 +1,13 @@
 [package]
-name = "signals"
+name = "futures-signals"
 version = "0.1.0"
 authors = ["Pauan <pcxunlimited@gmail.com>"]
-description = "Zero cost FRP signals"
+description = "Zero cost FRP signals using the futures crate"
 repository = "https://github.com/Pauan/rust-signals"
 homepage = "https://github.com/Pauan/rust-signals"
 readme = "README.md"
 license = "MIT"
-keywords = ["signal", "reactive", "frp"]
+keywords = ["signal", "reactive", "frp", "futures"]
 categories = ["asynchronous"]
 
 [dependencies]
