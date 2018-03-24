@@ -6,3 +6,9 @@ extern crate serde;
 
 pub mod signal;
 pub mod signal_vec;
+
+// TODO should this be hidden from the docs ?
+#[doc(hidden)]
+pub mod internal;
+
+mod macros;
