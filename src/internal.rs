@@ -75,17 +75,16 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
 }
 
 
-// TODO figure out a way to use 1 RefCell rather than 2
 // TODO is it possible to avoid the Rc ?
-pub type Pair<A, B> = Rc<(RefCell<Option<A>>, RefCell<Option<B>>)>;
+pub type PairMut<A, B> = Rc<(RefCell<Option<A>>, RefCell<Option<B>>)>;
 
-pub struct MapPair<A: Signal, B: Signal> {
+pub struct MapPairMut<A: Signal, B: Signal> {
     signal1: A,
     signal2: B,
-    inner: Pair<A::Item, B::Item>,
+    inner: PairMut<A::Item, B::Item>,
 }
 
-impl<A, B> MapPair<A, B>
+impl<A, B> MapPairMut<A, B>
     where A: Signal,
           B: Signal {
     #[inline]
@@ -98,10 +97,10 @@ impl<A, B> MapPair<A, B>
     }
 }
 
-impl<A, B> Signal for MapPair<A, B>
+impl<A, B> Signal for MapPairMut<A, B>
     where A: Signal,
           B: Signal {
-    type Item = Pair<A::Item, B::Item>;
+    type Item = PairMut<A::Item, B::Item>;
 
     // TODO inline this ?
     fn poll(&mut self) -> State<Self::Item> {

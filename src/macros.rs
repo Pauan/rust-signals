@@ -2,10 +2,10 @@
 #[macro_export]
 macro_rules! __internal_map_pairs {
     (let $name1:pat = $value1:expr; let $name2:pat = $value2:expr;) => {
-        $crate::internal::MapPair::new($value1, $value2)
+        $crate::internal::MapPairMut::new($value1, $value2)
     };
     (let $name:pat = $value:expr; $($args:tt)+) => {
-        $crate::internal::MapPair::new($value, __internal_map_pairs!($($args)+))
+        $crate::internal::MapPairMut::new($value, __internal_map_pairs!($($args)+))
     };
 }
 
