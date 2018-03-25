@@ -1,10 +1,10 @@
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __internal_map_pairs {
-    (let $name1:ident: $t1:ty = $value1:expr; let $name2:ident: $t2:ty = $value2:expr;) => {
+    (let $name1:pat = $value1:expr; let $name2:pat = $value2:expr;) => {
         $crate::internal::MapPair::new($value1, $value2)
     };
-    (let $name:ident: $t:ty = $value:expr; $($args:tt)+) => {
+    (let $name:pat = $value:expr; $($args:tt)+) => {
         $crate::internal::MapPair::new($value, __internal_map_pairs!($($args)+))
     };
 }
@@ -12,15 +12,15 @@ macro_rules! __internal_map_pairs {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __internal_map_borrows {
-    ($f:expr, $r:ident, { $($lets:stmt)* }, let $name:ident: $t:ty = $value:expr;) => {
+    ($f:expr, $r:ident, { $($lets:stmt)* }, let $name:pat = $value:expr;) => {
         {
             $($lets;)*
             let mut $r = ::std::cell::RefCell::borrow_mut(&(*$r).1);
-            let $name: $t = $crate::internal::unwrap_mut(&mut $r);
+            let $name = $crate::internal::unwrap_mut(&mut $r);
             $f
         }
     };
-    ($f:expr, $r:ident, { $($lets:stmt)* }, let $name:ident: $t:ty = $value:expr; $($args:tt)+) => {
+    ($f:expr, $r:ident, { $($lets:stmt)* }, let $name:pat = $value:expr; $($args:tt)+) => {
         __internal_map_borrows!(
             $f,
             $r,
@@ -29,7 +29,7 @@ macro_rules! __internal_map_borrows {
                 let mut $r = ::std::cell::RefCell::borrow_mut(&(*$r).1)
                 let $r = $crate::internal::unwrap_mut(&mut $r)
                 let mut l = ::std::cell::RefCell::borrow_mut(&(*$r).0)
-                let $name: $t = $crate::internal::unwrap_mut(&mut l)
+                let $name = $crate::internal::unwrap_mut(&mut l)
             },
             $($args)+
         )
@@ -39,40 +39,32 @@ macro_rules! __internal_map_borrows {
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __internal_map {
-    (($($move:tt)*), $f:expr, let $name:ident: $t:ty = $value:expr;) => {
-        $crate::signal::Signal::map($value, $($move)* |mut $name| {
-            let $name: $t = &mut $name;
+    (($($move:tt)*), $f:expr, let $name:pat = $value:expr;) => {
+        $crate::signal::Signal::map($value, $($move)* |mut x| {
+            let $name = &mut x;
             $f
         })
     };
     (($($move:tt)*), $f:expr,
-        let $name1:ident: $t1:ty = $value1:expr;
-        let $name2:ident: $t2:ty = $value2:expr;
+        let $name1:pat = $value1:expr;
+        let $name2:pat = $value2:expr;
     ) => {
-        $crate::internal::Map2::new(
-            $value1,
-            $value2,
-            $($move)* |$name1, $name2| {
-                let $name1: $t1 = $name1;
-                let $name2: $t2 = $name2;
-                $f
-            }
-        )
+        $crate::internal::Map2::new($value1, $value2, $($move)* |$name1, $name2| $f)
     };
     (($($move:tt)*), $f:expr,
-        let $name1:ident: $t1:ty = $value1:expr;
-        let $name2:ident: $t2:ty = $value2:expr;
+        let $name1:pat = $value1:expr;
+        let $name2:pat = $value2:expr;
         $($args:tt)+
     ) => {
         $crate::internal::Map2::new(
             $value1,
-            __internal_map_pairs!(let $name2: $t2 = $value2; $($args)+),
-            $($move)* |$name1: $t1, r| __internal_map_borrows!(
+            __internal_map_pairs!(let $name2 = $value2; $($args)+),
+            $($move)* |$name1, r| __internal_map_borrows!(
                 $f,
                 r,
                 {
                     let mut l = ::std::cell::RefCell::borrow_mut(&r.0)
-                    let $name2: $t2 = $crate::internal::unwrap_mut(&mut l)
+                    let $name2 = $crate::internal::unwrap_mut(&mut l)
                 },
                 $($args)+
             )
@@ -86,14 +78,11 @@ macro_rules! __internal_map_lets {
     (($($move:tt)*), $f:expr, { $($lets:tt)* },) => {
         __internal_map!(($($move)*), $f, $($lets)*)
     };
-    (($($move:tt)*), $f:expr, { $($lets:tt)* }, let $name:ident: $t:ty = $value:expr, $($args:tt)*) => {
-        __internal_map_lets!(($($move)*), $f, { $($lets)* let $name: $t = $value; }, $($args)*)
-    };
-    (($($move:tt)*), $f:expr, { $($lets:tt)* }, let $name:ident = $value:expr, $($args:tt)*) => {
-        __internal_map_lets!(($($move)*), $f, { $($lets)* let $name: &mut _ = $value; }, $($args)*)
+    (($($move:tt)*), $f:expr, { $($lets:tt)* }, let $name:pat = $value:expr, $($args:tt)*) => {
+        __internal_map_lets!(($($move)*), $f, { $($lets)* let $name = $value; }, $($args)*)
     };
     (($($move:tt)*), $f:expr, { $($lets:tt)* }, $name:ident, $($args:tt)*) => {
-        __internal_map_lets!(($($move)*), $f, { $($lets)* let $name: &mut _ = $name; }, $($args)*)
+        __internal_map_lets!(($($move)*), $f, { $($lets)* let $name = $name; }, $($args)*)
     };
 }
 
