@@ -10,6 +10,13 @@ pub fn unwrap_mut<A>(x: &mut Option<A>) -> &mut A {
     }
 }
 
+pub fn unwrap_ref<A>(x: &Option<A>) -> &A {
+    match *x {
+        Some(ref x) => x,
+        None => unreachable!(),
+    }
+}
+
 
 pub struct Map2<A: Signal, B: Signal, C> {
     signal1: A,
@@ -125,6 +132,67 @@ impl<A, B> Signal for MapPairMut<A, B>
         }
 
         if borrow_right.is_none() {
+            return State::NotChanged;
+        }
+
+        if changed {
+            State::Changed(self.inner.clone())
+
+        } else {
+            State::NotChanged
+        }
+    }
+}
+
+
+// TODO is it possible to avoid the Rc ?
+pub type Pair<A, B> = Rc<RefCell<(Option<A>, Option<B>)>>;
+
+pub struct MapPair<A: Signal, B: Signal> {
+    signal1: A,
+    signal2: B,
+    inner: Pair<A::Item, B::Item>,
+}
+
+impl<A, B> MapPair<A, B>
+    where A: Signal,
+          B: Signal {
+    #[inline]
+    pub fn new(left: A, right: B) -> Self {
+        Self {
+            signal1: left,
+            signal2: right,
+            inner: Rc::new(RefCell::new((None, None))),
+        }
+    }
+}
+
+impl<A, B> Signal for MapPair<A, B>
+    where A: Signal,
+          B: Signal {
+    type Item = Pair<A::Item, B::Item>;
+
+    // TODO inline this ?
+    fn poll(&mut self) -> State<Self::Item> {
+        let mut changed = false;
+
+        let mut borrow = self.inner.borrow_mut();
+
+        if let State::Changed(left) = self.signal1.poll() {
+            borrow.0 = Some(left);
+            changed = true;
+        }
+
+        if borrow.0.is_none() {
+            return State::NotChanged;
+        }
+
+        if let State::Changed(right) = self.signal2.poll() {
+            borrow.1 = Some(right);
+            changed = true;
+        }
+
+        if borrow.1.is_none() {
             return State::NotChanged;
         }
 
