@@ -467,6 +467,7 @@ pub mod unsync {
 
     struct MutableState<A> {
         value: A,
+        senders: usize,
         // TODO use HashMap or BTreeMap instead ?
         receivers: Vec<Weak<MutableSignalState<A>>>,
     }
@@ -474,7 +475,7 @@ pub mod unsync {
     struct MutableSignalState<A> {
         has_changed: Cell<bool>,
         task: RefCell<Option<Task>>,
-        // TODO change this to Weak later
+        // TODO change this to Weak ?
         state: Rc<RefCell<MutableState<A>>>,
     }
 
@@ -493,13 +494,13 @@ pub mod unsync {
     }
 
 
-    #[derive(Clone)]
     pub struct Mutable<A>(Rc<RefCell<MutableState<A>>>);
 
     impl<A> Mutable<A> {
         pub fn new(value: A) -> Self {
             Mutable(Rc::new(RefCell::new(MutableState {
                 value,
+                senders: 1,
                 receivers: vec![],
             })))
         }
@@ -597,8 +598,8 @@ pub mod unsync {
         }
 
         #[inline]
-        pub fn signal_cloned(&self) -> MutableSignalClone<A> {
-            MutableSignalClone(MutableSignalState::new(&self.0))
+        pub fn signal_cloned(&self) -> MutableSignalCloned<A> {
+            MutableSignalCloned(MutableSignalState::new(&self.0))
         }
     }
 
@@ -616,10 +617,26 @@ pub mod unsync {
         }
     }
 
+    // TODO can this be derived ?
     impl<T: Default> Default for Mutable<T> {
         #[inline]
         fn default() -> Self {
             Mutable::new(Default::default())
+        }
+    }
+
+    impl<A> Clone for Mutable<A> {
+        #[inline]
+        fn clone(&self) -> Self {
+            self.0.borrow_mut().senders += 1;
+            Mutable(self.0.clone())
+        }
+    }
+
+    impl<A> Drop for Mutable<A> {
+        #[inline]
+        fn drop(&mut self) {
+            self.0.borrow_mut().senders -= 1;
         }
     }
 
@@ -640,6 +657,9 @@ pub mod unsync {
             if self.0.has_changed.replace(false) {
                 Async::Ready(Some(self.0.state.borrow().value))
 
+            } else if self.0.state.borrow().senders == 0 {
+                Async::Ready(None)
+
             } else {
                 *self.0.task.borrow_mut() = Some(task::current());
                 Async::NotReady
@@ -649,22 +669,25 @@ pub mod unsync {
 
 
     // TODO it should have a single MutableSignal implementation for both Copy and Clone
-    pub struct MutableSignalClone<A>(Rc<MutableSignalState<A>>);
+    pub struct MutableSignalCloned<A>(Rc<MutableSignalState<A>>);
 
-    impl<A> Clone for MutableSignalClone<A> {
+    impl<A> Clone for MutableSignalCloned<A> {
         #[inline]
         fn clone(&self) -> Self {
-            MutableSignalClone(MutableSignalState::new(&self.0.state))
+            MutableSignalCloned(MutableSignalState::new(&self.0.state))
         }
     }
 
-    impl<A: Clone> Signal for MutableSignalClone<A> {
+    impl<A: Clone> Signal for MutableSignalCloned<A> {
         type Item = A;
 
         // TODO code duplication with MutableSignal::poll
         fn poll(&mut self) -> Async<Option<Self::Item>> {
             if self.0.has_changed.replace(false) {
                 Async::Ready(Some(self.0.state.borrow().value.clone()))
+
+            } else if self.0.state.borrow().senders == 0 {
+                Async::Ready(None)
 
             } else {
                 *self.0.task.borrow_mut() = Some(task::current());
