@@ -2,7 +2,7 @@ use std::cmp::Ordering;
 use futures::{Stream, Poll, Async};
 use futures::stream::ForEach;
 use futures::future::IntoFuture;
-use signal::{Signal, State};
+use signal::Signal;
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -134,7 +134,7 @@ pub trait SignalVec {
     #[inline]
     fn len(self) -> Len<Self> where Self: Sized {
         Len {
-            signal: self,
+            signal: Some(self),
             first: true,
             len: 0,
         }
@@ -175,9 +175,16 @@ impl<A, B, F> SignalVec for Map<A, F>
 }
 
 
+fn unwrap<A>(x: Async<Option<A>>) -> A {
+    match x {
+        Async::Ready(Some(x)) => x,
+        _ => panic!("Signal did not return a value"),
+    }
+}
+
 pub struct MapSignal<A, B: Signal, F> {
     signal: Option<A>,
-    signals: Vec<B>,
+    signals: Vec<Option<B>>,
     callback: F,
 }
 
@@ -188,87 +195,94 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
     type Item = B::Item;
 
     fn poll(&mut self) -> Async<Option<VecChange<Self::Item>>> {
-        if let Some(mut signal) = self.signal.take() {
-            match signal.poll() {
-                Async::Ready(Some(change)) => {
-                    self.signal = Some(signal);
+        let done = match self.signal.as_mut().map(|signal| signal.poll()) {
+            None => true,
+            Some(Async::Ready(None)) => {
+                self.signal = None;
+                true
+            },
+            Some(Async::Ready(Some(change))) => {
+                return Async::Ready(Some(match change {
+                    VecChange::Replace { values } => {
+                        self.signals = Vec::with_capacity(values.len());
 
-                    return Async::Ready(Some(match change {
-                        VecChange::Replace { values } => {
-                            self.signals = Vec::with_capacity(values.len());
+                        VecChange::Replace {
+                            values: values.into_iter().map(|value| {
+                                let mut signal = (self.callback)(value);
+                                let poll = unwrap(signal.poll());
+                                self.signals.push(Some(signal));
+                                poll
+                            }).collect()
+                        }
+                    },
 
-                            VecChange::Replace {
-                                values: values.into_iter().map(|value| {
-                                    let mut signal = (self.callback)(value);
-                                    let poll = signal.poll().unwrap();
-                                    self.signals.push(signal);
-                                    poll
-                                }).collect()
-                            }
-                        },
+                    VecChange::InsertAt { index, value } => {
+                        let mut signal = (self.callback)(value);
+                        let poll = unwrap(signal.poll());
+                        self.signals.insert(index, Some(signal));
+                        VecChange::InsertAt { index, value: poll }
+                    },
 
-                        VecChange::InsertAt { index, value } => {
-                            let mut signal = (self.callback)(value);
-                            let poll = signal.poll().unwrap();
-                            self.signals.insert(index, signal);
-                            VecChange::InsertAt { index, value: poll }
-                        },
+                    VecChange::UpdateAt { index, value } => {
+                        let mut signal = (self.callback)(value);
+                        let poll = unwrap(signal.poll());
+                        self.signals[index] = Some(signal);
+                        VecChange::UpdateAt { index, value: poll }
+                    },
 
-                        VecChange::UpdateAt { index, value } => {
-                            let mut signal = (self.callback)(value);
-                            let poll = signal.poll().unwrap();
-                            self.signals[index] = signal;
-                            VecChange::UpdateAt { index, value: poll }
-                        },
+                    VecChange::Push { value } => {
+                        let mut signal = (self.callback)(value);
+                        let poll = unwrap(signal.poll());
+                        self.signals.push(Some(signal));
+                        VecChange::Push { value: poll }
+                    },
 
-                        VecChange::Push { value } => {
-                            let mut signal = (self.callback)(value);
-                            let poll = signal.poll().unwrap();
-                            self.signals.push(signal);
-                            VecChange::Push { value: poll }
-                        },
+                    VecChange::RemoveAt { index } => {
+                        self.signals.remove(index);
+                        VecChange::RemoveAt { index }
+                    },
 
-                        VecChange::RemoveAt { index } => {
-                            self.signals.remove(index);
-                            VecChange::RemoveAt { index }
-                        },
+                    VecChange::Pop {} => {
+                        self.signals.pop().unwrap();
+                        VecChange::Pop {}
+                    },
 
-                        VecChange::Pop {} => {
-                            self.signals.pop().unwrap();
-                            VecChange::Pop {}
-                        },
+                    VecChange::Clear {} => {
+                        self.signals = vec![];
+                        VecChange::Clear {}
+                    },
+                }));
+            },
+            Some(Async::NotReady) => false,
+        };
 
-                        VecChange::Clear {} => {
-                            self.signals = vec![];
-                            VecChange::Clear {}
-                        },
-                    }))
-                },
-                Async::Ready(None) => if self.signals.len() == 0 {
-                    return Async::Ready(None);
-                },
-                Async::NotReady => {
-                    self.signal = Some(signal);
-                },
-            }
-        }
+        // TODO make this more efficient (e.g. using a similar strategy as FuturesUnordered)
+        let mut iter = self.signals.as_mut_slice().into_iter().enumerate();
 
-        // TODO is there a better way to accomplish this ?
-        let mut iter = self.signals.as_mut_slice().into_iter();
-        let mut index = 0;
+        let mut has_pending = false;
 
+        // TODO ensure that this is as efficient as possible
         // TODO make this more efficient (e.g. using a similar strategy as FuturesUnordered)
         loop {
             match iter.next() {
-                Some(signal) => match signal.poll() {
-                    State::Changed(value) => {
+                Some((index, signal)) => match signal.as_mut().map(|s| s.poll()) {
+                    Some(Async::Ready(Some(value))) => {
                         return Async::Ready(Some(VecChange::UpdateAt { index, value }))
                     },
-                    State::NotChanged => {
-                        index += 1;
+                    Some(Async::Ready(None)) => {
+                        *signal = None;
                     },
+                    Some(Async::NotReady) => {
+                        has_pending = true;
+                    },
+                    None => {},
                 },
-                None => return Async::NotReady,
+                None => return if done && !has_pending {
+                    Async::Ready(None)
+
+                } else {
+                    Async::NotReady
+                },
             }
         }
     }
@@ -276,7 +290,7 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
 
 
 pub struct Len<A> {
-    signal: A,
+    signal: Option<A>,
     first: bool,
     len: usize,
 }
@@ -284,54 +298,65 @@ pub struct Len<A> {
 impl<A> Signal for Len<A> where A: SignalVec {
     type Item = usize;
 
-    fn poll(&mut self) -> State<Self::Item> {
+    fn poll(&mut self) -> Async<Option<Self::Item>> {
         let mut changed = false;
+        let mut done = false;
 
         loop {
-            match self.signal.poll() {
-                Async::Ready(Some(change)) => {
-                    match change {
-                        VecChange::Replace { values } => {
-                            if self.len != values.len() {
-                                changed = true;
-                                self.len = values.len();
-                            }
-                        },
-
-                        VecChange::InsertAt { .. } | VecChange::Push { .. } => {
-                            changed = true;
-                            self.len += 1;
-                        },
-
-                        VecChange::UpdateAt { .. } => {},
-
-                        VecChange::RemoveAt { .. } | VecChange::Pop {} => {
-                            changed = true;
-                            self.len -= 1;
-                        },
-
-                        VecChange::Clear {} => {
-                            if self.len != 0 {
-                                changed = true;
-                                self.len = 0;
-                            }
-                        },
-                    }
+            match self.signal.as_mut().map(|signal| signal.poll()) {
+                None => {
+                    done = true;
+                    break;
                 },
+                Some(Async::Ready(None)) => {
+                    self.signal = None;
+                    done = true;
+                    break;
+                },
+                Some(Async::Ready(Some(change))) => match change {
+                    VecChange::Replace { values } => {
+                        let len = values.len();
 
-                // TODO change this after signals support stopping
-                // TODO what if changed is true ?
-                // TODO what if self.first is true ?
-                // TODO stop polling the SignalVec after it's ended
-                Async::Ready(None) => return State::NotChanged,
+                        if self.len != len {
+                            self.len = len;
+                            changed = true;
+                        }
+                    },
 
-                Async::NotReady => return if changed || self.first {
-                    self.first = false;
-                    State::Changed(self.len)
-                } else {
-                    State::NotChanged
+                    VecChange::InsertAt { .. } | VecChange::Push { .. } => {
+                        self.len += 1;
+                        changed = true;
+                    },
+
+                    VecChange::UpdateAt { .. } => {},
+
+                    VecChange::RemoveAt { .. } | VecChange::Pop {} => {
+                        self.len -= 1;
+                        changed = true;
+                    },
+
+                    VecChange::Clear {} => {
+                        if self.len != 0 {
+                            self.len = 0;
+                            changed = true;
+                        }
+                    },
+                },
+                Some(Async::NotReady) => {
+                    break;
                 },
             }
+        }
+
+        if changed || self.first {
+            self.first = false;
+            Async::Ready(Some(self.len))
+
+        } else if done {
+            Async::Ready(None)
+
+        } else {
+            Async::NotReady
         }
     }
 }
