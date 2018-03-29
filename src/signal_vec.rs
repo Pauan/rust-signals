@@ -53,8 +53,8 @@ impl<A> VecChange<A> {
             VecChange::Replace { values } => VecChange::Replace { values: values.into_iter().map(callback).collect() },
             VecChange::InsertAt { index, value } => VecChange::InsertAt { index, value: callback(value) },
             VecChange::UpdateAt { index, value } => VecChange::UpdateAt { index, value: callback(value) },
-            VecChange::RemoveAt { index } => VecChange::RemoveAt { index },
             VecChange::Push { value } => VecChange::Push { value: callback(value) },
+            VecChange::RemoveAt { index } => VecChange::RemoveAt { index },
             VecChange::Pop {} => VecChange::Pop {},
             VecChange::Clear {} => VecChange::Clear {},
         }
@@ -101,10 +101,10 @@ pub trait SignalVec {
     }
 
     #[inline]
-    fn sort_by_cloned<F>(self, compare: F) -> SortBy<Self, F>
+    fn sort_by_cloned<F>(self, compare: F) -> SortByCloned<Self, F>
         where F: FnMut(&Self::Item, &Self::Item) -> Ordering,
               Self: Sized {
-        SortBy {
+        SortByCloned {
             pending: None,
             values: vec![],
             indexes: vec![],
@@ -490,7 +490,7 @@ impl<A, F> SignalVec for Filter<A, F>
 }
 
 
-pub struct SortBy<A: SignalVec, B> {
+pub struct SortByCloned<A: SignalVec, B> {
     pending: Option<Async<Option<VecChange<A::Item>>>>,
     values: Vec<A::Item>,
     indexes: Vec<usize>,
@@ -498,7 +498,7 @@ pub struct SortBy<A: SignalVec, B> {
     compare: B,
 }
 
-impl<A, F> SortBy<A, F>
+impl<A, F> SortByCloned<A, F>
     where A: SignalVec,
           F: FnMut(&A::Item, &A::Item) -> Ordering {
     // TODO should this inline ?
@@ -577,7 +577,7 @@ impl<A, F> SortBy<A, F>
 }
 
 // TODO implementation of this for Copy
-impl<A, F> SignalVec for SortBy<A, F>
+impl<A, F> SignalVec for SortByCloned<A, F>
     where A: SignalVec,
           F: FnMut(&A::Item, &A::Item) -> Ordering,
           A::Item: Clone {

@@ -472,6 +472,28 @@ pub mod unsync {
         receivers: Vec<Weak<MutableSignalState<A>>>,
     }
 
+    impl<A> MutableState<A> {
+        fn notify(&mut self) {
+            self.receivers.retain(|receiver| {
+                if let Some(receiver) = receiver.upgrade() {
+                    receiver.has_changed.set(true);
+
+                    let mut borrow = receiver.task.borrow_mut();
+
+                    if let Some(task) = borrow.take() {
+                        drop(borrow);
+                        task.notify();
+                    }
+
+                    true
+
+                } else {
+                    false
+                }
+            });
+        }
+    }
+
     struct MutableSignalState<A> {
         has_changed: Cell<bool>,
         task: RefCell<Option<Task>>,
@@ -505,40 +527,12 @@ pub mod unsync {
             })))
         }
 
-        fn notify(state: &mut RefMut<MutableState<A>>) {
-            state.receivers.retain(|receiver| {
-                if let Some(receiver) = receiver.upgrade() {
-                    receiver.has_changed.set(true);
-
-                    let mut borrow = receiver.task.borrow_mut();
-
-                    if let Some(task) = borrow.take() {
-                        drop(borrow);
-                        task.notify();
-                    }
-
-                    true
-
-                } else {
-                    false
-                }
-            });
-        }
-
-        /*pub fn update<F>(&self, f: F) where F: FnOnce(A) -> A {
-            let mut state = self.0.borrow_mut();
-
-            state.value = f(state.value);
-
-            Self::notify(&mut state);
-        }*/
-
         pub fn replace(&self, value: A) -> A {
             let mut state = self.0.borrow_mut();
 
             let value = std::mem::replace(&mut state.value, value);
 
-            Self::notify(&mut state);
+            state.notify();
 
             value
         }
@@ -549,7 +543,7 @@ pub mod unsync {
             let new_value = f(&mut state.value);
             let value = std::mem::replace(&mut state.value, new_value);
 
-            Self::notify(&mut state);
+            state.notify();
 
             value
         }
@@ -560,8 +554,8 @@ pub mod unsync {
 
             std::mem::swap(&mut state1.value, &mut state2.value);
 
-            Self::notify(&mut state1);
-            Self::notify(&mut state2);
+            state1.notify();
+            state2.notify();
         }
 
         pub fn set(&self, value: A) {
@@ -569,7 +563,7 @@ pub mod unsync {
 
             state.value = value;
 
-            Self::notify(&mut state);
+            state.notify();
         }
 
         // TODO should this take &mut self ?
@@ -636,11 +630,19 @@ pub mod unsync {
     impl<A> Drop for Mutable<A> {
         #[inline]
         fn drop(&mut self) {
-            self.0.borrow_mut().senders -= 1;
+            let mut state = self.0.borrow_mut();
+
+            state.senders -= 1;
+
+            if state.senders == 0 && state.receivers.len() > 0 {
+                state.notify();
+                state.receivers = vec![];
+            }
         }
     }
 
 
+    // TODO remove it from receivers when it's dropped
     pub struct MutableSignal<A>(Rc<MutableSignalState<A>>);
 
     impl<A> Clone for MutableSignal<A> {
@@ -669,6 +671,7 @@ pub mod unsync {
 
 
     // TODO it should have a single MutableSignal implementation for both Copy and Clone
+    // TODO remove it from receivers when it's dropped
     pub struct MutableSignalCloned<A>(Rc<MutableSignalState<A>>);
 
     impl<A> Clone for MutableSignalCloned<A> {
@@ -700,6 +703,16 @@ pub mod unsync {
     struct Inner<A> {
         value: Option<A>,
         task: Option<task::Task>,
+        dropped: bool,
+    }
+
+    impl<A> Inner<A> {
+        fn notify(mut borrow: RefMut<Self>) {
+            if let Some(task) = borrow.task.take() {
+                drop(borrow);
+                task.notify();
+            }
+        }
     }
 
     pub struct Sender<A> {
@@ -713,10 +726,7 @@ pub mod unsync {
 
                 inner.value = Some(value);
 
-                if let Some(task) = inner.task.take() {
-                    drop(inner);
-                    task.notify();
-                }
+                Inner::notify(inner);
 
                 Ok(())
 
@@ -725,6 +735,19 @@ pub mod unsync {
             }
         }
     }
+
+    impl<A> Drop for Sender<A> {
+        fn drop(&mut self) {
+            if let Some(inner) = self.inner.upgrade() {
+                let mut inner = inner.borrow_mut();
+
+                inner.dropped = true;
+
+                Inner::notify(inner);
+            }
+        }
+    }
+
 
     pub struct Receiver<A> {
         inner: Rc<RefCell<Inner<A>>>,
@@ -739,10 +762,14 @@ pub mod unsync {
 
             // TODO is this correct ?
             match inner.value.take() {
-                None => {
+                None => if inner.dropped {
+                    Async::Ready(None)
+
+                } else {
                     inner.task = Some(task::current());
                     Async::NotReady
                 },
+
                 a => Async::Ready(a),
             }
         }
@@ -752,6 +779,7 @@ pub mod unsync {
         let inner = Rc::new(RefCell::new(Inner {
             value: Some(initial_value),
             task: None,
+            dropped: false,
         }));
 
         let sender = Sender {
