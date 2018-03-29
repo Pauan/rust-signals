@@ -2,6 +2,7 @@ use super::signal::Signal;
 use std::rc::Rc;
 use std::cell::RefCell;
 use futures::Async;
+use futures::task::Context;
 
 
 pub fn unwrap_mut<A>(x: &mut Option<A>) -> &mut A {
@@ -47,22 +48,22 @@ impl<A, B, C, D> Map2<A, B, C>
 // -----------------------------------------------------------------------------
 // Some(left) =>            => Some(right) =>             => Some((left, right))
 // Some(left) =>            => None        => Some(right) => Some((left, right))
-// Some(left) =>            => NotReady    => Some(right) => Some((left, right))
+// Some(left) =>            => Pending    => Some(right) => Some((left, right))
 // None       => Some(left) => Some(right) =>             => Some((left, right))
-// NotReady   => Some(left) => Some(right) =>             => Some((left, right))
+// Pending   => Some(left) => Some(right) =>             => Some((left, right))
 // None       => Some(left) => None        => Some(right) => None
 // None       => None       =>             =>             => None
 //            =>            => None        => None        => None
-// Some(left) =>            => NotReady    => None        => NotReady
-// None       => Some(left) => NotReady    => Some(right) => NotReady
-// None       => Some(left) => NotReady    => None        => NotReady
-// NotReady   => Some(left) => None        => Some(right) => NotReady
-// NotReady   => Some(left) => NotReady    => Some(right) => NotReady
-// NotReady   => Some(left) => NotReady    => None        => NotReady
-// NotReady   => None       => Some(right) =>             => NotReady
-// NotReady   => None       => None        => Some(right) => NotReady
-// NotReady   => None       => NotReady    => Some(right) => NotReady
-// NotReady   => None       => NotReady    => None        => NotReady
+// Some(left) =>            => Pending    => None        => Pending
+// None       => Some(left) => Pending    => Some(right) => Pending
+// None       => Some(left) => Pending    => None        => Pending
+// Pending   => Some(left) => None        => Some(right) => Pending
+// Pending   => Some(left) => Pending    => Some(right) => Pending
+// Pending   => Some(left) => Pending    => None        => Pending
+// Pending   => None       => Some(right) =>             => Pending
+// Pending   => None       => None        => Some(right) => Pending
+// Pending   => None       => Pending    => Some(right) => Pending
+// Pending   => None       => Pending    => None        => Pending
 impl<A, B, C, D> Signal for Map2<A, B, C>
     where A: Signal,
           B: Signal,
@@ -70,10 +71,10 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
     type Item = D;
 
     // TODO inline this ?
-    fn poll(&mut self) -> Async<Option<Self::Item>> {
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         let mut changed = false;
 
-        let left_done = match self.signal1.as_mut().map(|signal| signal.poll()) {
+        let left_done = match self.signal1.as_mut().map(|signal| signal.poll(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal1 = None;
@@ -84,7 +85,7 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
                 changed = true;
                 false
             },
-            Some(Async::NotReady) => false,
+            Some(Async::Pending) => false,
         };
 
         let left = match self.left {
@@ -94,11 +95,11 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
                 return Async::Ready(None);
 
             } else {
-                return Async::NotReady;
+                return Async::Pending;
             },
         };
 
-        let right_done = match self.signal2.as_mut().map(|signal| signal.poll()) {
+        let right_done = match self.signal2.as_mut().map(|signal| signal.poll(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal2 = None;
@@ -109,7 +110,7 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
                 changed = true;
                 false
             },
-            Some(Async::NotReady) => false,
+            Some(Async::Pending) => false,
         };
 
         let right = match self.right {
@@ -119,7 +120,7 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
                 return Async::Ready(None);
 
             } else {
-                return Async::NotReady;
+                return Async::Pending;
             },
         };
 
@@ -130,7 +131,7 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
             Async::Ready(None)
 
         } else {
-            Async::NotReady
+            Async::Pending
         }
     }
 }
@@ -164,12 +165,12 @@ impl<A, B> Signal for MapPairMut<A, B>
     type Item = PairMut<A::Item, B::Item>;
 
     // TODO inline this ?
-    fn poll(&mut self) -> Async<Option<Self::Item>> {
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         let mut changed = false;
 
         let mut borrow_left = self.inner.0.borrow_mut();
 
-        let left_done = match self.signal1.as_mut().map(|signal| signal.poll()) {
+        let left_done = match self.signal1.as_mut().map(|signal| signal.poll(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal1 = None;
@@ -180,7 +181,7 @@ impl<A, B> Signal for MapPairMut<A, B>
                 changed = true;
                 false
             },
-            Some(Async::NotReady) => false,
+            Some(Async::Pending) => false,
         };
 
         if borrow_left.is_none() {
@@ -188,13 +189,13 @@ impl<A, B> Signal for MapPairMut<A, B>
                 return Async::Ready(None);
 
             } else {
-                return Async::NotReady;
+                return Async::Pending;
             }
         }
 
         let mut borrow_right = self.inner.1.borrow_mut();
 
-        let right_done = match self.signal2.as_mut().map(|signal| signal.poll()) {
+        let right_done = match self.signal2.as_mut().map(|signal| signal.poll(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal2 = None;
@@ -205,7 +206,7 @@ impl<A, B> Signal for MapPairMut<A, B>
                 changed = true;
                 false
             },
-            Some(Async::NotReady) => false,
+            Some(Async::Pending) => false,
         };
 
         if borrow_right.is_none() {
@@ -213,7 +214,7 @@ impl<A, B> Signal for MapPairMut<A, B>
                 return Async::Ready(None);
 
             } else {
-                return Async::NotReady;
+                return Async::Pending;
             }
         }
 
@@ -224,7 +225,7 @@ impl<A, B> Signal for MapPairMut<A, B>
             Async::Ready(None)
 
         } else {
-            Async::NotReady
+            Async::Pending
         }
     }
 }
@@ -258,12 +259,12 @@ impl<A, B> Signal for MapPair<A, B>
     type Item = Pair<A::Item, B::Item>;
 
     // TODO inline this ?
-    fn poll(&mut self) -> Async<Option<Self::Item>> {
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         let mut changed = false;
 
         let mut borrow = self.inner.borrow_mut();
 
-        let left_done = match self.signal1.as_mut().map(|signal| signal.poll()) {
+        let left_done = match self.signal1.as_mut().map(|signal| signal.poll(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal1 = None;
@@ -274,7 +275,7 @@ impl<A, B> Signal for MapPair<A, B>
                 changed = true;
                 false
             },
-            Some(Async::NotReady) => false,
+            Some(Async::Pending) => false,
         };
 
         if borrow.0.is_none() {
@@ -282,11 +283,11 @@ impl<A, B> Signal for MapPair<A, B>
                 return Async::Ready(None);
 
             } else {
-                return Async::NotReady;
+                return Async::Pending;
             }
         }
 
-        let right_done = match self.signal2.as_mut().map(|signal| signal.poll()) {
+        let right_done = match self.signal2.as_mut().map(|signal| signal.poll(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal2 = None;
@@ -297,7 +298,7 @@ impl<A, B> Signal for MapPair<A, B>
                 changed = true;
                 false
             },
-            Some(Async::NotReady) => false,
+            Some(Async::Pending) => false,
         };
 
         if borrow.1.is_none() {
@@ -305,7 +306,7 @@ impl<A, B> Signal for MapPair<A, B>
                 return Async::Ready(None);
 
             } else {
-                return Async::NotReady;
+                return Async::Pending;
             }
         }
 
@@ -316,7 +317,7 @@ impl<A, B> Signal for MapPair<A, B>
             Async::Ready(None)
 
         } else {
-            Async::NotReady
+            Async::Pending
         }
     }
 }

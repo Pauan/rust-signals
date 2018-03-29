@@ -1,5 +1,6 @@
 use std::cmp::Ordering;
-use futures::{Stream, Poll, Async};
+use futures::task::Context;
+use futures::{Stream, StreamExt, Poll, Async};
 use futures::stream::ForEach;
 use futures::future::IntoFuture;
 use signal::Signal;
@@ -65,7 +66,7 @@ impl<A> VecChange<A> {
 pub trait SignalVec {
     type Item;
 
-    fn poll(&mut self) -> Async<Option<VecChange<Self::Item>>>;
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<Self::Item>>>;
 
     #[inline]
     fn map<A, F>(self, callback: F) -> Map<Self, F>
@@ -122,7 +123,7 @@ pub trait SignalVec {
 
     #[inline]
     // TODO file Rust bug about bad error message when `callback` isn't marked as `mut`
-    fn for_each<F, U>(self, callback: F) -> ForEach<SignalVecStream<Self>, F, U>
+    fn for_each<F, U>(self, callback: F) -> ForEach<SignalVecStream<Self>, U, F>
         where F: FnMut(VecChange<Self::Item>) -> U,
               // TODO allow for errors ?
               U: IntoFuture<Item = (), Error = ()>,
@@ -151,8 +152,8 @@ impl<F: ?Sized + SignalVec> SignalVec for ::std::boxed::Box<F> {
     type Item = F::Item;
 
     #[inline]
-    fn poll(&mut self) -> Async<Option<VecChange<Self::Item>>> {
-        (**self).poll()
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<Self::Item>>> {
+        (**self).poll(cx)
     }
 }
 
@@ -169,8 +170,8 @@ impl<A, B, F> SignalVec for Map<A, F>
 
     // TODO should this inline ?
     #[inline]
-    fn poll(&mut self) -> Async<Option<VecChange<Self::Item>>> {
-        self.signal.poll().map(|some| some.map(|change| change.map(|value| (self.callback)(value))))
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<Self::Item>>> {
+        self.signal.poll(cx).map(|some| some.map(|change| change.map(|value| (self.callback)(value))))
     }
 }
 
@@ -194,8 +195,8 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
           F: FnMut(A::Item) -> B {
     type Item = B::Item;
 
-    fn poll(&mut self) -> Async<Option<VecChange<Self::Item>>> {
-        let done = match self.signal.as_mut().map(|signal| signal.poll()) {
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<Self::Item>>> {
+        let done = match self.signal.as_mut().map(|signal| signal.poll(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal = None;
@@ -209,7 +210,7 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
                         VecChange::Replace {
                             values: values.into_iter().map(|value| {
                                 let mut signal = (self.callback)(value);
-                                let poll = unwrap(signal.poll());
+                                let poll = unwrap(signal.poll(cx));
                                 self.signals.push(Some(signal));
                                 poll
                             }).collect()
@@ -218,21 +219,21 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
 
                     VecChange::InsertAt { index, value } => {
                         let mut signal = (self.callback)(value);
-                        let poll = unwrap(signal.poll());
+                        let poll = unwrap(signal.poll(cx));
                         self.signals.insert(index, Some(signal));
                         VecChange::InsertAt { index, value: poll }
                     },
 
                     VecChange::UpdateAt { index, value } => {
                         let mut signal = (self.callback)(value);
-                        let poll = unwrap(signal.poll());
+                        let poll = unwrap(signal.poll(cx));
                         self.signals[index] = Some(signal);
                         VecChange::UpdateAt { index, value: poll }
                     },
 
                     VecChange::Push { value } => {
                         let mut signal = (self.callback)(value);
-                        let poll = unwrap(signal.poll());
+                        let poll = unwrap(signal.poll(cx));
                         self.signals.push(Some(signal));
                         VecChange::Push { value: poll }
                     },
@@ -253,7 +254,7 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
                     },
                 }));
             },
-            Some(Async::NotReady) => false,
+            Some(Async::Pending) => false,
         };
 
         // TODO make this more efficient (e.g. using a similar strategy as FuturesUnordered)
@@ -265,14 +266,14 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
         // TODO make this more efficient (e.g. using a similar strategy as FuturesUnordered)
         loop {
             match iter.next() {
-                Some((index, signal)) => match signal.as_mut().map(|s| s.poll()) {
+                Some((index, signal)) => match signal.as_mut().map(|s| s.poll(cx)) {
                     Some(Async::Ready(Some(value))) => {
                         return Async::Ready(Some(VecChange::UpdateAt { index, value }))
                     },
                     Some(Async::Ready(None)) => {
                         *signal = None;
                     },
-                    Some(Async::NotReady) => {
+                    Some(Async::Pending) => {
                         has_pending = true;
                     },
                     None => {},
@@ -281,7 +282,7 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
                     Async::Ready(None)
 
                 } else {
-                    Async::NotReady
+                    Async::Pending
                 },
             }
         }
@@ -298,12 +299,12 @@ pub struct Len<A> {
 impl<A> Signal for Len<A> where A: SignalVec {
     type Item = usize;
 
-    fn poll(&mut self) -> Async<Option<Self::Item>> {
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         let mut changed = false;
         let mut done = false;
 
         loop {
-            match self.signal.as_mut().map(|signal| signal.poll()) {
+            match self.signal.as_mut().map(|signal| signal.poll(cx)) {
                 None => {
                     done = true;
                     break;
@@ -342,7 +343,7 @@ impl<A> Signal for Len<A> where A: SignalVec {
                         }
                     },
                 },
-                Some(Async::NotReady) => {
+                Some(Async::Pending) => {
                     break;
                 },
             }
@@ -356,7 +357,7 @@ impl<A> Signal for Len<A> where A: SignalVec {
             Async::Ready(None)
 
         } else {
-            Async::NotReady
+            Async::Pending
         }
     }
 }
@@ -371,8 +372,8 @@ impl<A: SignalVec> Stream for SignalVecStream<A> {
     type Error = ();
 
     #[inline]
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        Ok(self.signal.poll())
+    fn poll_next(&mut self, cx: &mut Context) -> Poll<Option<Self::Item>, Self::Error> {
+        Ok(self.signal.poll(cx))
     }
 }
 
@@ -400,10 +401,10 @@ impl<A, F> SignalVec for Filter<A, F>
           F: FnMut(&A::Item) -> bool {
     type Item = A::Item;
 
-    fn poll(&mut self) -> Async<Option<VecChange<Self::Item>>> {
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<Self::Item>>> {
         loop {
-            return match self.signal.poll() {
-                Async::NotReady => Async::NotReady,
+            return match self.signal.poll(cx) {
+                Async::Pending => Async::Pending,
                 Async::Ready(None) => Async::Ready(None),
                 Async::Ready(Some(change)) => match change {
                     VecChange::Replace { values } => {
@@ -584,11 +585,11 @@ impl<A, F> SignalVec for SortByCloned<A, F>
     type Item = A::Item;
 
     // TODO figure out a faster implementation of this
-    fn poll(&mut self) -> Async<Option<VecChange<Self::Item>>> {
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<Self::Item>>> {
         match self.pending.take() {
             Some(value) => value,
-            None => match self.signal.poll() {
-                Async::NotReady => Async::NotReady,
+            None => match self.signal.poll(cx) {
+                Async::Pending => Async::Pending,
                 Async::Ready(None) => Async::Ready(None),
                 Async::Ready(Some(change)) => match change {
                     VecChange::Replace { mut values } => {
@@ -697,7 +698,8 @@ pub mod unsync {
     use super::{SignalVec, VecChange};
     use std::rc::Rc;
     use std::cell::{RefCell, Ref};
-    use futures::unsync::mpsc;
+    use futures::channel::mpsc;
+    use futures::task::Context;
     use futures::{Async, Stream};
     use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
@@ -1069,8 +1071,8 @@ pub mod unsync {
         type Item = A;
 
         #[inline]
-        fn poll(&mut self) -> Async<Option<VecChange<Self::Item>>> {
-            self.receiver.poll().unwrap()
+        fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<Self::Item>>> {
+            self.receiver.poll_next(cx).unwrap()
         }
     }
 }
@@ -1078,7 +1080,8 @@ pub mod unsync {
 
 #[cfg(test)]
 mod tests {
-    use futures::{Future, Poll, task};
+    use futures::{Future, Poll};
+    use futures::executor::block_on;
     use super::*;
 
     struct Tester<A> {
@@ -1096,12 +1099,12 @@ mod tests {
         type Item = A;
 
         #[inline]
-        fn poll(&mut self) -> Async<Option<VecChange<Self::Item>>> {
+        fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<Self::Item>>> {
             if self.changes.len() > 0 {
                 match self.changes.remove(0) {
-                    Async::NotReady => {
-                        task::current().notify();
-                        Async::NotReady
+                    Async::Pending => {
+                        cx.waker().wake();
+                        Async::Pending
                     },
                     Async::Ready(change) => Async::Ready(Some(change)),
                 }
@@ -1133,15 +1136,15 @@ mod tests {
         type Error = ();
 
         #[inline]
-        fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+        fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
             loop {
-                return match self.signal.poll() {
+                return match self.signal.poll(cx) {
                     Async::Ready(Some(change)) => {
                         (self.callback)(&mut self.signal, change);
                         continue;
                     },
                     Async::Ready(None) => Ok(Async::Ready(())),
-                    Async::NotReady => Ok(Async::NotReady),
+                    Async::Pending => Ok(Async::Pending),
                 }
             }
         }
@@ -1150,9 +1153,9 @@ mod tests {
     fn run<A: SignalVec, B: FnMut(&mut A, VecChange<A::Item>) -> C, C>(signal: A, mut callback: B) -> Vec<C> {
         let mut changes = vec![];
 
-        TesterFuture::new(signal, |signal, change| {
+        block_on(TesterFuture::new(signal, |signal, change| {
             changes.push(callback(signal, change));
-        }).wait().unwrap();
+        })).unwrap();
 
         changes
     }
@@ -1169,34 +1172,34 @@ mod tests {
 
         let input = Tester::new(vec![
             Async::Ready(VecChange::Replace { values: vec![0, 1, 2, 3, 4, 5] }),
-            Async::NotReady,
+            Async::Pending,
             Async::Ready(VecChange::InsertAt { index: 0, value: 6 }),
             Async::Ready(VecChange::InsertAt { index: 2, value: 7 }),
-            Async::NotReady,
-            Async::NotReady,
-            Async::NotReady,
+            Async::Pending,
+            Async::Pending,
+            Async::Pending,
             Async::Ready(VecChange::InsertAt { index: 5, value: 8 }),
             Async::Ready(VecChange::InsertAt { index: 7, value: 9 }),
             Async::Ready(VecChange::InsertAt { index: 9, value: 10 }),
-            Async::NotReady,
+            Async::Pending,
             Async::Ready(VecChange::InsertAt { index: 11, value: 11 }),
-            Async::NotReady,
+            Async::Pending,
             Async::Ready(VecChange::InsertAt { index: 0, value: 0 }),
-            Async::NotReady,
-            Async::NotReady,
+            Async::Pending,
+            Async::Pending,
             Async::Ready(VecChange::InsertAt { index: 1, value: 0 }),
             Async::Ready(VecChange::InsertAt { index: 5, value: 0 }),
-            Async::NotReady,
+            Async::Pending,
             Async::Ready(VecChange::InsertAt { index: 5, value: 12 }),
-            Async::NotReady,
+            Async::Pending,
             Async::Ready(VecChange::RemoveAt { index: 0 }),
             Async::Ready(VecChange::RemoveAt { index: 0 }),
-            Async::NotReady,
+            Async::Pending,
             Async::Ready(VecChange::RemoveAt { index: 0 }),
             Async::Ready(VecChange::RemoveAt { index: 1 }),
-            Async::NotReady,
+            Async::Pending,
             Async::Ready(VecChange::RemoveAt { index: 0 }),
-            Async::NotReady,
+            Async::Pending,
             Async::Ready(VecChange::RemoveAt { index: 0 }),
         ]);
 
