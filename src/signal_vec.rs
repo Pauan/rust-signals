@@ -248,7 +248,7 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
                     },
 
                     VecChange::Clear {} => {
-                        self.signals = vec![];
+                        self.signals.clear();
                         VecChange::Clear {}
                     },
                 }));
@@ -480,7 +480,7 @@ impl<A, F> SignalVec for Filter<A, F>
                     },
 
                     VecChange::Clear {} => {
-                        self.indexes = vec![];
+                        self.indexes.clear();
                         Async::Ready(Some(VecChange::Clear {}))
                     },
                 },
@@ -681,8 +681,8 @@ impl<A, F> SignalVec for SortByCloned<A, F>
                     },
 
                     VecChange::Clear {} => {
-                        self.values = vec![];
-                        self.indexes = vec![];
+                        self.values.clear();
+                        self.indexes.clear();
                         Async::Ready(Some(VecChange::Clear {}))
                     },
                 },
@@ -716,10 +716,44 @@ pub mod unsync {
             });
         }
 
+        fn notify_with<B, C, D, E>(&mut self, value: B, mut clone: C, change: D, mut notify: E)
+            where C: FnMut(&B) -> B,
+                  D: FnOnce(&mut Self, B),
+                  E: FnMut(B) -> VecChange<A> {
+
+            let mut len = self.senders.len();
+
+            if len == 0 {
+                change(self, value);
+
+            } else {
+                let mut copy = Some(clone(&value));
+
+                change(self, value);
+
+                self.senders.retain(move |sender| {
+                    let value = copy.take().unwrap();
+
+                    len -= 1;
+
+                    let value = if len == 0 {
+                        value
+
+                    } else {
+                        let v = clone(&value);
+                        copy = Some(value);
+                        v
+                    };
+
+                    sender.unbounded_send(notify(value)).is_ok()
+                });
+            }
+        }
+
         fn pop(&mut self) -> Option<A> {
             let value = self.values.pop();
 
-            if let Some(_) = value {
+            if value.is_some() {
                 self.notify(|| VecChange::Pop {});
             }
 
@@ -758,31 +792,31 @@ pub mod unsync {
                 let mut removals = vec![];
 
                 self.values.retain(|value| {
-                    if f(value) {
-                        index += 1;
-                        true
+                    let output = f(value);
 
-                    } else {
+                    if !output {
+                        removals.push(index);
+                    }
+
+                    index += 1;
+
+                    output
+                });
+
+                if self.values.len() == 0 {
+                    self.notify(|| VecChange::Clear {});
+
+                } else {
+                    // TODO use VecChange::Batch
+                    for index in removals.into_iter().rev() {
                         len -= 1;
 
                         if index == len {
-                            removals.push(None);
+                            self.notify(|| VecChange::Pop {});
 
                         } else {
-                            removals.push(Some(index));
+                            self.notify(|| VecChange::RemoveAt { index });
                         }
-
-                        false
-                    }
-                });
-
-                // TODO use VecChange::Batch
-                for x in removals {
-                    if let Some(index) = x {
-                        self.notify(|| VecChange::RemoveAt { index });
-
-                    } else {
-                        self.notify(|| VecChange::Pop {});
                     }
                 }
             }
@@ -790,16 +824,20 @@ pub mod unsync {
     }
 
     impl<A: Copy> MutableVecState<A> {
+        // This copies the Vec, but without calling clone
+        // TODO better implementation of this ?
+        // TODO prove that this doesn't call clone
+        fn copy_values(values: &Vec<A>) -> Vec<A> {
+            let mut output: Vec<A> = vec![];
+            output.extend(values);
+            output
+        }
+
         fn signal_vec_copy(&mut self) -> MutableSignalVec<A> {
             let (sender, receiver) = mpsc::unbounded();
 
             if self.values.len() > 0 {
-                // This copies the Vec, but without calling clone
-                // TODO better implementation of this ?
-                let mut values: Vec<A> = vec![];
-                // TODO prove that this doesn't call clone
-                values.extend(&self.values);
-                sender.unbounded_send(VecChange::Replace { values }).unwrap();
+                sender.unbounded_send(VecChange::Replace { values: Self::copy_values(&self.values) }).unwrap();
             }
 
             self.senders.push(sender);
@@ -828,40 +866,23 @@ pub mod unsync {
             self.values[index] = value;
             self.notify(|| VecChange::UpdateAt { index, value });
         }
+
+        fn replace_copy(&mut self, values: Vec<A>) {
+            self.notify_with(values,
+                Self::copy_values,
+                |this, values| this.values = values,
+                |values| VecChange::Replace { values });
+        }
     }
 
     impl<A: Clone> MutableVecState<A> {
-        fn notify_clone<B, C>(&mut self, value: A, change: B, mut notify: C)
-            where B: FnOnce(&mut Self, A),
-                  C: FnMut(A) -> VecChange<A> {
+        #[inline]
+        fn notify_clone<B, C, D>(&mut self, value: B, change: C, notify: D)
+            where B: Clone,
+                  C: FnOnce(&mut Self, B),
+                  D: FnMut(B) -> VecChange<A> {
 
-            let mut len = self.senders.len();
-
-            if len == 0 {
-                change(self, value);
-
-            } else {
-                let mut clone = Some(value.clone());
-
-                change(self, value);
-
-                self.senders.retain(move |sender| {
-                    let value = clone.take().unwrap();
-
-                    len -= 1;
-
-                    let value = if len == 0 {
-                        value
-
-                    } else {
-                        let v = value.clone();
-                        clone = Some(value);
-                        v
-                    };
-
-                    sender.unbounded_send(notify(value)).is_ok()
-                });
-            }
+            self.notify_with(value, |a| a.clone(), change, notify)
         }
 
         // TODO change this to return a MutableSignalVecClone ?
@@ -901,10 +922,15 @@ pub mod unsync {
                 |this, value| this.values[index] = value,
                 |value| VecChange::UpdateAt { index, value });
         }
+
+        fn replace_clone(&mut self, values: Vec<A>) {
+            self.notify_clone(values,
+                |this, values| this.values = values,
+                |values| VecChange::Replace { values });
+        }
     }
 
 
-    #[derive(Clone)]
     pub struct MutableVec<A>(Rc<RefCell<MutableVecState<A>>>);
 
     impl<A> MutableVec<A> {
@@ -978,6 +1004,11 @@ pub mod unsync {
         pub fn set(&self, index: usize, value: A) {
             self.0.borrow_mut().set_copy(index, value)
         }
+
+        #[inline]
+        pub fn replace(&self, values: Vec<A>) {
+            self.0.borrow_mut().replace_copy(values)
+        }
     }
 
     impl<A: Clone> MutableVec<A> {
@@ -1000,6 +1031,11 @@ pub mod unsync {
         #[inline]
         pub fn set_cloned(&self, index: usize, value: A) {
             self.0.borrow_mut().set_clone(index, value)
+        }
+
+        #[inline]
+        pub fn replace_cloned(&self, values: Vec<A>) {
+            self.0.borrow_mut().replace_clone(values)
         }
     }
 

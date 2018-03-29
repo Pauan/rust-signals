@@ -619,13 +619,13 @@ pub mod unsync {
         }
     }
 
-    impl<A> Clone for Mutable<A> {
+    /*impl<A> Clone for Mutable<A> {
         #[inline]
         fn clone(&self) -> Self {
             self.0.borrow_mut().senders += 1;
             Mutable(self.0.clone())
         }
-    }
+    }*/
 
     impl<A> Drop for Mutable<A> {
         #[inline]
