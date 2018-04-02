@@ -1,6 +1,8 @@
 #![recursion_limit="128"]
 
-extern crate futures;
+extern crate futures_core;
+extern crate futures_executor;
+extern crate futures_util;
 
 #[macro_use]
 extern crate futures_signals;
@@ -10,10 +12,11 @@ macro_rules! map_tests {
     ($name:ident, ($($ref:tt)+), ($($arg:tt)+)) => {
         #[cfg(test)]
         mod $name {
+            use futures_core::Poll;
+            use futures_executor::block_on;
+            use futures_util::future::poll_fn;
+
             use futures_signals::signal::{Signal, always};
-            use futures::executor::block_on;
-            use futures::future::poll_fn;
-            use futures::Poll;
 
             // NB it's not a problem to block on an Always because they always return Async::Ready!
             fn poll_always<S: Signal>(signal: &mut S) -> Option<S::Item> {

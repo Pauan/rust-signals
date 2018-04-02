@@ -1,8 +1,8 @@
 use super::signal::Signal;
 use std::rc::Rc;
 use std::cell::RefCell;
-use futures::Async;
-use futures::task::Context;
+use futures_core::Async;
+use futures_core::task::Context;
 
 
 pub fn unwrap_mut<A>(x: &mut Option<A>) -> &mut A {

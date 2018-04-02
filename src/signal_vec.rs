@@ -1,8 +1,8 @@
 use std::cmp::Ordering;
-use futures::task::Context;
-use futures::{Stream, StreamExt, Poll, Async};
-use futures::stream::ForEach;
-use futures::future::IntoFuture;
+use futures_core::task::Context;
+use futures_core::{Stream, Poll, Async};
+use futures_core::future::IntoFuture;
+use futures_util::stream::{StreamExt, ForEach};
 use signal::Signal;
 
 
@@ -698,9 +698,9 @@ pub mod unsync {
     use super::{SignalVec, VecChange};
     use std::rc::Rc;
     use std::cell::{RefCell, Ref};
-    use futures::channel::mpsc;
-    use futures::task::Context;
-    use futures::{Async, Stream};
+    use futures_channel::mpsc;
+    use futures_core::{Async, Stream};
+    use futures_core::task::Context;
     use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 
@@ -1080,8 +1080,8 @@ pub mod unsync {
 
 #[cfg(test)]
 mod tests {
-    use futures::{Future, Poll};
-    use futures::executor::block_on;
+    use futures_core::{Future, Poll};
+    use futures_executor::block_on;
     use super::*;
 
     struct Tester<A> {

@@ -1,9 +1,10 @@
 use std::rc::{Rc, Weak};
 use std::cell::{Cell, RefCell};
-use futures::task::{Context, Waker};
-use futures::{Async, Poll};
-use futures::future::{Future, IntoFuture};
-use futures::stream::{Stream, StreamExt, ForEach};
+use futures_core::task::{Context, Waker};
+use futures_core::{Async, Poll};
+use futures_core::future::{Future, IntoFuture};
+use futures_core::stream::{Stream};
+use futures_util::stream::{StreamExt, ForEach};
 use discard::{Discard, DiscardOnDrop};
 use signal_vec::{VecChange, SignalVec};
 
@@ -201,7 +202,7 @@ impl<A, B> Future for CancelableFuture<A, B>
 
 
 // TODO figure out a more efficient way to implement this
-// TODO this should be implemented in the futures crate
+// TODO this should be implemented in the futures_core crate
 #[inline]
 pub fn cancelable_future<A, B>(future: A, when_cancelled: B) -> (DiscardOnDrop<CancelableFutureHandle>, CancelableFuture<A, B>)
     where A: Future,
@@ -461,8 +462,8 @@ pub mod unsync {
     use std;
     use std::rc::{Rc, Weak};
     use std::cell::{Cell, RefCell, RefMut, Ref};
-    use futures::Async;
-    use futures::task::{Context, Waker};
+    use futures_core::Async;
+    use futures_core::task::{Context, Waker};
     use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 
@@ -801,9 +802,9 @@ mod tests {
     use super::Signal;
     use super::unsync::Mutable;
 
-    use futures::Async;
-    use futures::executor::LocalPool;
-    use futures::task::{Context, LocalMap, Waker, Wake};
+    use futures_core::Async;
+    use futures_core::task::{Context, LocalMap, Waker, Wake};
+    use futures_executor::LocalPool;
 
     use std::sync::Arc;
 
