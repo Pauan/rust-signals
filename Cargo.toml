@@ -11,12 +11,12 @@ keywords = ["signal", "reactive", "frp", "futures"]
 categories = ["asynchronous"]
 
 [dependencies]
-futures-core = "0.2.0-beta"
-futures-channel = "0.2.0-beta"
-futures-util = "0.2.0-beta"
+futures-core = "0.2.0"
+futures-channel = "0.2.0"
+futures-util = "0.2.0"
 discard = "1.0.3"
 # TODO make this optional
 serde = "1.0.27"
 
 [dev-dependencies]
-futures-executor = "0.2.0-beta"
+futures-executor = "0.2.0"
