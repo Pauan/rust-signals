@@ -10,6 +10,7 @@ extern crate futures_util;
 #[cfg(test)]
 extern crate futures_executor;
 
+pub mod broadcaster;
 pub mod signal;
 pub mod signal_vec;
 
