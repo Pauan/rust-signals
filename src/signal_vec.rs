@@ -1086,6 +1086,7 @@ mod tests {
     use super::*;
     use super::mutable_vec::MutableVec;
 
+
     struct Tester<A> {
         changes: Vec<Async<VecChange<A>>>,
     }
