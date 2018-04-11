@@ -1,5 +1,7 @@
-use std::rc::{Rc, Weak};
-use std::cell::{Cell, RefCell};
+// TODO use parking_lot ?
+use std::sync::{Arc, Weak, Mutex};
+// TODO use parking_lot ?
+use std::sync::atomic::{AtomicBool, Ordering};
 use futures_core::task::{Context, Waker};
 use futures_core::{Async, Poll};
 use futures_core::future::{Future, IntoFuture};
@@ -141,8 +143,8 @@ pub fn always<A>(value: A) -> Always<A> {
 
 
 struct CancelableFutureState {
-    is_cancelled: Cell<bool>,
-    waker: RefCell<Option<Waker>>,
+    is_cancelled: AtomicBool,
+    waker: Mutex<Option<Waker>>,
 }
 
 
@@ -153,12 +155,13 @@ pub struct CancelableFutureHandle {
 impl Discard for CancelableFutureHandle {
     fn discard(self) {
         if let Some(state) = self.state.upgrade() {
-            state.is_cancelled.set(true);
+            let mut lock = state.waker.lock().unwrap();
 
-            let mut borrow = state.waker.borrow_mut();
+            // TODO verify that this is correct
+            state.is_cancelled.store(true, Ordering::SeqCst);
 
-            if let Some(waker) = borrow.take() {
-                drop(borrow);
+            if let Some(waker) = lock.take() {
+                drop(lock);
                 waker.wake();
             }
         }
@@ -167,7 +170,7 @@ impl Discard for CancelableFutureHandle {
 
 
 pub struct CancelableFuture<A, B> {
-    state: Rc<CancelableFutureState>,
+    state: Arc<CancelableFutureState>,
     future: Option<A>,
     when_cancelled: Option<B>,
 }
@@ -182,16 +185,18 @@ impl<A, B> Future for CancelableFuture<A, B>
     // TODO should this inline ?
     #[inline]
     fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
-        if self.state.is_cancelled.get() {
+        // TODO is this correct ?
+        if self.state.is_cancelled.load(Ordering::SeqCst) {
             let future = self.future.take().unwrap();
             let callback = self.when_cancelled.take().unwrap();
-            // TODO figure out how to call the callback immediately when discard is called, e.g. using two Rc<RefCell<>>
+            // TODO figure out how to call the callback immediately when discard is called, e.g. using two Arc<Mutex<>>
             Ok(Async::Ready(callback(future)))
 
         } else {
             match self.future.as_mut().unwrap().poll(cx) {
                 Ok(Async::Pending) => {
-                    *self.state.waker.borrow_mut() = Some(cx.waker().clone());
+                    // TODO is this correct ?
+                    *self.state.waker.lock().unwrap() = Some(cx.waker().clone());
                     Ok(Async::Pending)
                 },
                 a => a,
@@ -204,22 +209,22 @@ impl<A, B> Future for CancelableFuture<A, B>
 // TODO figure out a more efficient way to implement this
 // TODO this should be implemented in the futures_core crate
 #[inline]
-pub fn cancelable_future<A, B>(future: A, when_cancelled: B) -> (DiscardOnDrop<CancelableFutureHandle>, CancelableFuture<A, B>)
-    where A: Future,
-          B: FnOnce(A) -> A::Item {
+pub fn cancelable_future<A, B>(future: A, when_cancelled: B) -> (DiscardOnDrop<CancelableFutureHandle>, CancelableFuture<A::Future, B>)
+    where A: IntoFuture,
+          B: FnOnce(A::Future) -> A::Item {
 
-    let state = Rc::new(CancelableFutureState {
-        is_cancelled: Cell::new(false),
-        waker: RefCell::new(None),
+    let state = Arc::new(CancelableFutureState {
+        is_cancelled: AtomicBool::new(false),
+        waker: Mutex::new(None),
     });
 
     let cancel_handle = DiscardOnDrop::new(CancelableFutureHandle {
-        state: Rc::downgrade(&state),
+        state: Arc::downgrade(&state),
     });
 
     let cancel_future = CancelableFuture {
         state,
-        future: Some(future),
+        future: Some(future.into_future()),
         when_cancelled: Some(when_cancelled),
     };
 
@@ -460,8 +465,10 @@ impl<A> Signal for Flatten<A>
 pub mod unsync {
     use super::Signal;
     use std;
-    use std::rc::{Rc, Weak};
-    use std::cell::{Cell, RefCell, RefMut, Ref};
+    // TODO use parking_lot ?
+    use std::sync::{Arc, Weak, Mutex, RwLock, MutexGuard};
+    // TODO use parking_lot ?
+    use std::sync::atomic::{AtomicBool, Ordering};
     use futures_core::Async;
     use futures_core::task::{Context, Waker};
     use serde::{Serialize, Deserialize, Serializer, Deserializer};
@@ -478,12 +485,13 @@ pub mod unsync {
         fn notify(&mut self) {
             self.receivers.retain(|receiver| {
                 if let Some(receiver) = receiver.upgrade() {
-                    receiver.has_changed.set(true);
+                    let mut lock = receiver.waker.lock().unwrap();
 
-                    let mut borrow = receiver.waker.borrow_mut();
+                    // TODO verify that this is correct
+                    receiver.has_changed.store(true, Ordering::SeqCst);
 
-                    if let Some(waker) = borrow.take() {
-                        drop(borrow);
+                    if let Some(waker) = lock.take() {
+                        drop(lock);
                         waker.wake();
                     }
 
@@ -497,32 +505,35 @@ pub mod unsync {
     }
 
     struct MutableSignalState<A> {
-        has_changed: Cell<bool>,
-        waker: RefCell<Option<Waker>>,
+        has_changed: AtomicBool,
+        waker: Mutex<Option<Waker>>,
         // TODO change this to Weak ?
-        state: Rc<RefCell<MutableState<A>>>,
+        state: Arc<RwLock<MutableState<A>>>,
     }
 
     impl<A> MutableSignalState<A> {
-        fn new(mutable_state: &Rc<RefCell<MutableState<A>>>) -> Rc<Self> {
-            let state = Rc::new(MutableSignalState {
-                has_changed: Cell::new(true),
-                waker: RefCell::new(None),
+        fn new(mutable_state: &Arc<RwLock<MutableState<A>>>) -> Arc<Self> {
+            let state = Arc::new(MutableSignalState {
+                has_changed: AtomicBool::new(true),
+                waker: Mutex::new(None),
                 state: mutable_state.clone(),
             });
 
-            mutable_state.borrow_mut().receivers.push(Rc::downgrade(&state));
+            {
+                let mut lock = mutable_state.write().unwrap();
+                lock.receivers.push(Arc::downgrade(&state));
+            }
 
             state
         }
     }
 
 
-    pub struct Mutable<A>(Rc<RefCell<MutableState<A>>>);
+    pub struct Mutable<A>(Arc<RwLock<MutableState<A>>>);
 
     impl<A> Mutable<A> {
         pub fn new(value: A) -> Self {
-            Mutable(Rc::new(RefCell::new(MutableState {
+            Mutable(Arc::new(RwLock::new(MutableState {
                 value,
                 senders: 1,
                 receivers: vec![],
@@ -530,7 +541,7 @@ pub mod unsync {
         }
 
         pub fn replace(&self, value: A) -> A {
-            let mut state = self.0.borrow_mut();
+            let mut state = self.0.write().unwrap();
 
             let value = std::mem::replace(&mut state.value, value);
 
@@ -540,7 +551,7 @@ pub mod unsync {
         }
 
         pub fn replace_with<F>(&self, f: F) -> A where F: FnOnce(&mut A) -> A {
-            let mut state = self.0.borrow_mut();
+            let mut state = self.0.write().unwrap();
 
             let new_value = f(&mut state.value);
             let value = std::mem::replace(&mut state.value, new_value);
@@ -551,8 +562,9 @@ pub mod unsync {
         }
 
         pub fn swap(&self, other: &Mutable<A>) {
-            let mut state1 = self.0.borrow_mut();
-            let mut state2 = other.0.borrow_mut();
+            // TODO can this dead lock ?
+            let mut state1 = self.0.write().unwrap();
+            let mut state2 = other.0.write().unwrap();
 
             std::mem::swap(&mut state1.value, &mut state2.value);
 
@@ -561,24 +573,24 @@ pub mod unsync {
         }
 
         pub fn set(&self, value: A) {
-            let mut state = self.0.borrow_mut();
+            let mut state = self.0.write().unwrap();
 
             state.value = value;
 
             state.notify();
         }
 
-        // TODO should this take &mut self ?
-        #[inline]
-        pub fn borrow(&self) -> Ref<A> {
-            Ref::map(self.0.borrow(), |x| &x.value)
+        // TODO figure out a better name for this ?
+        pub fn with_ref<B, F>(&self, f: F) -> B where F: FnOnce(&A) -> B {
+            let state = self.0.read().unwrap();
+            f(&state.value)
         }
     }
 
     impl<A: Copy> Mutable<A> {
         #[inline]
         pub fn get(&self) -> A {
-            self.0.borrow().value
+            self.0.read().unwrap().value
         }
 
         #[inline]
@@ -590,7 +602,7 @@ pub mod unsync {
     impl<A: Clone> Mutable<A> {
         #[inline]
         pub fn get_cloned(&self) -> A {
-            self.0.borrow().value.clone()
+            self.0.read().unwrap().value.clone()
         }
 
         #[inline]
@@ -602,7 +614,7 @@ pub mod unsync {
     impl<T> Serialize for Mutable<T> where T: Serialize {
         #[inline]
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-            self.0.borrow().value.serialize(serializer)
+            self.0.read().unwrap().value.serialize(serializer)
         }
     }
 
@@ -624,7 +636,7 @@ pub mod unsync {
     /*impl<A> Clone for Mutable<A> {
         #[inline]
         fn clone(&self) -> Self {
-            self.0.borrow_mut().senders += 1;
+            self.0.write().unwrap().senders += 1;
             Mutable(self.0.clone())
         }
     }*/
@@ -632,7 +644,7 @@ pub mod unsync {
     impl<A> Drop for Mutable<A> {
         #[inline]
         fn drop(&mut self) {
-            let mut state = self.0.borrow_mut();
+            let mut state = self.0.write().unwrap();
 
             state.senders -= 1;
 
@@ -645,7 +657,7 @@ pub mod unsync {
 
 
     // TODO remove it from receivers when it's dropped
-    pub struct MutableSignal<A>(Rc<MutableSignalState<A>>);
+    pub struct MutableSignal<A>(Arc<MutableSignalState<A>>);
 
     impl<A> Clone for MutableSignal<A> {
         #[inline]
@@ -658,14 +670,19 @@ pub mod unsync {
         type Item = A;
 
         fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-            if self.0.has_changed.replace(false) {
-                Async::Ready(Some(self.0.state.borrow().value))
+            // TODO is this correct ?
+            let lock = self.0.state.read().unwrap();
 
-            } else if self.0.state.borrow().senders == 0 {
+            // TODO verify that this is correct
+            if self.0.has_changed.swap(false, Ordering::SeqCst) {
+                Async::Ready(Some(lock.value))
+
+            } else if lock.senders == 0 {
                 Async::Ready(None)
 
             } else {
-                *self.0.waker.borrow_mut() = Some(cx.waker().clone());
+                // TODO is this correct ?
+                *self.0.waker.lock().unwrap() = Some(cx.waker().clone());
                 Async::Pending
             }
         }
@@ -674,7 +691,7 @@ pub mod unsync {
 
     // TODO it should have a single MutableSignal implementation for both Copy and Clone
     // TODO remove it from receivers when it's dropped
-    pub struct MutableSignalCloned<A>(Rc<MutableSignalState<A>>);
+    pub struct MutableSignalCloned<A>(Arc<MutableSignalState<A>>);
 
     impl<A> Clone for MutableSignalCloned<A> {
         #[inline]
@@ -688,14 +705,19 @@ pub mod unsync {
 
         // TODO code duplication with MutableSignal::poll
         fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-            if self.0.has_changed.replace(false) {
-                Async::Ready(Some(self.0.state.borrow().value.clone()))
+            // TODO is this correct ?
+            let lock = self.0.state.read().unwrap();
 
-            } else if self.0.state.borrow().senders == 0 {
+            // TODO verify that this is correct
+            if self.0.has_changed.swap(false, Ordering::SeqCst) {
+                Async::Ready(Some(lock.value.clone()))
+
+            } else if lock.senders == 0 {
                 Async::Ready(None)
 
             } else {
-                *self.0.waker.borrow_mut() = Some(cx.waker().clone());
+                // TODO is this correct ?
+                *self.0.waker.lock().unwrap() = Some(cx.waker().clone());
                 Async::Pending
             }
         }
@@ -709,22 +731,22 @@ pub mod unsync {
     }
 
     impl<A> Inner<A> {
-        fn notify(mut borrow: RefMut<Self>) {
-            if let Some(waker) = borrow.waker.take() {
-                drop(borrow);
+        fn notify(mut lock: MutexGuard<Self>) {
+            if let Some(waker) = lock.waker.take() {
+                drop(lock);
                 waker.wake();
             }
         }
     }
 
     pub struct Sender<A> {
-        inner: Weak<RefCell<Inner<A>>>,
+        inner: Weak<Mutex<Inner<A>>>,
     }
 
     impl<A> Sender<A> {
         pub fn send(&self, value: A) -> Result<(), A> {
             if let Some(inner) = self.inner.upgrade() {
-                let mut inner = inner.borrow_mut();
+                let mut inner = inner.lock().unwrap();
 
                 inner.value = Some(value);
 
@@ -741,7 +763,7 @@ pub mod unsync {
     impl<A> Drop for Sender<A> {
         fn drop(&mut self) {
             if let Some(inner) = self.inner.upgrade() {
-                let mut inner = inner.borrow_mut();
+                let mut inner = inner.lock().unwrap();
 
                 inner.dropped = true;
 
@@ -752,7 +774,7 @@ pub mod unsync {
 
 
     pub struct Receiver<A> {
-        inner: Rc<RefCell<Inner<A>>>,
+        inner: Arc<Mutex<Inner<A>>>,
     }
 
     impl<A> Signal for Receiver<A> {
@@ -760,7 +782,7 @@ pub mod unsync {
 
         #[inline]
         fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-            let mut inner = self.inner.borrow_mut();
+            let mut inner = self.inner.lock().unwrap();
 
             // TODO is this correct ?
             match inner.value.take() {
@@ -778,14 +800,14 @@ pub mod unsync {
     }
 
     pub fn channel<A>(initial_value: A) -> (Sender<A>, Receiver<A>) {
-        let inner = Rc::new(RefCell::new(Inner {
+        let inner = Arc::new(Mutex::new(Inner {
             value: Some(initial_value),
             waker: None,
             dropped: false,
         }));
 
         let sender = Sender {
-            inner: Rc::downgrade(&inner),
+            inner: Arc::downgrade(&inner),
         };
 
         let receiver = Receiver {
@@ -798,11 +820,11 @@ pub mod unsync {
 
 #[cfg(test)]
 mod tests {
+    use super::{Signal, cancelable_future};
+    use super::unsync::{Mutable, channel};
 
-    use super::Signal;
-    use super::unsync::Mutable;
-
-    use futures_core::Async;
+    use futures_core::{Async, Future};
+    use futures_core::future::{FutureResult};
     use futures_core::task::{Context, LocalMap, Waker, Wake};
     use futures_executor::LocalPool;
 
@@ -842,4 +864,27 @@ mod tests {
         });
     }
 
+    #[test]
+    fn test_cancelable_future() {
+        let mut a = cancelable_future(Ok(()), |_: FutureResult<(), ()>| ());
+
+        with_noop_context(|cx| {
+            assert_eq!(a.1.poll(cx), Ok(Async::Ready(())));
+        });
+    }
+
+    #[test]
+    fn test_send_sync() {
+        let a = cancelable_future(Ok(()), |_: FutureResult<(), ()>| ());
+        let _: Box<Send + Sync> = Box::new(a.0);
+        let _: Box<Send + Sync> = Box::new(a.1);
+
+        let _: Box<Send + Sync> = Box::new(Mutable::new(1));
+        let _: Box<Send + Sync> = Box::new(Mutable::new(1).signal());
+        let _: Box<Send + Sync> = Box::new(Mutable::new(1).signal_cloned());
+
+        let a = channel(1);
+        let _: Box<Send + Sync> = Box::new(a.0);
+        let _: Box<Send + Sync> = Box::new(a.1);
+    }
 }
