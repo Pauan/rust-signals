@@ -403,15 +403,15 @@ pub struct Flatten<A: Signal> {
 // --------------------------------------------------------
 // Some(inner) =>             => Some(value) => Some(value)
 // Some(inner) =>             => None        => Pending
-// Some(inner) =>             => Pending    => Pending
+// Some(inner) =>             => Pending     => Pending
 // None        => Some(inner) => Some(value) => Some(value)
 // None        => Some(inner) => None        => None
-// None        => Some(inner) => Pending    => Pending
+// None        => Some(inner) => Pending     => Pending
 // None        => None        =>             => None
-// Pending    => Some(inner) => Some(value) => Some(value)
-// Pending    => Some(inner) => None        => Pending
-// Pending    => Some(inner) => Pending    => Pending
-// Pending    => None        =>             => Pending
+// Pending     => Some(inner) => Some(value) => Some(value)
+// Pending     => Some(inner) => None        => Pending
+// Pending     => Some(inner) => Pending     => Pending
+// Pending     => None        =>             => Pending
 impl<A> Signal for Flatten<A>
     where A: Signal,
           A::Item: Signal {

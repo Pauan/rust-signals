@@ -58,22 +58,22 @@ impl<A, B, C, D> Map2<A, B, C>
 // -----------------------------------------------------------------------------
 // Some(left) =>            => Some(right) =>             => Some((left, right))
 // Some(left) =>            => None        => Some(right) => Some((left, right))
-// Some(left) =>            => Pending    => Some(right) => Some((left, right))
+// Some(left) =>            => Pending     => Some(right) => Some((left, right))
 // None       => Some(left) => Some(right) =>             => Some((left, right))
-// Pending   => Some(left) => Some(right) =>             => Some((left, right))
+// Pending    => Some(left) => Some(right) =>             => Some((left, right))
 // None       => Some(left) => None        => Some(right) => None
 // None       => None       =>             =>             => None
 //            =>            => None        => None        => None
-// Some(left) =>            => Pending    => None        => Pending
-// None       => Some(left) => Pending    => Some(right) => Pending
-// None       => Some(left) => Pending    => None        => Pending
-// Pending   => Some(left) => None        => Some(right) => Pending
-// Pending   => Some(left) => Pending    => Some(right) => Pending
-// Pending   => Some(left) => Pending    => None        => Pending
-// Pending   => None       => Some(right) =>             => Pending
-// Pending   => None       => None        => Some(right) => Pending
-// Pending   => None       => Pending    => Some(right) => Pending
-// Pending   => None       => Pending    => None        => Pending
+// Some(left) =>            => Pending     => None        => Pending
+// None       => Some(left) => Pending     => Some(right) => Pending
+// None       => Some(left) => Pending     => None        => Pending
+// Pending    => Some(left) => None        => Some(right) => Pending
+// Pending    => Some(left) => Pending     => Some(right) => Pending
+// Pending    => Some(left) => Pending     => None        => Pending
+// Pending    => None       => Some(right) =>             => Pending
+// Pending    => None       => None        => Some(right) => Pending
+// Pending    => None       => Pending     => Some(right) => Pending
+// Pending    => None       => Pending     => None        => Pending
 impl<A, B, C, D> Signal for Map2<A, B, C>
     where A: Signal,
           B: Signal,
