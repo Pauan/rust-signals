@@ -696,8 +696,7 @@ impl<A, F> SignalVec for SortByCloned<A, F>
 // TODO verify that this is correct
 pub mod unsync {
     use super::{SignalVec, VecChange};
-    use std::rc::Rc;
-    use std::cell::{RefCell, Ref};
+    use std::sync::{Arc, RwLock};
     use futures_channel::mpsc;
     use futures_core::{Async, Stream};
     use futures_core::task::Context;
@@ -933,12 +932,12 @@ pub mod unsync {
     }
 
 
-    pub struct MutableVec<A>(Rc<RefCell<MutableVecState<A>>>);
+    pub struct MutableVec<A>(Arc<RwLock<MutableVecState<A>>>);
 
     impl<A> MutableVec<A> {
         #[inline]
         pub fn new_with_values(values: Vec<A>) -> Self {
-            MutableVec(Rc::new(RefCell::new(MutableVecState {
+            MutableVec(Arc::new(RwLock::new(MutableVecState {
                 values,
                 senders: vec![],
             })))
@@ -951,100 +950,100 @@ pub mod unsync {
 
         #[inline]
         pub fn pop(&self) -> Option<A> {
-            self.0.borrow_mut().pop()
+            self.0.write().unwrap().pop()
         }
 
         #[inline]
         pub fn remove(&self, index: usize) -> A {
-            self.0.borrow_mut().remove(index)
+            self.0.write().unwrap().remove(index)
         }
 
         #[inline]
         pub fn clear(&self) {
-            self.0.borrow_mut().clear()
+            self.0.write().unwrap().clear()
         }
 
         #[inline]
         pub fn retain<F>(&self, f: F) where F: FnMut(&A) -> bool {
-            self.0.borrow_mut().retain(f)
+            self.0.write().unwrap().retain(f)
         }
 
-        #[inline]
-        pub fn as_slice(&self) -> Ref<[A]> {
-            Ref::map(self.0.borrow(), |x| x.values.as_slice())
+        pub fn with_slice<B, F>(&self, f: F) -> B where F: FnOnce(&[A]) -> B {
+            let lock = self.0.read().unwrap();
+            f(&lock.values)
         }
 
         #[inline]
         pub fn len(&self) -> usize {
-            self.0.borrow().values.len()
+            self.0.read().unwrap().values.len()
         }
 
         #[inline]
         pub fn is_empty(&self) -> bool {
-            self.0.borrow().values.is_empty()
+            self.0.read().unwrap().values.is_empty()
         }
     }
 
     impl<A: Copy> MutableVec<A> {
         #[inline]
         pub fn signal_vec(&self) -> MutableSignalVec<A> {
-            self.0.borrow_mut().signal_vec_copy()
+            self.0.write().unwrap().signal_vec_copy()
         }
 
         #[inline]
         pub fn push(&self, value: A) {
-            self.0.borrow_mut().push_copy(value)
+            self.0.write().unwrap().push_copy(value)
         }
 
         #[inline]
         pub fn insert(&self, index: usize, value: A) {
-            self.0.borrow_mut().insert_copy(index, value)
+            self.0.write().unwrap().insert_copy(index, value)
         }
 
         // TODO replace this with something else, like entry or IndexMut or whatever
         #[inline]
         pub fn set(&self, index: usize, value: A) {
-            self.0.borrow_mut().set_copy(index, value)
+            self.0.write().unwrap().set_copy(index, value)
         }
 
         #[inline]
         pub fn replace(&self, values: Vec<A>) {
-            self.0.borrow_mut().replace_copy(values)
+            self.0.write().unwrap().replace_copy(values)
         }
     }
 
     impl<A: Clone> MutableVec<A> {
         #[inline]
         pub fn signal_vec_cloned(&self) -> MutableSignalVec<A> {
-            self.0.borrow_mut().signal_vec_clone()
+            self.0.write().unwrap().signal_vec_clone()
         }
 
         #[inline]
         pub fn push_cloned(&self, value: A) {
-            self.0.borrow_mut().push_clone(value)
+            self.0.write().unwrap().push_clone(value)
         }
 
         #[inline]
         pub fn insert_cloned(&self, index: usize, value: A) {
-            self.0.borrow_mut().insert_clone(index, value)
+            self.0.write().unwrap().insert_clone(index, value)
         }
 
         // TODO replace this with something else, like entry or IndexMut or whatever
         #[inline]
         pub fn set_cloned(&self, index: usize, value: A) {
-            self.0.borrow_mut().set_clone(index, value)
+            self.0.write().unwrap().set_clone(index, value)
         }
 
         #[inline]
         pub fn replace_cloned(&self, values: Vec<A>) {
-            self.0.borrow_mut().replace_clone(values)
+            self.0.write().unwrap().replace_clone(values)
         }
     }
 
     impl<T> Serialize for MutableVec<T> where T: Serialize {
         #[inline]
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-            self.0.borrow().values.serialize(serializer)
+            self.0.read().unwrap().values.serialize(serializer)
         }
     }
 
@@ -1083,6 +1082,7 @@ mod tests {
     use futures_core::{Future, Poll};
     use futures_executor::block_on;
     use super::*;
+    use super::unsync::MutableVec;
 
     struct Tester<A> {
         changes: Vec<Async<VecChange<A>>>,
@@ -1160,6 +1160,17 @@ mod tests {
         changes
     }
 
+
+    #[test]
+    fn send_sync() {
+        let _: Box<Send + Sync> = Box::new(MutableVec::<()>::new());
+        let _: Box<Send + Sync> = Box::new(MutableVec::<()>::new().signal_vec());
+        let _: Box<Send + Sync> = Box::new(MutableVec::<()>::new().signal_vec_cloned());
+
+        let _: Box<Send + Sync> = Box::new(MutableVec::<()>::new_with_values(vec![]));
+        let _: Box<Send + Sync> = Box::new(MutableVec::<()>::new_with_values(vec![]).signal_vec());
+        let _: Box<Send + Sync> = Box::new(MutableVec::<()>::new_with_values(vec![]).signal_vec_cloned());
+    }
 
     #[test]
     fn filter() {
