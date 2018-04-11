@@ -6,11 +6,38 @@ use futures_util::stream::{StreamExt, ForEach};
 use signal_vec::{VecChange, SignalVec};
 
 
+pub trait IntoSignal {
+    type Signal: Signal<Item = Self::Item>;
+    type Item;
+
+    fn into_signal(self) -> Self::Signal;
+}
+
+impl<A> IntoSignal for A where A: Signal {
+    type Signal = Self;
+    type Item = A::Item;
+
+    fn into_signal(self) -> Self { self }
+}
+
+
 pub trait Signal {
     type Item;
 
     fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>>;
+}
 
+impl<F: ?Sized + Signal> Signal for ::std::boxed::Box<F> {
+    type Item = F::Item;
+
+    #[inline]
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        (**self).poll(cx)
+    }
+}
+
+
+pub trait SignalExt: Signal {
     #[inline]
     fn to_stream(self) -> SignalStream<Self>
         where Self: Sized {
@@ -20,8 +47,8 @@ pub trait Signal {
     }
 
     #[inline]
-    fn map<A, B>(self, callback: A) -> Map<Self, A>
-        where A: FnMut(Self::Item) -> B,
+    fn map<A, B>(self, callback: B) -> Map<Self, B>
+        where B: FnMut(Self::Item) -> A,
               Self: Sized {
         Map {
             signal: self,
@@ -30,9 +57,9 @@ pub trait Signal {
     }
 
     #[inline]
-    fn map_dedupe<A, B>(self, callback: A) -> MapDedupe<Self, A>
+    fn map_dedupe<A, B>(self, callback: B) -> MapDedupe<Self, B>
         // TODO should this use & instead of &mut ?
-        where A: FnMut(&mut Self::Item) -> B,
+        where B: FnMut(&mut Self::Item) -> A,
               Self: Sized {
         MapDedupe {
             old_value: None,
@@ -42,8 +69,8 @@ pub trait Signal {
     }
 
     #[inline]
-    fn filter_map<A, B>(self, callback: A) -> FilterMap<Self, A>
-        where A: FnMut(Self::Item) -> Option<B>,
+    fn filter_map<A, B>(self, callback: B) -> FilterMap<Self, B>
+        where B: FnMut(Self::Item) -> Option<A>,
               Self: Sized {
         FilterMap {
             signal: self,
@@ -54,7 +81,7 @@ pub trait Signal {
 
     #[inline]
     fn flatten(self) -> Flatten<Self>
-        where Self::Item: Signal,
+        where Self::Item: IntoSignal,
               Self: Sized {
         Flatten {
             signal: Some(self),
@@ -63,19 +90,22 @@ pub trait Signal {
     }
 
     #[inline]
-    fn switch<A, B>(self, callback: A) -> Flatten<Map<Self, A>>
-        where A: FnMut(Self::Item) -> B,
-              B: Signal,
+    fn switch<A, B>(self, callback: B) -> Switch<Self, A, B>
+        where A: IntoSignal,
+              B: FnMut(Self::Item) -> A,
               Self: Sized {
-        self.map(callback).flatten()
+        Switch {
+            inner: self.map(callback).flatten()
+        }
     }
 
     #[inline]
     // TODO file Rust bug about bad error message when `callback` isn't marked as `mut`
-    fn for_each<F, U>(self, callback: F) -> ForEach<SignalStream<Self>, U, F>
-        where F: FnMut(Self::Item) -> U,
-              // TODO allow for errors ?
-              U: IntoFuture<Item = (), Error = ()>,
+    // TODO custom ForEach type for this
+    fn for_each<U, F>(self, callback: F) -> ForEach<SignalStream<Self>, U, F>
+        // TODO allow for errors ?
+        where U: IntoFuture<Item = (), Error = ()>,
+              F: FnMut(Self::Item) -> U,
               Self: Sized {
 
         self.to_stream().for_each(callback)
@@ -105,15 +135,8 @@ pub trait Signal {
     }
 }
 
-
-impl<F: ?Sized + Signal> Signal for ::std::boxed::Box<F> {
-    type Item = F::Item;
-
-    #[inline]
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        (**self).poll(cx)
-    }
-}
+// TODO why is this ?Sized
+impl<T: ?Sized> SignalExt for T where T: Signal {}
 
 
 pub struct Always<A> {
@@ -133,6 +156,26 @@ impl<A> Signal for Always<A> {
 pub fn always<A>(value: A) -> Always<A> {
     Always {
         value: Some(value),
+    }
+}
+
+
+pub struct Switch<A, B, C>
+    where A: Signal,
+          B: IntoSignal,
+          C: FnMut(A::Item) -> B {
+    inner: Flatten<Map<A, C>>,
+}
+
+impl<A, B, C> Signal for Switch<A, B, C>
+    where A: Signal,
+          B: IntoSignal,
+          C: FnMut(A::Item) -> B {
+    type Item = <B::Signal as Signal>::Item;
+
+    #[inline]
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        self.inner.poll(cx)
     }
 }
 
@@ -299,9 +342,9 @@ impl<A, B, C> Signal for FilterMap<A, B>
 }
 
 
-pub struct Flatten<A: Signal> {
+pub struct Flatten<A: Signal> where A::Item: IntoSignal {
     signal: Option<A>,
-    inner: Option<A::Item>,
+    inner: Option<<A::Item as IntoSignal>::Signal>,
 }
 
 // Poll parent => Has inner   => Poll inner  => Output
@@ -319,8 +362,8 @@ pub struct Flatten<A: Signal> {
 // Pending     => None        =>             => Pending
 impl<A> Signal for Flatten<A>
     where A: Signal,
-          A::Item: Signal {
-    type Item = <<A as Signal>::Item as Signal>::Item;
+          A::Item: IntoSignal {
+    type Item = <<A as Signal>::Item as IntoSignal>::Item;
 
     #[inline]
     fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
@@ -331,7 +374,7 @@ impl<A> Signal for Flatten<A>
                 true
             },
             Some(Async::Ready(Some(inner))) => {
-                self.inner = Some(inner);
+                self.inner = Some(inner.into_signal());
                 false
             },
             Some(Async::Pending) => false,

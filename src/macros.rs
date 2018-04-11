@@ -43,7 +43,7 @@ macro_rules! __internal_map_mut_borrows {
 #[macro_export]
 macro_rules! __internal_map_mut {
     (($($move:tt)*), $f:expr, let $name:pat = $value:expr;) => {
-        $crate::signal::Signal::map($value, $($move)* |mut x| {
+        $crate::signal::SignalExt::map($value, $($move)* |mut x| {
             let $name = &mut x;
             $f
         })
@@ -144,7 +144,7 @@ macro_rules! __internal_map_ref_borrows {
 #[macro_export]
 macro_rules! __internal_map_ref {
     (($($move:tt)*), $f:expr, let $name:pat = $value:expr;) => {
-        $crate::signal::Signal::map($value, $($move)* |x| {
+        $crate::signal::SignalExt::map($value, $($move)* |x| {
             let $name = &x;
             $f
         })

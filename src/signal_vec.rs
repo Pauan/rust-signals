@@ -123,10 +123,10 @@ pub trait SignalVec {
 
     #[inline]
     // TODO file Rust bug about bad error message when `callback` isn't marked as `mut`
-    fn for_each<F, U>(self, callback: F) -> ForEach<SignalVecStream<Self>, U, F>
-        where F: FnMut(VecChange<Self::Item>) -> U,
-              // TODO allow for errors ?
-              U: IntoFuture<Item = (), Error = ()>,
+    fn for_each<U, F>(self, callback: F) -> ForEach<SignalVecStream<Self>, U, F>
+        // TODO allow for errors ?
+        where U: IntoFuture<Item = (), Error = ()>,
+              F: FnMut(VecChange<Self::Item>) -> U,
               Self:Sized {
 
         self.to_stream().for_each(callback)
@@ -1153,7 +1153,7 @@ mod tests {
         }
     }
 
-    fn run<A: SignalVec, B: FnMut(&mut A, VecChange<A::Item>) -> C, C>(signal: A, mut callback: B) -> Vec<C> {
+    fn run<A: SignalVec, B, C: FnMut(&mut A, VecChange<A::Item>) -> B>(signal: A, mut callback: C) -> Vec<B> {
         let mut changes = vec![];
 
         block_on(TesterFuture::new(signal, |signal, change| {
