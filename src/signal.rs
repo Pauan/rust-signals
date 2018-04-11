@@ -1,13 +1,8 @@
-// TODO use parking_lot ?
-use std::sync::{Arc, Weak, Mutex};
-// TODO use parking_lot ?
-use std::sync::atomic::{AtomicBool, Ordering};
-use futures_core::task::{Context, Waker};
+use futures_core::task::Context;
 use futures_core::{Async, Poll};
 use futures_core::future::{Future, IntoFuture};
 use futures_core::stream::{Stream};
 use futures_util::stream::{StreamExt, ForEach};
-use discard::{Discard, DiscardOnDrop};
 use signal_vec::{VecChange, SignalVec};
 
 
@@ -139,96 +134,6 @@ pub fn always<A>(value: A) -> Always<A> {
     Always {
         value: Some(value),
     }
-}
-
-
-struct CancelableFutureState {
-    is_cancelled: AtomicBool,
-    waker: Mutex<Option<Waker>>,
-}
-
-
-pub struct CancelableFutureHandle {
-    state: Weak<CancelableFutureState>,
-}
-
-impl Discard for CancelableFutureHandle {
-    fn discard(self) {
-        if let Some(state) = self.state.upgrade() {
-            let mut lock = state.waker.lock().unwrap();
-
-            // TODO verify that this is correct
-            state.is_cancelled.store(true, Ordering::SeqCst);
-
-            if let Some(waker) = lock.take() {
-                drop(lock);
-                waker.wake();
-            }
-        }
-    }
-}
-
-
-pub struct CancelableFuture<A, B> {
-    state: Arc<CancelableFutureState>,
-    future: Option<A>,
-    when_cancelled: Option<B>,
-}
-
-impl<A, B> Future for CancelableFuture<A, B>
-    where A: Future,
-          B: FnOnce(A) -> A::Item {
-
-    type Item = A::Item;
-    type Error = A::Error;
-
-    // TODO should this inline ?
-    #[inline]
-    fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
-        // TODO is this correct ?
-        if self.state.is_cancelled.load(Ordering::SeqCst) {
-            let future = self.future.take().unwrap();
-            let callback = self.when_cancelled.take().unwrap();
-            // TODO figure out how to call the callback immediately when discard is called, e.g. using two Arc<Mutex<>>
-            Ok(Async::Ready(callback(future)))
-
-        } else {
-            match self.future.as_mut().unwrap().poll(cx) {
-                Ok(Async::Pending) => {
-                    // TODO is this correct ?
-                    *self.state.waker.lock().unwrap() = Some(cx.waker().clone());
-                    Ok(Async::Pending)
-                },
-                a => a,
-            }
-        }
-    }
-}
-
-
-// TODO figure out a more efficient way to implement this
-// TODO this should be implemented in the futures_core crate
-#[inline]
-pub fn cancelable_future<A, B>(future: A, when_cancelled: B) -> (DiscardOnDrop<CancelableFutureHandle>, CancelableFuture<A::Future, B>)
-    where A: IntoFuture,
-          B: FnOnce(A::Future) -> A::Item {
-
-    let state = Arc::new(CancelableFutureState {
-        is_cancelled: AtomicBool::new(false),
-        waker: Mutex::new(None),
-    });
-
-    let cancel_handle = DiscardOnDrop::new(CancelableFutureHandle {
-        state: Arc::downgrade(&state),
-    });
-
-    let cancel_future = CancelableFuture {
-        state,
-        future: Some(future.into_future()),
-        when_cancelled: Some(when_cancelled),
-    };
-
-    (cancel_handle, cancel_future)
 }
 
 
@@ -462,7 +367,7 @@ impl<A> Signal for Flatten<A>
 
 
 // TODO verify that this is correct
-pub mod unsync {
+mod mutable {
     use super::Signal;
     use std;
     // TODO use parking_lot ?
@@ -818,73 +723,4 @@ pub mod unsync {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::{Signal, cancelable_future};
-    use super::unsync::{Mutable, channel};
-
-    use futures_core::{Async, Future};
-    use futures_core::future::{FutureResult};
-    use futures_core::task::{Context, LocalMap, Waker, Wake};
-    use futures_executor::LocalPool;
-
-    use std::sync::Arc;
-
-    fn with_noop_context<U, F: FnOnce(&mut Context) -> U>(f: F) -> U {
-
-        // borrowed this design from the futures source
-        struct Noop;
-
-        impl Wake for Noop {
-            fn wake(_: &Arc<Self>) {}
-        }
-
-        let waker = Waker::from(Arc::new(Noop));
-
-        let pool = LocalPool::new();
-        let mut exec = pool.executor();
-        let mut map = LocalMap::new();
-        let mut cx = Context::new(&mut map, &waker, &mut exec);
-
-        f(&mut cx)
-    }
-
-    #[test]
-    fn test_mutable() {
-        let mutable = Mutable::new(1);
-        let mut s = mutable.signal();
-
-        with_noop_context(|cx| {
-            assert_eq!(s.poll(cx), Async::Ready(Some(1)));
-            assert_eq!(s.poll(cx), Async::Pending);
-
-            mutable.set(5);
-            assert_eq!(s.poll(cx), Async::Ready(Some(5)));
-            assert_eq!(s.poll(cx), Async::Pending);
-        });
-    }
-
-    #[test]
-    fn test_cancelable_future() {
-        let mut a = cancelable_future(Ok(()), |_: FutureResult<(), ()>| ());
-
-        with_noop_context(|cx| {
-            assert_eq!(a.1.poll(cx), Ok(Async::Ready(())));
-        });
-    }
-
-    #[test]
-    fn test_send_sync() {
-        let a = cancelable_future(Ok(()), |_: FutureResult<(), ()>| ());
-        let _: Box<Send + Sync> = Box::new(a.0);
-        let _: Box<Send + Sync> = Box::new(a.1);
-
-        let _: Box<Send + Sync> = Box::new(Mutable::new(1));
-        let _: Box<Send + Sync> = Box::new(Mutable::new(1).signal());
-        let _: Box<Send + Sync> = Box::new(Mutable::new(1).signal_cloned());
-
-        let a = channel(1);
-        let _: Box<Send + Sync> = Box::new(a.0);
-        let _: Box<Send + Sync> = Box::new(a.1);
-    }
-}
+pub use self::mutable::*;

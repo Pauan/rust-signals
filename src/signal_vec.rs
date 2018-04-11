@@ -694,7 +694,7 @@ impl<A, F> SignalVec for SortByCloned<A, F>
 
 
 // TODO verify that this is correct
-pub mod unsync {
+mod mutable_vec {
     use super::{SignalVec, VecChange};
     use std::sync::{Arc, RwLock};
     use futures_channel::mpsc;
@@ -1076,13 +1076,15 @@ pub mod unsync {
     }
 }
 
+pub use self::mutable_vec::*;
+
 
 #[cfg(test)]
 mod tests {
     use futures_core::{Future, Poll};
     use futures_executor::block_on;
     use super::*;
-    use super::unsync::MutableVec;
+    use super::mutable_vec::MutableVec;
 
     struct Tester<A> {
         changes: Vec<Async<VecChange<A>>>,

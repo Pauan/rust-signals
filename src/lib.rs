@@ -18,3 +18,6 @@ pub mod signal_vec;
 pub mod internal;
 
 mod macros;
+
+mod future;
+pub use future::{cancelable_future, CancelableFutureHandle, CancelableFuture};
