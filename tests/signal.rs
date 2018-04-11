@@ -13,16 +13,86 @@ mod util;
 #[test]
 fn test_mutable() {
     let mutable = Mutable::new(1);
-    let mut s = mutable.signal();
+    let mut s1 = mutable.signal();
+    let mut s2 = mutable.signal_cloned();
 
     util::with_noop_context(|cx| {
-        assert_eq!(s.poll(cx), Async::Ready(Some(1)));
-        assert_eq!(s.poll(cx), Async::Pending);
+        assert_eq!(s1.poll(cx), Async::Ready(Some(1)));
+        assert_eq!(s1.poll(cx), Async::Pending);
+        assert_eq!(s2.poll(cx), Async::Ready(Some(1)));
+        assert_eq!(s2.poll(cx), Async::Pending);
 
         mutable.set(5);
-        assert_eq!(s.poll(cx), Async::Ready(Some(5)));
-        assert_eq!(s.poll(cx), Async::Pending);
+        assert_eq!(s1.poll(cx), Async::Ready(Some(5)));
+        assert_eq!(s1.poll(cx), Async::Pending);
+        assert_eq!(s2.poll(cx), Async::Ready(Some(5)));
+        assert_eq!(s2.poll(cx), Async::Pending);
+
+        drop(mutable);
+        assert_eq!(s1.poll(cx), Async::Ready(None));
+        assert_eq!(s2.poll(cx), Async::Ready(None));
     });
+}
+
+#[test]
+fn test_mutable_drop() {
+    {
+        let mutable = Mutable::new(1);
+        let mut s1 = mutable.signal();
+        let mut s2 = mutable.signal_cloned();
+        drop(mutable);
+
+        util::with_noop_context(|cx| {
+            assert_eq!(s1.poll(cx), Async::Ready(Some(1)));
+            assert_eq!(s1.poll(cx), Async::Ready(None));
+            assert_eq!(s2.poll(cx), Async::Ready(Some(1)));
+            assert_eq!(s2.poll(cx), Async::Ready(None));
+        });
+    }
+
+    {
+        let mutable = Mutable::new(1);
+        let mut s1 = mutable.signal();
+        let mut s2 = mutable.signal_cloned();
+
+        util::with_noop_context(|cx| {
+            assert_eq!(s1.poll(cx), Async::Ready(Some(1)));
+            assert_eq!(s1.poll(cx), Async::Pending);
+            assert_eq!(s2.poll(cx), Async::Ready(Some(1)));
+            assert_eq!(s2.poll(cx), Async::Pending);
+
+            mutable.set(5);
+            drop(mutable);
+
+            assert_eq!(s1.poll(cx), Async::Ready(Some(5)));
+            assert_eq!(s1.poll(cx), Async::Ready(None));
+            assert_eq!(s2.poll(cx), Async::Ready(Some(5)));
+            assert_eq!(s2.poll(cx), Async::Ready(None));
+        });
+    }
+
+    {
+        let mutable = Mutable::new(1);
+        let mut s1 = mutable.signal();
+        let mut s2 = mutable.signal_cloned();
+
+        util::with_noop_context(|cx| {
+            assert_eq!(s1.poll(cx), Async::Ready(Some(1)));
+            assert_eq!(s1.poll(cx), Async::Pending);
+            assert_eq!(s2.poll(cx), Async::Ready(Some(1)));
+            assert_eq!(s2.poll(cx), Async::Pending);
+
+            mutable.set(5);
+            assert_eq!(s1.poll(cx), Async::Ready(Some(5)));
+            assert_eq!(s1.poll(cx), Async::Pending);
+
+            drop(mutable);
+            assert_eq!(s2.poll(cx), Async::Ready(Some(5)));
+            assert_eq!(s2.poll(cx), Async::Ready(None));
+
+            assert_eq!(s1.poll(cx), Async::Ready(None));
+        });
+    }
 }
 
 #[test]

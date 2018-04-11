@@ -387,13 +387,15 @@ mod mutable {
     }
 
     impl<A> MutableState<A> {
-        fn notify(&mut self) {
+        fn notify(&mut self, has_changed: bool) {
             self.receivers.retain(|receiver| {
                 if let Some(receiver) = receiver.upgrade() {
                     let mut lock = receiver.waker.lock().unwrap();
 
-                    // TODO verify that this is correct
-                    receiver.has_changed.store(true, Ordering::SeqCst);
+                    if has_changed {
+                        // TODO verify that this is correct
+                        receiver.has_changed.store(true, Ordering::SeqCst);
+                    }
 
                     if let Some(waker) = lock.take() {
                         drop(lock);
@@ -450,7 +452,7 @@ mod mutable {
 
             let value = std::mem::replace(&mut state.value, value);
 
-            state.notify();
+            state.notify(true);
 
             value
         }
@@ -461,7 +463,7 @@ mod mutable {
             let new_value = f(&mut state.value);
             let value = std::mem::replace(&mut state.value, new_value);
 
-            state.notify();
+            state.notify(true);
 
             value
         }
@@ -473,8 +475,8 @@ mod mutable {
 
             std::mem::swap(&mut state1.value, &mut state2.value);
 
-            state1.notify();
-            state2.notify();
+            state1.notify(true);
+            state2.notify(true);
         }
 
         pub fn set(&self, value: A) {
@@ -482,7 +484,7 @@ mod mutable {
 
             state.value = value;
 
-            state.notify();
+            state.notify(true);
         }
 
         // TODO figure out a better name for this ?
@@ -554,7 +556,7 @@ mod mutable {
             state.senders -= 1;
 
             if state.senders == 0 && state.receivers.len() > 0 {
-                state.notify();
+                state.notify(false);
                 state.receivers = vec![];
             }
         }
