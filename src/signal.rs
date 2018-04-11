@@ -1,8 +1,10 @@
 use std::rc::{Rc, Weak};
 use std::cell::{Cell, RefCell};
-use futures::{Async, Poll, task};
-use futures::future::{Future, IntoFuture};
-use futures::stream::{Stream, ForEach};
+use futures_core::task::{Context, Waker};
+use futures_core::{Async, Poll};
+use futures_core::future::{Future, IntoFuture};
+use futures_core::stream::{Stream};
+use futures_util::stream::{StreamExt, ForEach};
 use discard::{Discard, DiscardOnDrop};
 use signal_vec::{VecChange, SignalVec};
 
@@ -10,7 +12,7 @@ use signal_vec::{VecChange, SignalVec};
 pub trait Signal {
     type Item;
 
-    fn poll(&mut self) -> Async<Option<Self::Item>>;
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>>;
 
     #[inline]
     fn to_stream(self) -> SignalStream<Self>
@@ -73,7 +75,7 @@ pub trait Signal {
 
     #[inline]
     // TODO file Rust bug about bad error message when `callback` isn't marked as `mut`
-    fn for_each<F, U>(self, callback: F) -> ForEach<SignalStream<Self>, F, U>
+    fn for_each<F, U>(self, callback: F) -> ForEach<SignalStream<Self>, U, F>
         where F: FnMut(Self::Item) -> U,
               // TODO allow for errors ?
               U: IntoFuture<Item = (), Error = ()>,
@@ -111,8 +113,8 @@ impl<F: ?Sized + Signal> Signal for ::std::boxed::Box<F> {
     type Item = F::Item;
 
     #[inline]
-    fn poll(&mut self) -> Async<Option<Self::Item>> {
-        (**self).poll()
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        (**self).poll(cx)
     }
 }
 
@@ -125,7 +127,7 @@ impl<A> Signal for Always<A> {
     type Item = A;
 
     #[inline]
-    fn poll(&mut self) -> Async<Option<Self::Item>> {
+    fn poll(&mut self, _: &mut Context) -> Async<Option<Self::Item>> {
         Async::Ready(self.value.take())
     }
 }
@@ -140,7 +142,7 @@ pub fn always<A>(value: A) -> Always<A> {
 
 struct CancelableFutureState {
     is_cancelled: Cell<bool>,
-    task: RefCell<Option<task::Task>>,
+    waker: RefCell<Option<Waker>>,
 }
 
 
@@ -153,11 +155,11 @@ impl Discard for CancelableFutureHandle {
         if let Some(state) = self.state.upgrade() {
             state.is_cancelled.set(true);
 
-            let mut borrow = state.task.borrow_mut();
+            let mut borrow = state.waker.borrow_mut();
 
-            if let Some(task) = borrow.take() {
+            if let Some(waker) = borrow.take() {
                 drop(borrow);
-                task.notify();
+                waker.wake();
             }
         }
     }
@@ -179,7 +181,7 @@ impl<A, B> Future for CancelableFuture<A, B>
 
     // TODO should this inline ?
     #[inline]
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
         if self.state.is_cancelled.get() {
             let future = self.future.take().unwrap();
             let callback = self.when_cancelled.take().unwrap();
@@ -187,10 +189,10 @@ impl<A, B> Future for CancelableFuture<A, B>
             Ok(Async::Ready(callback(future)))
 
         } else {
-            match self.future.as_mut().unwrap().poll() {
-                Ok(Async::NotReady) => {
-                    *self.state.task.borrow_mut() = Some(task::current());
-                    Ok(Async::NotReady)
+            match self.future.as_mut().unwrap().poll(cx) {
+                Ok(Async::Pending) => {
+                    *self.state.waker.borrow_mut() = Some(cx.waker().clone());
+                    Ok(Async::Pending)
                 },
                 a => a,
             }
@@ -200,7 +202,7 @@ impl<A, B> Future for CancelableFuture<A, B>
 
 
 // TODO figure out a more efficient way to implement this
-// TODO this should be implemented in the futures crate
+// TODO this should be implemented in the futures_core crate
 #[inline]
 pub fn cancelable_future<A, B>(future: A, when_cancelled: B) -> (DiscardOnDrop<CancelableFutureHandle>, CancelableFuture<A, B>)
     where A: Future,
@@ -208,7 +210,7 @@ pub fn cancelable_future<A, B>(future: A, when_cancelled: B) -> (DiscardOnDrop<C
 
     let state = Rc::new(CancelableFutureState {
         is_cancelled: Cell::new(false),
-        task: RefCell::new(None),
+        waker: RefCell::new(None),
     });
 
     let cancel_handle = DiscardOnDrop::new(CancelableFutureHandle {
@@ -235,8 +237,8 @@ impl<A: Signal> Stream for SignalStream<A> {
     type Error = ();
 
     #[inline]
-    fn poll(&mut self) -> Poll<Option<Self::Item>, Self::Error> {
-        Ok(self.signal.poll())
+    fn poll_next(&mut self, cx: &mut Context) -> Poll<Option<Self::Item>, Self::Error> {
+        Ok(self.signal.poll(cx))
     }
 }
 
@@ -252,8 +254,8 @@ impl<A, B, C> Signal for Map<A, B>
     type Item = C;
 
     #[inline]
-    fn poll(&mut self) -> Async<Option<Self::Item>> {
-        self.signal.poll().map(|opt| opt.map(|value| (self.callback)(value)))
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        self.signal.poll(cx).map(|opt| opt.map(|value| (self.callback)(value)))
     }
 }
 
@@ -273,9 +275,9 @@ impl<A> Future for WaitFor<A>
     type Item = ();
     type Error = ();
 
-    fn poll(&mut self) -> Poll<Self::Item, Self::Error> {
+    fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
         loop {
-            return match self.signal.poll() {
+            return match self.signal.poll(cx) {
                 Async::Ready(Some(value)) => if value == self.value {
                     Ok(Async::Ready(()))
 
@@ -285,7 +287,7 @@ impl<A> Future for WaitFor<A>
 
                 // TODO is this correct ?
                 Async::Ready(None) => Err(()),
-                Async::NotReady => Ok(Async::NotReady),
+                Async::Pending => Ok(Async::Pending),
             };
         }
     }
@@ -301,8 +303,8 @@ impl<A, B> SignalVec for SignalSignalVec<A>
     type Item = B;
 
     #[inline]
-    fn poll(&mut self) -> Async<Option<VecChange<B>>> {
-        self.signal.poll().map(|opt| opt.map(|values| VecChange::Replace { values }))
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<B>>> {
+        self.signal.poll(cx).map(|opt| opt.map(|values| VecChange::Replace { values }))
     }
 }
 
@@ -323,9 +325,9 @@ impl<A, B, C> Signal for MapDedupe<A, B>
     type Item = C;
 
     // TODO should this use #[inline] ?
-    fn poll(&mut self) -> Async<Option<Self::Item>> {
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         loop {
-            return match self.signal.poll() {
+            return match self.signal.poll(cx) {
                 Async::Ready(Some(mut value)) => {
                     let has_changed = match self.old_value {
                         Some(ref old_value) => *old_value != value,
@@ -342,7 +344,7 @@ impl<A, B, C> Signal for MapDedupe<A, B>
                     }
                 },
                 Async::Ready(None) => Async::Ready(None),
-                Async::NotReady => Async::NotReady,
+                Async::Pending => Async::Pending,
             }
         }
     }
@@ -362,9 +364,9 @@ impl<A, B, C> Signal for FilterMap<A, B>
 
     // TODO should this use #[inline] ?
     #[inline]
-    fn poll(&mut self) -> Async<Option<Self::Item>> {
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         loop {
-            return match self.signal.poll() {
+            return match self.signal.poll(cx) {
                 Async::Ready(Some(value)) => match (self.callback)(value) {
                     Some(value) => {
                         self.first = false;
@@ -380,7 +382,7 @@ impl<A, B, C> Signal for FilterMap<A, B>
                     },
                 },
                 Async::Ready(None) => Async::Ready(None),
-                Async::NotReady => Async::NotReady,
+                Async::Pending => Async::Pending,
             }
         }
     }
@@ -395,24 +397,24 @@ pub struct Flatten<A: Signal> {
 // Poll parent => Has inner   => Poll inner  => Output
 // --------------------------------------------------------
 // Some(inner) =>             => Some(value) => Some(value)
-// Some(inner) =>             => None        => NotReady
-// Some(inner) =>             => NotReady    => NotReady
+// Some(inner) =>             => None        => Pending
+// Some(inner) =>             => Pending    => Pending
 // None        => Some(inner) => Some(value) => Some(value)
 // None        => Some(inner) => None        => None
-// None        => Some(inner) => NotReady    => NotReady
+// None        => Some(inner) => Pending    => Pending
 // None        => None        =>             => None
-// NotReady    => Some(inner) => Some(value) => Some(value)
-// NotReady    => Some(inner) => None        => NotReady
-// NotReady    => Some(inner) => NotReady    => NotReady
-// NotReady    => None        =>             => NotReady
+// Pending    => Some(inner) => Some(value) => Some(value)
+// Pending    => Some(inner) => None        => Pending
+// Pending    => Some(inner) => Pending    => Pending
+// Pending    => None        =>             => Pending
 impl<A> Signal for Flatten<A>
     where A: Signal,
           A::Item: Signal {
     type Item = <<A as Signal>::Item as Signal>::Item;
 
     #[inline]
-    fn poll(&mut self) -> Async<Option<Self::Item>> {
-        let done = match self.signal.as_mut().map(|signal| signal.poll()) {
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        let done = match self.signal.as_mut().map(|signal| signal.poll(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal = None;
@@ -422,17 +424,17 @@ impl<A> Signal for Flatten<A>
                 self.inner = Some(inner);
                 false
             },
-            Some(Async::NotReady) => false,
+            Some(Async::Pending) => false,
         };
 
         let poll = match self.inner {
-            Some(ref mut inner) => inner.poll(),
+            Some(ref mut inner) => inner.poll(cx),
 
             None => if done {
                 return Async::Ready(None);
 
             } else {
-                return Async::NotReady;
+                return Async::Pending;
             }
         };
 
@@ -444,7 +446,7 @@ impl<A> Signal for Flatten<A>
                     Async::Ready(None)
 
                 } else {
-                    Async::NotReady
+                    Async::Pending
                 }
             },
 
@@ -460,8 +462,8 @@ pub mod unsync {
     use std;
     use std::rc::{Rc, Weak};
     use std::cell::{Cell, RefCell, RefMut, Ref};
-    use futures::{Async, task};
-    use futures::task::Task;
+    use futures_core::Async;
+    use futures_core::task::{Context, Waker};
     use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 
@@ -478,11 +480,11 @@ pub mod unsync {
                 if let Some(receiver) = receiver.upgrade() {
                     receiver.has_changed.set(true);
 
-                    let mut borrow = receiver.task.borrow_mut();
+                    let mut borrow = receiver.waker.borrow_mut();
 
-                    if let Some(task) = borrow.take() {
+                    if let Some(waker) = borrow.take() {
                         drop(borrow);
-                        task.notify();
+                        waker.wake();
                     }
 
                     true
@@ -496,7 +498,7 @@ pub mod unsync {
 
     struct MutableSignalState<A> {
         has_changed: Cell<bool>,
-        task: RefCell<Option<Task>>,
+        waker: RefCell<Option<Waker>>,
         // TODO change this to Weak ?
         state: Rc<RefCell<MutableState<A>>>,
     }
@@ -505,7 +507,7 @@ pub mod unsync {
         fn new(mutable_state: &Rc<RefCell<MutableState<A>>>) -> Rc<Self> {
             let state = Rc::new(MutableSignalState {
                 has_changed: Cell::new(true),
-                task: RefCell::new(None),
+                waker: RefCell::new(None),
                 state: mutable_state.clone(),
             });
 
@@ -655,7 +657,7 @@ pub mod unsync {
     impl<A: Copy> Signal for MutableSignal<A> {
         type Item = A;
 
-        fn poll(&mut self) -> Async<Option<Self::Item>> {
+        fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
             if self.0.has_changed.replace(false) {
                 Async::Ready(Some(self.0.state.borrow().value))
 
@@ -663,8 +665,8 @@ pub mod unsync {
                 Async::Ready(None)
 
             } else {
-                *self.0.task.borrow_mut() = Some(task::current());
-                Async::NotReady
+                *self.0.waker.borrow_mut() = Some(cx.waker().clone());
+                Async::Pending
             }
         }
     }
@@ -685,7 +687,7 @@ pub mod unsync {
         type Item = A;
 
         // TODO code duplication with MutableSignal::poll
-        fn poll(&mut self) -> Async<Option<Self::Item>> {
+        fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
             if self.0.has_changed.replace(false) {
                 Async::Ready(Some(self.0.state.borrow().value.clone()))
 
@@ -693,8 +695,8 @@ pub mod unsync {
                 Async::Ready(None)
 
             } else {
-                *self.0.task.borrow_mut() = Some(task::current());
-                Async::NotReady
+                *self.0.waker.borrow_mut() = Some(cx.waker().clone());
+                Async::Pending
             }
         }
     }
@@ -702,15 +704,15 @@ pub mod unsync {
 
     struct Inner<A> {
         value: Option<A>,
-        task: Option<task::Task>,
+        waker: Option<Waker>,
         dropped: bool,
     }
 
     impl<A> Inner<A> {
         fn notify(mut borrow: RefMut<Self>) {
-            if let Some(task) = borrow.task.take() {
+            if let Some(waker) = borrow.waker.take() {
                 drop(borrow);
-                task.notify();
+                waker.wake();
             }
         }
     }
@@ -757,7 +759,7 @@ pub mod unsync {
         type Item = A;
 
         #[inline]
-        fn poll(&mut self) -> Async<Option<Self::Item>> {
+        fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
             let mut inner = self.inner.borrow_mut();
 
             // TODO is this correct ?
@@ -766,8 +768,8 @@ pub mod unsync {
                     Async::Ready(None)
 
                 } else {
-                    inner.task = Some(task::current());
-                    Async::NotReady
+                    inner.waker = Some(cx.waker().clone());
+                    Async::Pending
                 },
 
                 a => Async::Ready(a),
@@ -778,7 +780,7 @@ pub mod unsync {
     pub fn channel<A>(initial_value: A) -> (Sender<A>, Receiver<A>) {
         let inner = Rc::new(RefCell::new(Inner {
             value: Some(initial_value),
-            task: None,
+            waker: None,
             dropped: false,
         }));
 
@@ -792,4 +794,52 @@ pub mod unsync {
 
         (sender, receiver)
     }
+}
+
+#[cfg(test)]
+mod tests {
+
+    use super::Signal;
+    use super::unsync::Mutable;
+
+    use futures_core::Async;
+    use futures_core::task::{Context, LocalMap, Waker, Wake};
+    use futures_executor::LocalPool;
+
+    use std::sync::Arc;
+
+    fn with_noop_context<U, F: FnOnce(&mut Context) -> U>(f: F) -> U {
+
+        // borrowed this design from the futures source
+        struct Noop;
+
+        impl Wake for Noop {
+            fn wake(_: &Arc<Self>) {}
+        }
+
+        let waker = Waker::from(Arc::new(Noop));
+
+        let pool = LocalPool::new();
+        let mut exec = pool.executor();
+        let mut map = LocalMap::new();
+        let mut cx = Context::new(&mut map, &waker, &mut exec);
+
+        f(&mut cx)
+    }
+
+    #[test]
+    fn test_mutable() {
+        let mutable = Mutable::new(1);
+        let mut s = mutable.signal();
+
+        with_noop_context(|cx| {
+            assert_eq!(s.poll(cx), Async::Ready(Some(1)));
+            assert_eq!(s.poll(cx), Async::Pending);
+
+            mutable.set(5);
+            assert_eq!(s.poll(cx), Async::Ready(Some(5)));
+            assert_eq!(s.poll(cx), Async::Pending);
+        });
+    }
+
 }

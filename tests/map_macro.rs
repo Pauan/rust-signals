@@ -1,18 +1,29 @@
 #![recursion_limit="128"]
 
-extern crate futures;
+extern crate futures_core;
+extern crate futures_executor;
+extern crate futures_util;
 
 #[macro_use]
 extern crate futures_signals;
-
 
 #[macro_export]
 macro_rules! map_tests {
     ($name:ident, ($($ref:tt)+), ($($arg:tt)+)) => {
         #[cfg(test)]
         mod $name {
-            use futures::Async;
+            use futures_core::Poll;
+            use futures_executor::block_on;
+            use futures_util::future::poll_fn;
+
             use futures_signals::signal::{Signal, always};
+
+            // NB it's not a problem to block on an Always because they always return Async::Ready!
+            fn poll_always<S: Signal>(signal: &mut S) -> Option<S::Item> {
+                block_on(poll_fn(
+                    |cx| -> Poll<Option<S::Item>, ()> { Ok(signal.poll(cx)) }
+                )).unwrap()
+            }
 
             #[test]
             fn ident_1() {
@@ -23,8 +34,8 @@ macro_rules! map_tests {
                     a + 1
                 });
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(2)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(2));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -38,8 +49,8 @@ macro_rules! map_tests {
                     a + b
                 });
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(3)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(3));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -55,8 +66,8 @@ macro_rules! map_tests {
                     a + b + c
                 });
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(6)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(6));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -74,8 +85,8 @@ macro_rules! map_tests {
                     a + b + c + d
                 });
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(10)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(10));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -95,8 +106,8 @@ macro_rules! map_tests {
                     a + b + c + d + e
                 });
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(15)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(15));
+                assert_eq!(poll_always(&mut s), None);
             }
 
 
@@ -109,8 +120,8 @@ macro_rules! map_tests {
                     a + 1
                 });
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(2)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(2));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -124,8 +135,8 @@ macro_rules! map_tests {
                     a + b
                 });
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(3)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(3));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -141,8 +152,8 @@ macro_rules! map_tests {
                     a + b + c
                 });
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(6)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(6));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -160,8 +171,8 @@ macro_rules! map_tests {
                     a + b + c + d
                 });
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(10)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(10));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -181,8 +192,8 @@ macro_rules! map_tests {
                     a + b + c + d + e
                 });
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(15)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(15));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -195,8 +206,8 @@ macro_rules! map_tests {
                     }
                 };
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(3)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(3));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -212,8 +223,8 @@ macro_rules! map_tests {
                     }
                 };
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(10)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(10));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -232,8 +243,8 @@ macro_rules! map_tests {
                     }
                 };
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(21)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(21));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -255,8 +266,8 @@ macro_rules! map_tests {
                     }
                 };
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(36)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(36));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -281,8 +292,8 @@ macro_rules! map_tests {
                     }
                 };
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(55)));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(55));
+                assert_eq!(poll_always(&mut s), None);
             }
 
             #[test]
@@ -318,8 +329,8 @@ macro_rules! map_tests {
                     ((c1.clone(), c2.clone()), (c3.clone(), c4.clone()), *l, *r, a.clone(), *b, *c, *d, e.clone(), (c5.clone(), c6.clone()))
                 };
 
-                assert_eq!(Signal::poll(&mut s), Async::Ready(Some(((Cloner { count: 1 }, Cloner { count: 1 }), (Cloner { count: 1 }, Cloner { count: 1 }), 0, 0, Cloner { count: 1 }, 2, 3, 4, Cloner { count: 1 }, (Cloner { count: 1 }, Cloner { count: 1 })))));
-                assert_eq!(Signal::poll(&mut s), Async::Ready(None));
+                assert_eq!(poll_always(&mut s), Some(((Cloner { count: 1 }, Cloner { count: 1 }), (Cloner { count: 1 }, Cloner { count: 1 }), 0, 0, Cloner { count: 1 }, 2, 3, 4, Cloner { count: 1 }, (Cloner { count: 1 }, Cloner { count: 1 }))));
+                assert_eq!(poll_always(&mut s), None);
             }
         }
     };
