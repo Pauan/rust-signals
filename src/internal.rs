@@ -1,9 +1,19 @@
 use super::signal::Signal;
-use std::rc::Rc;
-use std::cell::RefCell;
+// TODO use parking_lot ?
+use std::sync::{Arc, RwLock, Mutex, MutexGuard, RwLockReadGuard};
 use futures_core::Async;
 use futures_core::task::Context;
 
+
+#[inline]
+pub fn lock_mut<A>(x: &Mutex<A>) -> MutexGuard<A> {
+    x.lock().unwrap()
+}
+
+#[inline]
+pub fn lock_ref<A>(x: &RwLock<A>) -> RwLockReadGuard<A> {
+    x.read().unwrap()
+}
 
 pub fn unwrap_mut<A>(x: &mut Option<A>) -> &mut A {
     match *x {
@@ -137,8 +147,9 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
 }
 
 
-// TODO is it possible to avoid the Rc ?
-pub type PairMut<A, B> = Rc<(RefCell<Option<A>>, RefCell<Option<B>>)>;
+// TODO is it possible to avoid the Arc ?
+// TODO is it possible to use only a single Mutex ?
+pub type PairMut<A, B> = Arc<(Mutex<Option<A>>, Mutex<Option<B>>)>;
 
 pub struct MapPairMut<A: Signal, B: Signal> {
     signal1: Option<A>,
@@ -154,7 +165,7 @@ impl<A, B> MapPairMut<A, B>
         Self {
             signal1: Some(left),
             signal2: Some(right),
-            inner: Rc::new((RefCell::new(None), RefCell::new(None))),
+            inner: Arc::new((Mutex::new(None), Mutex::new(None))),
         }
     }
 }
@@ -168,7 +179,11 @@ impl<A, B> Signal for MapPairMut<A, B>
     fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         let mut changed = false;
 
-        let mut borrow_left = self.inner.0.borrow_mut();
+        // TODO can this deadlock ?
+        let mut borrow_left = self.inner.0.lock().unwrap();
+
+        // TODO is it okay to move this to just above right_done ?
+        let mut borrow_right = self.inner.1.lock().unwrap();
 
         let left_done = match self.signal1.as_mut().map(|signal| signal.poll(cx)) {
             None => true,
@@ -192,8 +207,6 @@ impl<A, B> Signal for MapPairMut<A, B>
                 return Async::Pending;
             }
         }
-
-        let mut borrow_right = self.inner.1.borrow_mut();
 
         let right_done = match self.signal2.as_mut().map(|signal| signal.poll(cx)) {
             None => true,
@@ -231,8 +244,9 @@ impl<A, B> Signal for MapPairMut<A, B>
 }
 
 
-// TODO is it possible to avoid the Rc ?
-pub type Pair<A, B> = Rc<RefCell<(Option<A>, Option<B>)>>;
+// TODO is it possible to avoid the Arc ?
+// TODO maybe it's faster to use a Mutex ?
+pub type Pair<A, B> = Arc<RwLock<(Option<A>, Option<B>)>>;
 
 pub struct MapPair<A: Signal, B: Signal> {
     signal1: Option<A>,
@@ -248,7 +262,7 @@ impl<A, B> MapPair<A, B>
         Self {
             signal1: Some(left),
             signal2: Some(right),
-            inner: Rc::new(RefCell::new((None, None))),
+            inner: Arc::new(RwLock::new((None, None))),
         }
     }
 }
@@ -262,7 +276,7 @@ impl<A, B> Signal for MapPair<A, B>
     fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         let mut changed = false;
 
-        let mut borrow = self.inner.borrow_mut();
+        let mut borrow = self.inner.write().unwrap();
 
         let left_done = match self.signal1.as_mut().map(|signal| signal.poll(cx)) {
             None => true,

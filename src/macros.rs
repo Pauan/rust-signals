@@ -15,7 +15,8 @@ macro_rules! __internal_map_mut_borrows {
     ($f:expr, $r:ident, { $($lets:stmt)* }, let $name:pat = $value:expr;) => {
         {
             $($lets;)*
-            let mut $r = ::std::cell::RefCell::borrow_mut(&(*$r).1);
+            // TODO is this correct ?
+            let mut $r = $crate::internal::lock_mut(&(*$r).1);
             let $name = $crate::internal::unwrap_mut(&mut $r);
             $f
         }
@@ -26,9 +27,11 @@ macro_rules! __internal_map_mut_borrows {
             $r,
             {
                 $($lets)*
-                let mut $r = ::std::cell::RefCell::borrow_mut(&(*$r).1)
+                // TODO is this correct ?
+                let mut $r = $crate::internal::lock_mut(&(*$r).1)
                 let $r = $crate::internal::unwrap_mut(&mut $r)
-                let mut l = ::std::cell::RefCell::borrow_mut(&(*$r).0)
+                // TODO is this correct ?
+                let mut l = $crate::internal::lock_mut(&(*$r).0)
                 let $name = $crate::internal::unwrap_mut(&mut l)
             },
             $($args)+
@@ -63,7 +66,8 @@ macro_rules! __internal_map_mut {
                 $f,
                 r,
                 {
-                    let mut l = ::std::cell::RefCell::borrow_mut(&r.0)
+                    // TODO is this correct ?
+                    let mut l = $crate::internal::lock_mut(&r.0)
                     let $name2 = $crate::internal::unwrap_mut(&mut l)
                 },
                 $($args)+
@@ -127,7 +131,8 @@ macro_rules! __internal_map_ref_borrows {
             $r,
             {
                 $($lets)*
-                let $r = ::std::cell::RefCell::borrow(&$crate::internal::unwrap_ref(&(*$r).1))
+                // TODO is this correct ?
+                let $r = $crate::internal::lock_ref(&$crate::internal::unwrap_ref(&(*$r).1))
                 let $name = $crate::internal::unwrap_ref(&(*$r).0)
             },
             $($args)+
@@ -169,7 +174,8 @@ macro_rules! __internal_map_ref {
                 {
                     // TODO is there a better way of converting from &mut to & ?
                     let $name1 = &*l
-                    let r = ::std::cell::RefCell::borrow(&r)
+                    // TODO is this correct ?
+                    let r = $crate::internal::lock_ref(&r)
                     let $name2 = $crate::internal::unwrap_ref(&r.0)
                 },
                 $($args)+
