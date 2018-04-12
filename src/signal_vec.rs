@@ -877,6 +877,12 @@ mod mutable_vec {
             value
         }
 
+        fn move_from_to(&mut self, old_index: usize, new_index: usize) {
+            let value = self.values.remove(old_index);
+            self.values.insert(new_index, value);
+            self.notify(|| VecChange::Move { old_index, new_index });
+        }
+
         fn clear(&mut self) {
             if self.values.len() > 0 {
                 self.values.clear();
@@ -1062,6 +1068,11 @@ mod mutable_vec {
         #[inline]
         pub fn clear(&self) {
             self.0.write().unwrap().clear()
+        }
+
+        #[inline]
+        pub fn move_from_to(&self, old_index: usize, new_index: usize) {
+            self.0.write().unwrap().move_from_to(old_index, new_index);
         }
 
         #[inline]
