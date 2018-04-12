@@ -81,10 +81,10 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
     type Item = D;
 
     // TODO inline this ?
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         let mut changed = false;
 
-        let left_done = match self.signal1.as_mut().map(|signal| signal.poll(cx)) {
+        let left_done = match self.signal1.as_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal1 = None;
@@ -109,7 +109,7 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
             },
         };
 
-        let right_done = match self.signal2.as_mut().map(|signal| signal.poll(cx)) {
+        let right_done = match self.signal2.as_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal2 = None;
@@ -176,7 +176,7 @@ impl<A, B> Signal for MapPairMut<A, B>
     type Item = PairMut<A::Item, B::Item>;
 
     // TODO inline this ?
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         let mut changed = false;
 
         // TODO can this deadlock ?
@@ -185,7 +185,7 @@ impl<A, B> Signal for MapPairMut<A, B>
         // TODO is it okay to move this to just above right_done ?
         let mut borrow_right = self.inner.1.lock().unwrap();
 
-        let left_done = match self.signal1.as_mut().map(|signal| signal.poll(cx)) {
+        let left_done = match self.signal1.as_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal1 = None;
@@ -208,7 +208,7 @@ impl<A, B> Signal for MapPairMut<A, B>
             }
         }
 
-        let right_done = match self.signal2.as_mut().map(|signal| signal.poll(cx)) {
+        let right_done = match self.signal2.as_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal2 = None;
@@ -273,12 +273,12 @@ impl<A, B> Signal for MapPair<A, B>
     type Item = Pair<A::Item, B::Item>;
 
     // TODO inline this ?
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         let mut changed = false;
 
         let mut borrow = self.inner.write().unwrap();
 
-        let left_done = match self.signal1.as_mut().map(|signal| signal.poll(cx)) {
+        let left_done = match self.signal1.as_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal1 = None;
@@ -301,7 +301,7 @@ impl<A, B> Signal for MapPair<A, B>
             }
         }
 
-        let right_done = match self.signal2.as_mut().map(|signal| signal.poll(cx)) {
+        let right_done = match self.signal2.as_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal2 = None;

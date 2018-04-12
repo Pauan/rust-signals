@@ -252,7 +252,7 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
                         VecChange::Replace {
                             values: values.into_iter().map(|value| {
                                 let mut signal = (self.callback)(value);
-                                let poll = unwrap(signal.poll(cx));
+                                let poll = unwrap(signal.poll_change(cx));
                                 self.signals.push(Some(signal));
                                 poll
                             }).collect()
@@ -261,21 +261,21 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
 
                     VecChange::InsertAt { index, value } => {
                         let mut signal = (self.callback)(value);
-                        let poll = unwrap(signal.poll(cx));
+                        let poll = unwrap(signal.poll_change(cx));
                         self.signals.insert(index, Some(signal));
                         VecChange::InsertAt { index, value: poll }
                     },
 
                     VecChange::UpdateAt { index, value } => {
                         let mut signal = (self.callback)(value);
-                        let poll = unwrap(signal.poll(cx));
+                        let poll = unwrap(signal.poll_change(cx));
                         self.signals[index] = Some(signal);
                         VecChange::UpdateAt { index, value: poll }
                     },
 
                     VecChange::Push { value } => {
                         let mut signal = (self.callback)(value);
-                        let poll = unwrap(signal.poll(cx));
+                        let poll = unwrap(signal.poll_change(cx));
                         self.signals.push(Some(signal));
                         VecChange::Push { value: poll }
                     },
@@ -308,7 +308,7 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
         // TODO make this more efficient (e.g. using a similar strategy as FuturesUnordered)
         loop {
             match iter.next() {
-                Some((index, signal)) => match signal.as_mut().map(|s| s.poll(cx)) {
+                Some((index, signal)) => match signal.as_mut().map(|s| s.poll_change(cx)) {
                     Some(Async::Ready(Some(value))) => {
                         return Async::Ready(Some(VecChange::UpdateAt { index, value }))
                     },
@@ -341,7 +341,7 @@ pub struct Len<A> {
 impl<A> Signal for Len<A> where A: SignalVec {
     type Item = usize;
 
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         let mut changed = false;
         let mut done = false;
 

@@ -17,20 +17,20 @@ fn test_mutable() {
     let mut s2 = mutable.signal_cloned();
 
     util::with_noop_context(|cx| {
-        assert_eq!(s1.poll(cx), Async::Ready(Some(1)));
-        assert_eq!(s1.poll(cx), Async::Pending);
-        assert_eq!(s2.poll(cx), Async::Ready(Some(1)));
-        assert_eq!(s2.poll(cx), Async::Pending);
+        assert_eq!(s1.poll_change(cx), Async::Ready(Some(1)));
+        assert_eq!(s1.poll_change(cx), Async::Pending);
+        assert_eq!(s2.poll_change(cx), Async::Ready(Some(1)));
+        assert_eq!(s2.poll_change(cx), Async::Pending);
 
         mutable.set(5);
-        assert_eq!(s1.poll(cx), Async::Ready(Some(5)));
-        assert_eq!(s1.poll(cx), Async::Pending);
-        assert_eq!(s2.poll(cx), Async::Ready(Some(5)));
-        assert_eq!(s2.poll(cx), Async::Pending);
+        assert_eq!(s1.poll_change(cx), Async::Ready(Some(5)));
+        assert_eq!(s1.poll_change(cx), Async::Pending);
+        assert_eq!(s2.poll_change(cx), Async::Ready(Some(5)));
+        assert_eq!(s2.poll_change(cx), Async::Pending);
 
         drop(mutable);
-        assert_eq!(s1.poll(cx), Async::Ready(None));
-        assert_eq!(s2.poll(cx), Async::Ready(None));
+        assert_eq!(s1.poll_change(cx), Async::Ready(None));
+        assert_eq!(s2.poll_change(cx), Async::Ready(None));
     });
 }
 
@@ -43,10 +43,10 @@ fn test_mutable_drop() {
         drop(mutable);
 
         util::with_noop_context(|cx| {
-            assert_eq!(s1.poll(cx), Async::Ready(Some(1)));
-            assert_eq!(s1.poll(cx), Async::Ready(None));
-            assert_eq!(s2.poll(cx), Async::Ready(Some(1)));
-            assert_eq!(s2.poll(cx), Async::Ready(None));
+            assert_eq!(s1.poll_change(cx), Async::Ready(Some(1)));
+            assert_eq!(s1.poll_change(cx), Async::Ready(None));
+            assert_eq!(s2.poll_change(cx), Async::Ready(Some(1)));
+            assert_eq!(s2.poll_change(cx), Async::Ready(None));
         });
     }
 
@@ -56,18 +56,18 @@ fn test_mutable_drop() {
         let mut s2 = mutable.signal_cloned();
 
         util::with_noop_context(|cx| {
-            assert_eq!(s1.poll(cx), Async::Ready(Some(1)));
-            assert_eq!(s1.poll(cx), Async::Pending);
-            assert_eq!(s2.poll(cx), Async::Ready(Some(1)));
-            assert_eq!(s2.poll(cx), Async::Pending);
+            assert_eq!(s1.poll_change(cx), Async::Ready(Some(1)));
+            assert_eq!(s1.poll_change(cx), Async::Pending);
+            assert_eq!(s2.poll_change(cx), Async::Ready(Some(1)));
+            assert_eq!(s2.poll_change(cx), Async::Pending);
 
             mutable.set(5);
             drop(mutable);
 
-            assert_eq!(s1.poll(cx), Async::Ready(Some(5)));
-            assert_eq!(s1.poll(cx), Async::Ready(None));
-            assert_eq!(s2.poll(cx), Async::Ready(Some(5)));
-            assert_eq!(s2.poll(cx), Async::Ready(None));
+            assert_eq!(s1.poll_change(cx), Async::Ready(Some(5)));
+            assert_eq!(s1.poll_change(cx), Async::Ready(None));
+            assert_eq!(s2.poll_change(cx), Async::Ready(Some(5)));
+            assert_eq!(s2.poll_change(cx), Async::Ready(None));
         });
     }
 
@@ -77,20 +77,20 @@ fn test_mutable_drop() {
         let mut s2 = mutable.signal_cloned();
 
         util::with_noop_context(|cx| {
-            assert_eq!(s1.poll(cx), Async::Ready(Some(1)));
-            assert_eq!(s1.poll(cx), Async::Pending);
-            assert_eq!(s2.poll(cx), Async::Ready(Some(1)));
-            assert_eq!(s2.poll(cx), Async::Pending);
+            assert_eq!(s1.poll_change(cx), Async::Ready(Some(1)));
+            assert_eq!(s1.poll_change(cx), Async::Pending);
+            assert_eq!(s2.poll_change(cx), Async::Ready(Some(1)));
+            assert_eq!(s2.poll_change(cx), Async::Pending);
 
             mutable.set(5);
-            assert_eq!(s1.poll(cx), Async::Ready(Some(5)));
-            assert_eq!(s1.poll(cx), Async::Pending);
+            assert_eq!(s1.poll_change(cx), Async::Ready(Some(5)));
+            assert_eq!(s1.poll_change(cx), Async::Pending);
 
             drop(mutable);
-            assert_eq!(s2.poll(cx), Async::Ready(Some(5)));
-            assert_eq!(s2.poll(cx), Async::Ready(None));
+            assert_eq!(s2.poll_change(cx), Async::Ready(Some(5)));
+            assert_eq!(s2.poll_change(cx), Async::Ready(None));
 
-            assert_eq!(s1.poll(cx), Async::Ready(None));
+            assert_eq!(s1.poll_change(cx), Async::Ready(None));
         });
     }
 }

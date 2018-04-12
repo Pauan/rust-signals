@@ -62,8 +62,8 @@ macro_rules! map_tests {
                 });
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(2)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(2)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -79,8 +79,8 @@ macro_rules! map_tests {
                 });
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(3)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(3)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -98,8 +98,8 @@ macro_rules! map_tests {
                 });
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(6)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(6)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -119,8 +119,8 @@ macro_rules! map_tests {
                 });
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(10)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(10)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -142,8 +142,8 @@ macro_rules! map_tests {
                 });
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(15)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(15)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -158,8 +158,8 @@ macro_rules! map_tests {
                 });
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(2)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(2)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -175,8 +175,8 @@ macro_rules! map_tests {
                 });
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(3)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(3)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -194,8 +194,8 @@ macro_rules! map_tests {
                 });
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(6)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(6)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -215,8 +215,8 @@ macro_rules! map_tests {
                 });
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(10)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(10)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -238,8 +238,8 @@ macro_rules! map_tests {
                 });
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(15)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(15)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -254,8 +254,8 @@ macro_rules! map_tests {
                 };
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(3)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(3)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -273,8 +273,8 @@ macro_rules! map_tests {
                 };
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(10)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(10)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -295,8 +295,8 @@ macro_rules! map_tests {
                 };
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(21)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(21)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -320,8 +320,8 @@ macro_rules! map_tests {
                 };
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(36)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(36)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -348,8 +348,8 @@ macro_rules! map_tests {
                 };
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(55)));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(55)));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
 
@@ -387,8 +387,8 @@ macro_rules! map_tests {
                 };
 
                 util::with_noop_context(|cx| {
-                    assert_eq!(s.poll(cx), Async::Ready(Some(((Cloner { count: 1 }, Cloner { count: 1 }), (Cloner { count: 1 }, Cloner { count: 1 }), 0, 0, Cloner { count: 1 }, 2, 3, 4, Cloner { count: 1 }, (Cloner { count: 1 }, Cloner { count: 1 })))));
-                    assert_eq!(s.poll(cx), Async::Ready(None));
+                    assert_eq!(s.poll_change(cx), Async::Ready(Some(((Cloner { count: 1 }, Cloner { count: 1 }), (Cloner { count: 1 }, Cloner { count: 1 }), 0, 0, Cloner { count: 1 }, 2, 3, 4, Cloner { count: 1 }, (Cloner { count: 1 }, Cloner { count: 1 })))));
+                    assert_eq!(s.poll_change(cx), Async::Ready(None));
                 });
             }
         }

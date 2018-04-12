@@ -25,15 +25,15 @@ impl<A> IntoSignal for A where A: Signal {
 pub trait Signal {
     type Item;
 
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>>;
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>>;
 }
 
 impl<F: ?Sized + Signal> Signal for ::std::boxed::Box<F> {
     type Item = F::Item;
 
     #[inline]
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        (**self).poll(cx)
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        (**self).poll_change(cx)
     }
 }
 
@@ -148,7 +148,7 @@ impl<A> Signal for Always<A> {
     type Item = A;
 
     #[inline]
-    fn poll(&mut self, _: &mut Context) -> Async<Option<Self::Item>> {
+    fn poll_change(&mut self, _: &mut Context) -> Async<Option<Self::Item>> {
         Async::Ready(self.value.take())
     }
 }
@@ -175,8 +175,8 @@ impl<A, B, C> Signal for Switch<A, B, C>
     type Item = <B::Signal as Signal>::Item;
 
     #[inline]
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        self.inner.poll(cx)
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        self.inner.poll_change(cx)
     }
 }
 
@@ -212,7 +212,7 @@ impl<A: Signal> Stream for SignalStream<A> {
 
     #[inline]
     fn poll_next(&mut self, cx: &mut Context) -> Poll<Option<Self::Item>, Self::Error> {
-        Ok(self.signal.poll(cx))
+        Ok(self.signal.poll_change(cx))
     }
 }
 
@@ -228,8 +228,8 @@ impl<A, B, C> Signal for Map<A, B>
     type Item = C;
 
     #[inline]
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        self.signal.poll(cx).map(|opt| opt.map(|value| (self.callback)(value)))
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        self.signal.poll_change(cx).map(|opt| opt.map(|value| (self.callback)(value)))
     }
 }
 
@@ -251,7 +251,7 @@ impl<A> Future for WaitFor<A>
 
     fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
         loop {
-            return match self.signal.poll(cx) {
+            return match self.signal.poll_change(cx) {
                 Async::Ready(Some(value)) => if value == self.value {
                     Ok(Async::Ready(()))
 
@@ -278,7 +278,7 @@ impl<A, B> SignalVec for SignalSignalVec<A>
 
     #[inline]
     fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<B>>> {
-        self.signal.poll(cx).map(|opt| opt.map(|values| VecChange::Replace { values }))
+        self.signal.poll_change(cx).map(|opt| opt.map(|values| VecChange::Replace { values }))
     }
 }
 
@@ -299,9 +299,9 @@ impl<A, B, C> Signal for MapDedupe<A, B>
     type Item = C;
 
     // TODO should this use #[inline] ?
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         loop {
-            return match self.signal.poll(cx) {
+            return match self.signal.poll_change(cx) {
                 Async::Ready(Some(mut value)) => {
                     let has_changed = match self.old_value {
                         Some(ref old_value) => *old_value != value,
@@ -338,9 +338,9 @@ impl<A, B, C> Signal for FilterMap<A, B>
 
     // TODO should this use #[inline] ?
     #[inline]
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         loop {
-            return match self.signal.poll(cx) {
+            return match self.signal.poll_change(cx) {
                 Async::Ready(Some(value)) => match (self.callback)(value) {
                     Some(value) => {
                         self.first = false;
@@ -387,8 +387,8 @@ impl<A> Signal for Flatten<A>
     type Item = <<A as Signal>::Item as IntoSignal>::Item;
 
     #[inline]
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        let done = match self.signal.as_mut().map(|signal| signal.poll(cx)) {
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        let done = match self.signal.as_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
             Some(Async::Ready(None)) => {
                 self.signal = None;
@@ -402,7 +402,7 @@ impl<A> Signal for Flatten<A>
         };
 
         let poll = match self.inner {
-            Some(ref mut inner) => inner.poll(cx),
+            Some(ref mut inner) => inner.poll_change(cx),
 
             None => if done {
                 return Async::Ready(None);
@@ -640,7 +640,7 @@ mod mutable {
     impl<A: Copy> Signal for MutableSignal<A> {
         type Item = A;
 
-        fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
             // TODO is this correct ?
             let lock = self.0.state.read().unwrap();
 
@@ -675,7 +675,7 @@ mod mutable {
         type Item = A;
 
         // TODO code duplication with MutableSignal::poll
-        fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
             // TODO is this correct ?
             let lock = self.0.state.read().unwrap();
 
@@ -752,7 +752,7 @@ mod mutable {
         type Item = A;
 
         #[inline]
-        fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
             let mut inner = self.inner.lock().unwrap();
 
             // TODO is this correct ?
