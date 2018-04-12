@@ -103,7 +103,7 @@ pub trait SignalExt: Signal {
     #[inline]
     // TODO file Rust bug about bad error message when `callback` isn't marked as `mut`
     fn for_each<U, F>(self, callback: F) -> ForEach<Self, U, F>
-        // TODO allow for errors ?
+        // TODO allow for errors
         where U: IntoFuture<Item = (), Error = ()>,
               F: FnMut(Self::Item) -> U,
               Self: Sized {
@@ -187,10 +187,11 @@ pub struct ForEach<A, B, C> where B: IntoFuture {
 
 impl<A, B, C> Future for ForEach<A, B, C>
     where A: Signal,
+          // TODO allow for errors
           B: IntoFuture<Item = (), Error = ()>,
           C: FnMut(A::Item) -> B {
     type Item = ();
-    type Error = ();
+    type Error = B::Error;
 
     #[inline]
     fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {

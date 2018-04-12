@@ -1,8 +1,9 @@
 use std::cmp::Ordering;
 use futures_core::task::Context;
-use futures_core::{Stream, Poll, Async};
+use futures_core::{Future, Stream, Poll, Async};
 use futures_core::future::IntoFuture;
-use futures_util::stream::{StreamExt, ForEach};
+use futures_util::stream;
+use futures_util::stream::StreamExt;
 use signal::Signal;
 
 
@@ -123,13 +124,14 @@ pub trait SignalVec {
 
     #[inline]
     // TODO file Rust bug about bad error message when `callback` isn't marked as `mut`
-    fn for_each<U, F>(self, callback: F) -> ForEach<SignalVecStream<Self>, U, F>
-        // TODO allow for errors ?
+    fn for_each<U, F>(self, callback: F) -> ForEach<Self, U, F>
+        // TODO allow for errors
         where U: IntoFuture<Item = (), Error = ()>,
               F: FnMut(VecChange<Self::Item>) -> U,
               Self:Sized {
-
-        self.to_stream().for_each(callback)
+        ForEach {
+            inner: self.to_stream().for_each(callback)
+        }
     }
 
     #[inline]
@@ -154,6 +156,26 @@ impl<F: ?Sized + SignalVec> SignalVec for ::std::boxed::Box<F> {
     #[inline]
     fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<Self::Item>>> {
         (**self).poll(cx)
+    }
+}
+
+
+pub struct ForEach<A, B, C> where B: IntoFuture {
+    inner: stream::ForEach<SignalVecStream<A>, B, C>
+}
+
+impl<A, B, C> Future for ForEach<A, B, C>
+    where A: SignalVec,
+          // TODO allow for errors
+          B: IntoFuture<Item = (), Error = ()>,
+          C: FnMut(VecChange<A::Item>) -> B {
+    type Item = ();
+    type Error = B::Error;
+
+    #[inline]
+    fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
+        // TODO a teensy bit hacky
+        self.inner.poll(cx).map(|async| async.map(|_| ()))
     }
 }
 
