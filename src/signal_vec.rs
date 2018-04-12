@@ -68,7 +68,19 @@ pub trait SignalVec {
     type Item;
 
     fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<Self::Item>>>;
+}
 
+impl<F: ?Sized + SignalVec> SignalVec for ::std::boxed::Box<F> {
+    type Item = F::Item;
+
+    #[inline]
+    fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<Self::Item>>> {
+        (**self).poll(cx)
+    }
+}
+
+
+pub trait SignalVecExt: SignalVec {
     #[inline]
     fn map<A, F>(self, callback: F) -> Map<Self, F>
         where F: FnMut(Self::Item) -> A,
@@ -149,15 +161,8 @@ pub trait SignalVec {
     }
 }
 
-
-impl<F: ?Sized + SignalVec> SignalVec for ::std::boxed::Box<F> {
-    type Item = F::Item;
-
-    #[inline]
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<Self::Item>>> {
-        (**self).poll(cx)
-    }
-}
+// TODO why is this ?Sized
+impl<T: ?Sized> SignalVecExt for T where T: SignalVec {}
 
 
 pub struct ForEach<A, B, C> where B: IntoFuture {
