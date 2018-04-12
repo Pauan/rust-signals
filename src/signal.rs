@@ -277,7 +277,7 @@ impl<A, B> SignalVec for SignalSignalVec<A>
     type Item = B;
 
     #[inline]
-    fn poll(&mut self, cx: &mut Context) -> Async<Option<VecChange<B>>> {
+    fn poll_vec_change(&mut self, cx: &mut Context) -> Async<Option<VecChange<B>>> {
         self.signal.poll_change(cx).map(|opt| opt.map(|values| VecChange::Replace { values }))
     }
 }
