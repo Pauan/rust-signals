@@ -38,6 +38,11 @@ pub enum VecChange<A> {
         new_index: usize,
     },*/
 
+    Move {
+        old_index: usize,
+        new_index: usize,
+    },
+
     Push {
         value: A,
     },
@@ -57,6 +62,7 @@ impl<A> VecChange<A> {
             VecChange::UpdateAt { index, value } => VecChange::UpdateAt { index, value: callback(value) },
             VecChange::Push { value } => VecChange::Push { value: callback(value) },
             VecChange::RemoveAt { index } => VecChange::RemoveAt { index },
+            VecChange::Move { old_index, new_index } => VecChange::Move { old_index, new_index },
             VecChange::Pop {} => VecChange::Pop {},
             VecChange::Clear {} => VecChange::Clear {},
         }
@@ -280,6 +286,12 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
                         VecChange::Push { value: poll }
                     },
 
+                    VecChange::Move { old_index, new_index } => {
+                        let value = self.signals.remove(old_index);
+                        self.signals.insert(new_index, value);
+                        VecChange::Move { old_index, new_index }
+                    },
+
                     VecChange::RemoveAt { index } => {
                         self.signals.remove(index);
                         VecChange::RemoveAt { index }
@@ -371,7 +383,7 @@ impl<A> Signal for Len<A> where A: SignalVec {
                         changed = true;
                     },
 
-                    VecChange::UpdateAt { .. } => {},
+                    VecChange::UpdateAt { .. } | VecChange::Move { .. } => {},
 
                     VecChange::RemoveAt { .. } | VecChange::Pop {} => {
                         self.len -= 1;
@@ -490,6 +502,22 @@ impl<A, F> SignalVec for Filter<A, F>
                             } else {
                                 continue;
                             }
+                        }
+                    },
+
+                    // TODO unit tests for this
+                    VecChange::Move { old_index, new_index } => {
+                        if self.indexes.remove(old_index) {
+                            self.indexes.insert(new_index, true);
+
+                            Async::Ready(Some(VecChange::Move {
+                                old_index: self.find_index(old_index),
+                                new_index: self.find_index(new_index),
+                            }))
+
+                        } else {
+                            self.indexes.insert(new_index, false);
+                            continue;
                         }
                     },
 
@@ -630,105 +658,136 @@ impl<A, F> SignalVec for SortByCloned<A, F>
     fn poll_vec_change(&mut self, cx: &mut Context) -> Async<Option<VecChange<Self::Item>>> {
         match self.pending.take() {
             Some(value) => value,
-            None => match self.signal.poll_vec_change(cx) {
-                Async::Pending => Async::Pending,
-                Async::Ready(None) => Async::Ready(None),
-                Async::Ready(Some(change)) => match change {
-                    VecChange::Replace { mut values } => {
-                        // TODO can this be made faster ?
-                        let mut indexes: Vec<usize> = (0..values.len()).collect();
+            None => loop {
+                return match self.signal.poll_vec_change(cx) {
+                    Async::Pending => Async::Pending,
+                    Async::Ready(None) => Async::Ready(None),
+                    Async::Ready(Some(change)) => match change {
+                        VecChange::Replace { mut values } => {
+                            // TODO can this be made faster ?
+                            let mut indexes: Vec<usize> = (0..values.len()).collect();
 
-                        // TODO use get_unchecked ?
-                        indexes.sort_unstable_by(|a, b| (self.compare)(&values[*a], &values[*b]).then_with(|| a.cmp(b)));
-
-                        let output = Async::Ready(Some(VecChange::Replace {
                             // TODO use get_unchecked ?
-                            values: indexes.iter().map(|i| values[*i].clone()).collect()
-                        }));
+                            indexes.sort_unstable_by(|a, b| (self.compare)(&values[*a], &values[*b]).then_with(|| a.cmp(b)));
 
-                        self.values = values;
-                        self.indexes = indexes;
+                            let output = Async::Ready(Some(VecChange::Replace {
+                                // TODO use get_unchecked ?
+                                values: indexes.iter().map(|i| values[*i].clone()).collect()
+                            }));
 
-                        output
+                            self.values = values;
+                            self.indexes = indexes;
+
+                            output
+                        },
+
+                        VecChange::InsertAt { index, value } => {
+                            let new_value = value.clone();
+
+                            self.values.insert(index, value);
+
+                            self.increment_indexes(index);
+
+                            let sorted_index = self.binary_search_insert(index);
+
+                            self.insert_at(sorted_index, index, new_value)
+                        },
+
+                        VecChange::Push { value } => {
+                            let new_value = value.clone();
+
+                            let index = self.values.len();
+
+                            self.values.push(value);
+
+                            let sorted_index = self.binary_search_insert(index);
+
+                            self.insert_at(sorted_index, index, new_value)
+                        },
+
+                        VecChange::UpdateAt { index, value } => {
+                            let old_index = self.binary_search_remove(index);
+
+                            let old_output = self.remove_at(old_index);
+
+                            let new_value = value.clone();
+
+                            self.values[index] = value;
+
+                            let new_index = self.binary_search_insert(index);
+
+                            if old_index == new_index {
+                                self.indexes.insert(new_index, index);
+
+                                Async::Ready(Some(VecChange::UpdateAt {
+                                    index: new_index,
+                                    value: new_value,
+                                }))
+
+                            } else {
+                                let new_output = self.insert_at(new_index, index, new_value);
+                                self.pending = Some(new_output);
+
+                                old_output
+                            }
+                        },
+
+                        VecChange::RemoveAt { index } => {
+                            let sorted_index = self.binary_search_remove(index);
+
+                            self.values.remove(index);
+
+                            self.decrement_indexes(index);
+
+                            self.remove_at(sorted_index)
+                        },
+
+                        // TODO can this be made more efficient ?
+                        VecChange::Move { old_index, new_index } => {
+                            let old_sorted_index = self.binary_search_remove(old_index);
+
+                            let value = self.values.remove(old_index);
+
+                            self.decrement_indexes(old_index);
+
+                            self.indexes.remove(old_sorted_index);
+
+                            self.values.insert(new_index, value);
+
+                            self.increment_indexes(new_index);
+
+                            let new_sorted_index = self.binary_search_insert(new_index);
+
+                            self.indexes.insert(new_sorted_index, new_index);
+
+                            if old_sorted_index == new_sorted_index {
+                                continue;
+
+                            } else {
+                                Async::Ready(Some(VecChange::Move {
+                                    old_index: old_sorted_index,
+                                    new_index: new_sorted_index,
+                                }))
+                            }
+                        },
+
+                        VecChange::Pop {} => {
+                            let index = self.values.len() - 1;
+
+                            let sorted_index = self.binary_search_remove(index);
+
+                            self.values.pop();
+
+                            self.remove_at(sorted_index)
+                        },
+
+                        VecChange::Clear {} => {
+                            self.values.clear();
+                            self.indexes.clear();
+                            Async::Ready(Some(VecChange::Clear {}))
+                        },
                     },
-
-                    VecChange::InsertAt { index, value } => {
-                        let new_value = value.clone();
-
-                        self.values.insert(index, value);
-
-                        self.increment_indexes(index);
-
-                        let sorted_index = self.binary_search_insert(index);
-
-                        self.insert_at(sorted_index, index, new_value)
-                    },
-
-                    VecChange::Push { value } => {
-                        let new_value = value.clone();
-
-                        let index = self.values.len();
-
-                        self.values.push(value);
-
-                        let sorted_index = self.binary_search_insert(index);
-
-                        self.insert_at(sorted_index, index, new_value)
-                    },
-
-                    VecChange::UpdateAt { index, value } => {
-                        let old_index = self.binary_search_remove(index);
-
-                        let old_output = self.remove_at(old_index);
-
-                        let new_value = value.clone();
-
-                        self.values[index] = value;
-
-                        let new_index = self.binary_search_insert(index);
-
-                        if old_index == new_index {
-                            self.indexes.insert(new_index, index);
-
-                            Async::Ready(Some(VecChange::UpdateAt {
-                                index: new_index,
-                                value: new_value,
-                            }))
-
-                        } else {
-                            let new_output = self.insert_at(new_index, index, new_value);
-                            self.pending = Some(new_output);
-
-                            old_output
-                        }
-                    },
-
-                    VecChange::RemoveAt { index } => {
-                        let sorted_index = self.binary_search_remove(index);
-
-                        self.values.remove(index);
-
-                        self.decrement_indexes(index);
-
-                        self.remove_at(sorted_index)
-                    },
-
-                    VecChange::Pop {} => {
-                        let index = self.values.len() - 1;
-
-                        let sorted_index = self.binary_search_remove(index);
-
-                        self.values.pop();
-
-                        self.remove_at(sorted_index)
-                    },
-
-                    VecChange::Clear {} => {
-                        self.values.clear();
-                        self.indexes.clear();
-                        Async::Ready(Some(VecChange::Clear {}))
-                    },
-                },
+                }
             },
         }
     }
