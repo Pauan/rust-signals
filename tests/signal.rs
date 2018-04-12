@@ -4,7 +4,7 @@ extern crate futures_signals;
 
 use futures_signals::cancelable_future;
 use futures_signals::signal::{Signal, Mutable, channel};
-use futures_core::{Async, Future};
+use futures_core::Async;
 use futures_core::future::{FutureResult};
 
 mod util;
@@ -93,15 +93,6 @@ fn test_mutable_drop() {
             assert_eq!(s1.poll_change(cx), Async::Ready(None));
         });
     }
-}
-
-#[test]
-fn test_cancelable_future() {
-    let mut a = cancelable_future(Ok(()), |_: FutureResult<(), ()>| ());
-
-    util::with_noop_context(|cx| {
-        assert_eq!(a.1.poll(cx), Ok(Async::Ready(())));
-    });
 }
 
 #[test]
