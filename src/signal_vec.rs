@@ -64,6 +64,21 @@ impl<A> VecChange<A> {
 }
 
 
+pub trait IntoSignalVec {
+    type SignalVec: SignalVec<Item = Self::Item>;
+    type Item;
+
+    fn into_signal_vec(self) -> Self::SignalVec;
+}
+
+impl<A> IntoSignalVec for A where A: SignalVec {
+    type SignalVec = Self;
+    type Item = A::Item;
+
+    fn into_signal_vec(self) -> Self { self }
+}
+
+
 pub trait SignalVec {
     type Item;
 
