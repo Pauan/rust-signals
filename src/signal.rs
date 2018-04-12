@@ -1,8 +1,9 @@
 use futures_core::task::Context;
 use futures_core::{Async, Poll};
 use futures_core::future::{Future, IntoFuture};
-use futures_core::stream::{Stream};
-use futures_util::stream::{StreamExt, ForEach};
+use futures_util::stream;
+use futures_core::stream::Stream;
+use futures_util::stream::StreamExt;
 use signal_vec::{VecChange, SignalVec};
 
 
@@ -101,14 +102,14 @@ pub trait SignalExt: Signal {
 
     #[inline]
     // TODO file Rust bug about bad error message when `callback` isn't marked as `mut`
-    // TODO custom ForEach type for this
-    fn for_each<U, F>(self, callback: F) -> ForEach<SignalStream<Self>, U, F>
+    fn for_each<U, F>(self, callback: F) -> ForEach<Self, U, F>
         // TODO allow for errors ?
         where U: IntoFuture<Item = (), Error = ()>,
               F: FnMut(Self::Item) -> U,
               Self: Sized {
-
-        self.to_stream().for_each(callback)
+        ForEach {
+            inner: self.to_stream().for_each(callback)
+        }
     }
 
     #[inline]
@@ -176,6 +177,25 @@ impl<A, B, C> Signal for Switch<A, B, C>
     #[inline]
     fn poll(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         self.inner.poll(cx)
+    }
+}
+
+
+pub struct ForEach<A, B, C> where B: IntoFuture {
+    inner: stream::ForEach<SignalStream<A>, B, C>
+}
+
+impl<A, B, C> Future for ForEach<A, B, C>
+    where A: Signal,
+          B: IntoFuture<Item = (), Error = ()>,
+          C: FnMut(A::Item) -> B {
+    type Item = ();
+    type Error = ();
+
+    #[inline]
+    fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
+        // TODO a teensy bit hacky
+        self.inner.poll(cx).map(|async| async.map(|_| ()))
     }
 }
 
