@@ -2,8 +2,7 @@ extern crate futures_core;
 extern crate futures_executor;
 extern crate futures_signals;
 
-use futures_signals::signal::{Signal, Mutable};
-use futures_signals::broadcaster::Broadcaster;
+use futures_signals::signal::{Signal, Mutable, Broadcaster};
 use futures_core::Async;
 
 mod util;
@@ -12,8 +11,9 @@ mod util;
 #[test]
 fn test_broadcaster() {
     let mutable = Mutable::new(1);
-    let mut b1 = Broadcaster::new(mutable.signal());
-    let mut b2 = b1.clone();
+    let broadcaster = Broadcaster::new(mutable.signal());
+    let mut b1 = broadcaster.signal();
+    let mut b2 = broadcaster.signal_cloned();
 
     util::with_noop_context(|cx| {
         assert_eq!(b1.poll_change(cx), Async::Ready(Some(1)));
