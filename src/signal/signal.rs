@@ -1,5 +1,6 @@
+use std::marker::PhantomData;
 use futures_core::task::Context;
-use futures_core::{Async, Poll};
+use futures_core::{Async, Poll, Never};
 use futures_core::future::{Future, IntoFuture};
 use futures_util::stream;
 use futures_core::stream::Stream;
@@ -40,10 +41,11 @@ impl<F: ?Sized + Signal> Signal for ::std::boxed::Box<F> {
 
 pub trait SignalExt: Signal {
     #[inline]
-    fn to_stream(self) -> SignalStream<Self>
+    fn to_stream(self) -> SignalStream<Self, Never>
         where Self: Sized {
         SignalStream {
             signal: self,
+            phantom: PhantomData,
         }
     }
 
@@ -103,12 +105,15 @@ pub trait SignalExt: Signal {
     #[inline]
     // TODO file Rust bug about bad error message when `callback` isn't marked as `mut`
     fn for_each<U, F>(self, callback: F) -> ForEach<Self, U, F>
-        // TODO allow for errors
-        where U: IntoFuture<Item = (), Error = ()>,
+        where U: IntoFuture<Item = ()>,
               F: FnMut(Self::Item) -> U,
               Self: Sized {
+        // TODO a bit hacky
         ForEach {
-            inner: self.to_stream().for_each(callback)
+            inner: SignalStream {
+                signal: self,
+                phantom: PhantomData,
+            }.for_each(callback)
         }
     }
 
@@ -182,13 +187,12 @@ impl<A, B, C> Signal for Switch<A, B, C>
 
 
 pub struct ForEach<A, B, C> where B: IntoFuture {
-    inner: stream::ForEach<SignalStream<A>, B, C>
+    inner: stream::ForEach<SignalStream<A, B::Error>, B, C>,
 }
 
 impl<A, B, C> Future for ForEach<A, B, C>
     where A: Signal,
-          // TODO allow for errors
-          B: IntoFuture<Item = (), Error = ()>,
+          B: IntoFuture<Item = ()>,
           C: FnMut(A::Item) -> B {
     type Item = ();
     type Error = B::Error;
@@ -201,14 +205,14 @@ impl<A, B, C> Future for ForEach<A, B, C>
 }
 
 
-pub struct SignalStream<A> {
+pub struct SignalStream<A, Error> {
     signal: A,
+    phantom: PhantomData<Error>,
 }
 
-impl<A: Signal> Stream for SignalStream<A> {
+impl<A: Signal, Error> Stream for SignalStream<A, Error> {
     type Item = A::Item;
-    // TODO use Void instead ?
-    type Error = ();
+    type Error = Error;
 
     #[inline]
     fn poll_next(&mut self, cx: &mut Context) -> Poll<Option<Self::Item>, Self::Error> {
@@ -245,24 +249,20 @@ impl<A> Future for WaitFor<A>
     where A: Signal,
           A::Item: PartialEq {
 
-    // TODO this should probably return Result<A::Item, A::Item> or Option<A::Item> or something
-    type Item = ();
-    type Error = ();
+    type Item = Option<A::Item>;
+    type Error = Never;
 
     fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
         loop {
-            return match self.signal.poll_change(cx) {
-                Async::Ready(Some(value)) => if value == self.value {
-                    Ok(Async::Ready(()))
+            let poll = self.signal.poll_change(cx);
 
-                } else {
+            if let Async::Ready(Some(ref value)) = poll {
+                if *value != self.value {
                     continue;
-                },
+                }
+            }
 
-                // TODO is this correct ?
-                Async::Ready(None) => Err(()),
-                Async::Pending => Ok(Async::Pending),
-            };
+            return Ok(poll);
         }
     }
 }

@@ -1,6 +1,7 @@
+use std::marker::PhantomData;
 use std::cmp::Ordering;
 use futures_core::task::Context;
-use futures_core::{Future, Stream, Poll, Async};
+use futures_core::{Future, Stream, Poll, Async, Never};
 use futures_core::future::IntoFuture;
 use futures_util::stream;
 use futures_util::stream::StreamExt;
@@ -149,21 +150,25 @@ pub trait SignalVecExt: SignalVec {
     }
 
     #[inline]
-    fn to_stream(self) -> SignalVecStream<Self> where Self: Sized {
+    fn to_stream(self) -> SignalVecStream<Self, Never> where Self: Sized {
         SignalVecStream {
             signal: self,
+            phantom: PhantomData,
         }
     }
 
     #[inline]
     // TODO file Rust bug about bad error message when `callback` isn't marked as `mut`
     fn for_each<U, F>(self, callback: F) -> ForEach<Self, U, F>
-        // TODO allow for errors
-        where U: IntoFuture<Item = (), Error = ()>,
+        where U: IntoFuture<Item = ()>,
               F: FnMut(VecChange<Self::Item>) -> U,
               Self:Sized {
+        // TODO a little hacky
         ForEach {
-            inner: self.to_stream().for_each(callback)
+            inner: SignalVecStream {
+                signal: self,
+                phantom: PhantomData,
+            }.for_each(callback)
         }
     }
 
@@ -187,13 +192,12 @@ impl<T: ?Sized> SignalVecExt for T where T: SignalVec {}
 
 
 pub struct ForEach<A, B, C> where B: IntoFuture {
-    inner: stream::ForEach<SignalVecStream<A>, B, C>
+    inner: stream::ForEach<SignalVecStream<A, B::Error>, B, C>
 }
 
 impl<A, B, C> Future for ForEach<A, B, C>
     where A: SignalVec,
-          // TODO allow for errors
-          B: IntoFuture<Item = (), Error = ()>,
+          B: IntoFuture<Item = ()>,
           C: FnMut(VecChange<A::Item>) -> B {
     type Item = ();
     type Error = B::Error;
@@ -417,13 +421,14 @@ impl<A> Signal for Len<A> where A: SignalVec {
 }
 
 
-pub struct SignalVecStream<A> {
+pub struct SignalVecStream<A, Error> {
     signal: A,
+    phantom: PhantomData<Error>,
 }
 
-impl<A: SignalVec> Stream for SignalVecStream<A> {
+impl<A: SignalVec, Error> Stream for SignalVecStream<A, Error> {
     type Item = VecChange<A::Item>;
-    type Error = ();
+    type Error = Error;
 
     #[inline]
     fn poll_next(&mut self, cx: &mut Context) -> Poll<Option<Self::Item>, Self::Error> {
@@ -1248,7 +1253,7 @@ mod tests {
               B: FnMut(&mut A, VecChange<A::Item>) {
 
         type Item = ();
-        type Error = ();
+        type Error = Never;
 
         #[inline]
         fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
