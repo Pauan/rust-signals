@@ -15,7 +15,7 @@ struct BroadcasterState<A> where A: Signal {
 }
 
 impl<A> BroadcasterState<A> where A: Signal {
-    fn new(shared_state: &Arc<BroadcasterSharedState<A>>) -> Box<Self> {
+    fn new(shared_state: &Arc<BroadcasterSharedState<A>>) -> Self {
         let new_status = Arc::new(BroadcasterStatus {
             has_changed: AtomicBool::new(true),
             waker: Mutex::new(None)
@@ -26,10 +26,10 @@ impl<A> BroadcasterState<A> where A: Signal {
             lock.push(Arc::downgrade(&new_status));
         }
 
-        Box::new(BroadcasterState {
+        BroadcasterState {
             status: new_status,
             shared_state: shared_state.clone(),
-        })
+        }
     }
 }
 
@@ -166,7 +166,7 @@ impl<A> Broadcaster<A> where A: Signal, A::Item: Clone {
 // ---------------------------------------------------------------------------
 
 pub struct BroadcasterSignal<A> where A: Signal {
-    state: Box<BroadcasterState<A>>
+    state: BroadcasterState<A>
 }
 
 impl<A> Signal for BroadcasterSignal<A>
@@ -199,7 +199,7 @@ impl<A> Signal for BroadcasterSignal<A>
 // --------------------------------------------------------------------------
 
 pub struct BroadcasterSignalCloned<A> where A: Signal {
-    state: Box<BroadcasterState<A>>
+    state: BroadcasterState<A>
 }
 
 impl<A> Signal for BroadcasterSignalCloned<A>
