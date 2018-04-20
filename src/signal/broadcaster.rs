@@ -110,18 +110,18 @@ impl<A> BroadcasterState<A> where A: Signal {
 
     fn poll_change<F>(&self, cx: &mut Context, f: F) -> Async<Option<A::Item>> where F: FnOnce(&Option<A::Item>) -> Option<A::Item> {
         // Don't need any potential waker as this task is now awake!
-        *self.state.status.waker.lock().unwrap() = None;
+        *self.status.waker.lock().unwrap() = None;
 
         // Check for changes in the underlying signal (if not waiting already).
-        self.state.shared_state.poll_underlying(cx);
+        self.shared_state.poll_underlying(cx);
 
         // If the poll just done (or a previous poll) has generated a new
         // value, we can report it. Use swap so only one thread will pick up
         // the change
-        let status = &*self.state.status;
+        let status = &*self.status;
 
         if status.has_changed.swap(false, Ordering::SeqCst) {
-            Async::Ready(f(self.state.shared_state.value.read().unwrap()))
+            Async::Ready(f(&self.shared_state.value.read().unwrap()))
 
         } else {
             // Nothing new to report, save this task's Waker for later
