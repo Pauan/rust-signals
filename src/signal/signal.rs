@@ -630,13 +630,6 @@ mod mutable {
     // TODO remove it from receivers when it's dropped
     pub struct MutableSignal<A>(Arc<MutableSignalState<A>>);
 
-    impl<A> Clone for MutableSignal<A> {
-        #[inline]
-        fn clone(&self) -> Self {
-            MutableSignal(MutableSignalState::new(&self.0.state))
-        }
-    }
-
     impl<A: Copy> Signal for MutableSignal<A> {
         type Item = A;
 
@@ -663,13 +656,6 @@ mod mutable {
     // TODO it should have a single MutableSignal implementation for both Copy and Clone
     // TODO remove it from receivers when it's dropped
     pub struct MutableSignalCloned<A>(Arc<MutableSignalState<A>>);
-
-    impl<A> Clone for MutableSignalCloned<A> {
-        #[inline]
-        fn clone(&self) -> Self {
-            MutableSignalCloned(MutableSignalState::new(&self.0.state))
-        }
-    }
 
     impl<A: Clone> Signal for MutableSignalCloned<A> {
         type Item = A;

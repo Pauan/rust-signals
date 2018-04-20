@@ -1044,6 +1044,7 @@ mod mutable_vec {
     }
 
 
+    // TODO get rid of the Arc
     pub struct MutableVec<A>(Arc<RwLock<MutableVecState<A>>>);
 
     impl<A> MutableVec<A> {
