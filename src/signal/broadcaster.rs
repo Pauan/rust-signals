@@ -20,13 +20,20 @@ struct BroadcasterNotifier {
 }
 
 impl BroadcasterNotifier {
-    fn notify(&self) {
-        // Take this opportunity to GC dead children
-        self.targets.lock().unwrap().retain(|weak_child_state| {
-            if let Some(child_status) = weak_child_state.upgrade() {
-                child_status.has_changed.store(true, Ordering::SeqCst);
+    fn notify(&self, is_changed: bool) {
+        let mut lock = self.targets.lock().unwrap();
 
-                if let Some(waker) = child_status.waker.lock().unwrap().take() {
+        // Take this opportunity to GC dead children
+        lock.retain(|weak_child_state| {
+            if let Some(child_status) = weak_child_state.upgrade() {
+                let mut lock = child_status.waker.lock().unwrap();
+
+                if is_changed {
+                    child_status.has_changed.store(true, Ordering::SeqCst);
+                }
+
+                if let Some(waker) = lock.take() {
+                    drop(lock);
                     waker.wake();
                 }
 
@@ -36,13 +43,15 @@ impl BroadcasterNotifier {
                 false
             }
         });
+
+        self.is_waiting.store(false, Ordering::SeqCst);
     }
 }
 
 impl Wake for BroadcasterNotifier {
+    #[inline]
     fn wake(arc_self: &Arc<Self>) {
-        arc_self.notify();
-        arc_self.is_waiting.store(false, Ordering::SeqCst);
+        arc_self.notify(true);
     }
 }
 
@@ -72,8 +81,7 @@ impl<A> BroadcasterSharedState<A> where A: Signal {
 
             if let Async::Ready(value) = change {
                 *self.value.write().unwrap() = value;
-                self.notifier.notify();
-                self.notifier.is_waiting.store(false, Ordering::SeqCst);
+                self.notifier.notify(true);
             }
         }
     }
@@ -118,14 +126,12 @@ impl<A> BroadcasterState<A> where A: Signal {
         // If the poll just done (or a previous poll) has generated a new
         // value, we can report it. Use swap so only one thread will pick up
         // the change
-        let status = &*self.status;
-
-        if status.has_changed.swap(false, Ordering::SeqCst) {
+        if self.status.has_changed.swap(false, Ordering::SeqCst) {
             Async::Ready(f(&self.shared_state.value.read().unwrap()))
 
         } else {
             // Nothing new to report, save this task's Waker for later
-            *status.waker.lock().unwrap() = Some(cx.waker().clone());
+            *self.status.waker.lock().unwrap() = Some(cx.waker().clone());
             Async::Pending
         }
     }
@@ -148,13 +154,13 @@ impl<A> Broadcaster<A> where A: Signal {
     pub fn new(signal: A) -> Self {
         let notifier = Arc::new(BroadcasterNotifier {
             is_waiting: AtomicBool::new(false),
-            targets: Mutex::new(vec![])
+            targets: Mutex::new(vec![]),
         });
 
         let shared_state = Arc::new(BroadcasterSharedState {
             signal: Mutex::new(signal),
             value: RwLock::new(None),
-            notifier: notifier
+            notifier: notifier,
         });
 
         Self {
@@ -163,10 +169,15 @@ impl<A> Broadcaster<A> where A: Signal {
     }
 }
 
+impl<A> Drop for Broadcaster<A> where A: Signal {
+    fn drop(&mut self) {
+
+    }
+}
+
 impl<A> Broadcaster<A> where A: Signal, A::Item: Copy {
     /// Create a new `Signal` which copies values from the `Signal` wrapped
     /// by the `Broadcaster`
-    ///
     // TODO: use `impl Signal` for the return type
     pub fn signal(&self) -> BroadcasterSignal<A> {
         BroadcasterSignal {
@@ -178,7 +189,6 @@ impl<A> Broadcaster<A> where A: Signal, A::Item: Copy {
 impl<A> Broadcaster<A> where A: Signal, A::Item: Clone {
     /// Create a new `Signal` which clones values from the `Signal` wrapped
     /// by the `Broadcaster`
-    ///
     // TODO: use `impl Signal` for the return type
     pub fn signal_cloned(&self) -> BroadcasterSignalCloned<A> {
         BroadcasterSignalCloned {
@@ -190,7 +200,7 @@ impl<A> Broadcaster<A> where A: Signal, A::Item: Clone {
 // ---------------------------------------------------------------------------
 
 pub struct BroadcasterSignal<A> where A: Signal {
-    state: BroadcasterState<A>
+    state: BroadcasterState<A>,
 }
 
 impl<A> Signal for BroadcasterSignal<A>
@@ -208,7 +218,7 @@ impl<A> Signal for BroadcasterSignal<A>
 // --------------------------------------------------------------------------
 
 pub struct BroadcasterSignalCloned<A> where A: Signal {
-    state: BroadcasterState<A>
+    state: BroadcasterState<A>,
 }
 
 impl<A> Signal for BroadcasterSignalCloned<A>
