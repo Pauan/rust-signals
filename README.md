@@ -1,12 +1,20 @@
 This crate provides zero-cost Signals which are built on top of the
 [futures](https://crates.io/crates/futures) crate.
 
-What is a Signal? It is a *value that changes over time*, and you can be
-efficiently notified whenever its value changes.
+What is a Signal? It is a *value that changes over time*, and you can be efficiently
+notified whenever its value changes.
 
-This is useful in many situations: you can automatically serialize your program's
-state to a database whenever it changes, or you can use dominator to automatically update
-the DOM whenever your program's state changes, etc.
+This is useful in many situations:
+
+* You can automatically serialize your program's state to a database whenever it changes.
+
+* You can automatically send a message to the server whenever the client's state changes, or vice versa. This
+  can be used to automatically, efficiently, and conveniently keep the client and server's state in sync.
+
+* You can use [dominator](https://crates.io/crates/dominator) to automatically update the DOM whenever your
+  program's state changes.
+
+* And many more situations!
 
 Before I can fully explain Signals, first I have to explain `Mutable`:
 
@@ -14,22 +22,25 @@ Before I can fully explain Signals, first I have to explain `Mutable`:
 let my_state = Mutable::new(5);
 ```
 
-The above example creates a new `Mutable` with an initial value of `5`. You can think
-of `Mutable` as being very similar to `RwLock`:
+The above example creates a new `Mutable` with an initial value of `5`.
 
-* It implements `Send` and `Sync`
-* You can retrieve the current value
-* You can change the current value
+`Mutable`  is very similar to `RwLock`:
+
+* It implements `Send` and `Sync`.
+* You can retrieve the current value.
+* You can change the current value.
 
 Let's see it in action:
 
 ```rust
 println!("{}", my_state.get()); // prints 5
+
 my_state.set(10);
+
 println!("{}", my_state.get()); // prints 10
 ```
 
-However, if that was all `Mutable` could do, it wouldn't be very useful, since `RwLock`
+However, if that was all `Mutable` could do, it wouldn't be very useful, because `RwLock`
 already exists!
 
 The major difference between `Mutable` and `RwLock` is that it is possible to be
@@ -48,21 +59,26 @@ whenever `my_state` changes.
 Whenever I say "changes", what I really mean is "the current value, and also any changes to
 the value in the future".
 
-To explain in more detail: the `for_each` method returns a new `Future`. When that `Future` is
-spawned it will *immediately* call the `|value| { ... }` closure with the *current value* of
-`my_state` (which in this case is `10`), and then whenever `my_state` changes
-(e.g. with `my_state.set(...)`) it will call the closure again with the new value.
+To explain in more detail:
 
-Because the `for_each` method returns a `Future`, you need to spawn it somehow. There are
+1. The `for_each` method returns a new [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html).
+
+2. When that [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html) is spawned it will *immediately* call the `|value| { ... }` closure with the *current value* of
+`my_state` (which in this case is `10`).
+
+3. Then whenever `my_state` changes (e.g. with `my_state.set(...)`) it will call the closure again with the new value.
+
+Because the `for_each` method returns a [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html), you need to spawn it somehow. There are
 many ways of doing so:
 
-* `block_on(future)`
-* `tokio::run(future)`
+* [`block_on(future)`](https://docs.rs/futures/0.2.*/futures/executor/fn.block_on.html)
+* [`tokio::run(future)`](https://docs.rs/tokio/0.1.5/tokio/runtime/fn.run.html)
 * `PromiseFuture::spawn_local(future)`
 
-And many more! Any Executor should work, since `for_each` is a normal `Future`.
+And many more! Any [`Executor`](https://docs.rs/futures/0.2.*/futures/executor/trait.Executor.html) should work, since
+`for_each` is a normal [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html).
 
-That also means that you can use all of the `FutureExt` methods on it as well.
+That also means that you can use all of the [`FutureExt`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) methods on it as well.
 
 If you need more control, you can use `to_stream` instead:
 
@@ -112,9 +128,10 @@ can't you just use the `Mutable` directly?
 
 There's three reasons:
 
-* Because `Future` methods like `for_each` consume their input, that would mean that
-  after calling `for_each` on a `Mutable` you would no longer be able to change the
-  `Mutable`, which defeats the whole point of using `Mutable` in the first place!
+* Because [`FutureExt`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) methods
+  like `for_each` consume their input, that would mean that after calling `for_each` on a
+  `Mutable` you would no longer be able to change the `Mutable`, which defeats the whole point
+  of using `Mutable` in the first place!
 
 * It is possible to call `signal` multiple times:
 
@@ -138,8 +155,8 @@ There's three reasons:
 ----
 
 Now that I've fully explained `Mutable`, I can finally explain `Signal`. Just like how
-`Future` and `Stream` support various useful methods, `Signal` also contains many useful
-methods.
+[`Future`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) and `Stream` support various
+useful methods, `Signal` also contains many useful methods.
 
 The most commonly used method is `map`:
 
@@ -257,3 +274,201 @@ The `map_ref` and `map_mut` macros allow for an *infinite* number of Signals, th
 keep in mind that each Signal has a small performance cost. The cost is very small, but it grows linearly
 with the number of Signals. You shouldn't normally worry about it, just don't put thousands of Signals
 into a `map_ref` or `map_mut` (this basically *never* happens in practice).
+
+----
+
+In addition to `Mutable` and `Signal`, there is also `MutableVec` and `SignalVec`.
+
+As its name suggests, `MutableVec<A>` is very similar to `Mutable<Vec<A>>`, except it's *dramatically*
+more efficient.
+
+Rather than being notified when the value changes, instead you are notified with the *difference* between
+the change and the old value. Here is an example:
+
+```rust
+let my_vec = MutableVec::new();
+```
+
+The above creates a new empty `MutableVec`. You can then use many of the `Vec` methods on it:
+
+```rust
+my_vec.push(1);
+my_vec.insert(0, 2);
+my_vec.remove(0);
+my_vec.pop().unwrap();
+```
+
+In addition, you can use the `signal_vec` method to convert it into a `SignalVec`, and then you can use the
+`for_each` method to be efficiently notified when it changes:
+
+```rust
+let future = my_vec.signal_vec().for_each(|change| {
+    match change {
+        VecChange::Replace { values } => { ... }
+        VecChange::InsertAt { index, value } => { ... },
+        VecChange::UpdateAt { index, value } => { ... },
+        VecChange::RemoveAt { index } => { ... },
+        VecChange::Move { old_index, new_index } => { ... },
+        VecChange::Push { value } => { ... },
+        VecChange::Pop {} => { ... },
+        VecChange::Clear {} => { ... },
+    }
+});
+```
+
+Unlike `Signal`, the `for_each` method for `SignalVec` calls the closure with a `VecChange`, which represents
+the difference between a single change and the old value.
+
+As an example, if you call `my_vec.push(5)`, then the closure will be called with `VecChange::push { value: 5 }`.
+
+Or if you call `my_vec.insert(3, 10)`, then the closure will be called with `VecChange::InsertAt { index: 3, value: 10 }`.
+
+This allows you to very efficiently update based only on that specific change. For example, if you are automatically saving
+the `MutableVec` to a database whenever it changes, you don't need to save the entire `MutableVec` on every change, you only
+need to save the individual change. This means that updates are often constant time, no matter how big the `MutableVec` is.
+
+----
+
+Unlike `Mutable` and `Signal`, it is guaranteed that the closure will be called with every single change: it will never "skip"
+a change, and the changes will always be in the correct order. This is because it is notifying with the *difference* between the
+old `Vec` and the new `Vec`, so it is very important that it is in the correct order, and that it doesn't skip anything!
+
+However, if you call a `MutableVec` method which doesn't *actually* make any changes, then it will not notify at all:
+
+```rust
+my_vec.retain(|_| { true });
+```
+
+The `MutableVec::retain` method is the same as `Vec::retain`: it calls the `|_| { true }` closure with each value in the `MutableVec`,
+and if the closure returns `false` it then removes the value from the `MutableVec`.
+
+But in the above example, it never returns `false`, so it never removes anything, so it doesn't notify.
+
+Also, even though it's guaranteed to send a notification for changes, the notification might be different than what you expect.
+
+For example, when calling the `retain` method, it will send out a notification for each change, so if it removes 5 values it will send
+out 5 notifications. But the notifications are in the reverse order: it sends notifications for the right-most values first, and notifications
+for the left-most values last. In addition, it sends a mixture of `VecChange::Pop` and `VecChange::RemoveAt` as appropriate.
+
+Another example is that `my_vec.remove(index)` might notify with either `VecChange::RemoveAt` or `VecChange::Pop` depending on whether
+`index` is the last index or not.
+
+The reason this is done is for performance reasons, and you should *not* rely upon it: the behavior of exactly which notifications are
+sent is an implementation detail.
+
+The only thing you can rely upon is that if you apply the notifications in the same order they are sent, it will exactly recreate the
+`SignalVec`:
+
+```rust
+let mut copied_vec = vec![];
+
+let future = my_vec.signal_vec().for_each(move |change| {
+    match change {
+        VecChange::Replace { values } => {
+            *copied_vec = values;
+        },
+        VecChange::InsertAt { index, value } => {
+            copied_vec.insert(index, value);
+        },
+        VecChange::UpdateAt { index, value } => {
+            copied_vec[index] = value;
+        },
+        VecChange::RemoveAt { index } => {
+            copied_vec.remove(index);
+        },
+        VecChange::Move { old_index, new_index } => {
+            let value = copied_vec.remove(old_index);
+            copied_vec.insert(new_index, value);
+        },
+        VecChange::Push { value } => {
+            copied_vec.push(value);
+        },
+        VecChange::Pop {} => {
+            copied_vec.pop();
+        },
+        VecChange::Clear {} => {
+            copied_vec.clear();
+        },
+    }
+});
+```
+
+In the above example, `copied_vec` is guaranteed to have exactly the same values as `my_vec`.
+
+----
+
+Just like `Signal`, `SignalVec` has a lot of useful methods. A very common one is `map`:
+
+```rust
+let mapped = my_vec.signal_vec().map(|value| value + 1);
+```
+
+The `map` method takes in an input `SignalVec` and a closure, and it returns an output `SignalVec`.
+
+Whenever the input `SignalVec` inserts a new value (such as with `VecChange::Replace`, `VecChange::InsertAt`,
+`VecChange::UpdateAt`, or `VecChange::Push`), it will call the closure and will use its return value instead.
+
+So in the above example, `mapped` is a `SignalVec` with the same values as `my_vec`, except with `1` added to them.
+
+So if `my_vec` has the values `[1, 2, 3, 4, 5]` then `mapped` has the values `[2, 3, 4, 5, 6]`
+
+This is a ***very*** efficient method: it is always guaranteed constant time, regardless of how big the input `SignalVec` is.
+
+----
+
+Another common method is `filter`:
+
+```rust
+let filtered = my_vec.signal_vec().filter(|value| value < 5);
+```
+
+The `filter` method takes an input `SignalVec` and a closure, and it returns an output `SignalVec`.
+
+It calls the closure for each value in the input `SignalVec`, and the output `SignalVec` only contains the
+values where the closure returns `true`.
+
+It always maintains that property even when the input `SignalVec` changes.
+
+So in the above example, `filtered` is a `SignalVec` with the same values as `my_vec`, excluding the values that are greater than `4`.
+
+So if `my_vec` has the values `[3, 1, 6, 2, 0, 4, 5, 8, 9, 7]` then `filtered` has the values `[3, 1, 2, 0, 4]`.
+
+The performance is linear with the number of values in the input `SignalVec`. As an example, if you push a value into a `MutableVec`
+which has 1,000 values, `filter` will take roughly 1,000 operations to update its internal state. That might sound
+expensive, but each individual operation is *very* fast, so it's normally not a problem unless you have a *huge* `SignalVec`.
+
+Just like `SignalExt`, the `SignalVecExt` methods return a new `SignalVec`, so they can be chained:
+
+```rust
+let filter_mapped = my_vec.signal_vec()
+    .filter(|value| value < 5)
+    .map(|value| value + 10);
+```
+
+----
+
+Another common method is `sort_by_cloned`:
+
+```rust
+let sorted = my_vec.signal_vec().sort_by_cloned(|left, right| left.cmp(right));
+```
+
+The `sort_by_cloned` method takes an input `SignalVec` and a closure, and it returns an output `SignalVec`.
+
+It calls the closure with two values from the input `SignalVec`, and the closure must return an [`Ordering`](https://doc.rust-lang.org/std/cmp/enum.Ordering.html), which is used to sort the values. The output `SignalVec` then contains the sorted values.
+
+It automatically maintains the sort order even when the input `SignalVec` changes.
+
+So in the above example, `sorted` is a `SignalVec` with the same values as `my_vec`, except sorted by `left.cmp(right)`.
+
+So if `my_vec` has the values `[3, 1, 6, 2, 0, 4, 5, 8, 9, 7]` then `sorted` has the values `[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]`.
+
+This method is intentionally very similar to the [`slice::sort_by`](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by) method,
+except it doesn't mutate the input `SignalVec` (it returns a new `SignalVec`).
+
+The reason why it has the `_cloned` suffix is because it *clones* the values from the input `SignalVec`. This is
+necessary in order to maintain its internal state while also simultaneously passing the values to the output `SignalVec`.
+
+This method has the same logarithmic performance as [`slice::sort_by`](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by),
+except it's slower because it needs to keep track of extra internal state. As an example, if you insert a value into a `MutableVec` which
+has 1,000 values, then `sort_by_cloned` will take on average ~2,010 operations to update its internal state.
