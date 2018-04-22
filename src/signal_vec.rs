@@ -332,11 +332,6 @@ pub trait SignalVecExt: SignalVec {
             len: 0,
         }
     }
-
-    #[inline]
-    fn by_ref(&mut self) -> &mut Self {
-        self
-    }
 }
 
 // TODO why is this ?Sized
