@@ -1,6 +1,6 @@
 # What is this?
 
-This crate provides zero-cost Signals which are built on top of the
+This Rust crate provides zero-cost Signals which are built on top of the
 [futures](https://crates.io/crates/futures) crate.
 
 What is a Signal? It is a *value that changes over time*, and you can be efficiently
@@ -21,6 +21,7 @@ This is useful in many situations:
 # Tutorial
 
 This tutorial is long, but it's intended to explain everything you need to know in order to use Signals.
+
 It is highly recommended to read through all of it.
 
 Before I can fully explain Signals, first I have to explain `Mutable`:
@@ -31,20 +32,23 @@ let my_state = Mutable::new(5);
 
 The above example creates a new `Mutable` with an initial value of `5`.
 
-`Mutable`  is very similar to `RwLock`:
+`Mutable`  is very similar to [`RwLock`](https://doc.rust-lang.org/std/sync/struct.RwLock.html):
 
-* It implements `Send` and `Sync`.
+* It implements [`Send`](https://doc.rust-lang.org/std/marker/trait.Send.html) and [`Sync`](https://doc.rust-lang.org/std/marker/trait.Sync.html), so it can be sent between threads.
 * You can retrieve the current value.
 * You can change the current value.
 
 Let's see it in action:
 
 ```rust
-println!("{}", my_state.get()); // prints 5
+// Prints 5
+println!("{}", my_state.get());
 
+// Changes the current value to 10
 my_state.set(10);
 
-println!("{}", my_state.get()); // prints 10
+// Prints 10
+println!("{}", my_state.get());
 ```
 
 However, if that was all `Mutable` could do, it wouldn't be very useful, because `RwLock`
@@ -60,8 +64,7 @@ let future = my_state.signal().for_each(|value| {
 });
 ```
 
-In this case we are using `my_state.signal().for_each(|value| { ... })` to be notified
-whenever `my_state` changes.
+In this case we are using the `for_each` method to be notified whenever `my_state` changes.
 
 Whenever I say "changes", what I really mean is "the current value, and also any changes to
 the value in the future".
@@ -87,6 +90,8 @@ And many more! Any [`Executor`](https://docs.rs/futures/0.2.*/futures/executor/t
 
 That also means that you can use all of the [`FutureExt`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) methods on it as well.
 
+----
+
 If you need more control, you can use `to_stream` instead:
 
 ```rust
@@ -97,6 +102,37 @@ This returns a `Stream` of values (starting with the current value of `my_state`
 then followed by the changes to `my_state`).
 
 You can then use all of the `StreamExt` methods on it, just like with any other `Stream`.
+
+----
+
+You might be wondering why you have to call the `signal` method: why can't you just use the
+`Mutable` directly?
+
+There's three reasons:
+
+* Because [`FutureExt`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) methods
+  like `for_each` consume their input, that would mean that after calling `for_each` on a
+  `Mutable` you would no longer be able to change the `Mutable`, which defeats the whole point
+  of using `Mutable` in the first place!
+
+* It is possible to call `signal` multiple times:
+
+  ```rust
+  let signal1 = my_state.signal();
+  let signal2 = my_state.signal();
+  ```
+
+  When the `Mutable` changes, *all* of its signals will change as well. This turns out
+  to be very useful in practice: it's common to put your program's state inside of a
+  `Mutable` (or multiple `Mutable`s) and then share it in various places.
+
+* You cannot be notified when a `Mutable` changes, but you can get/set its current value.
+
+  On the other hand, you *can* be notified when a `Signal` changes, but you cannot get/set
+  the current value of the `Signal`.
+
+  This split is necessary both for correctness and performance. Therefore, because of this
+  split, it is necessary to call the `signal` method to "convert" a `Mutable` into a `Signal`.
 
 ----
 
@@ -127,37 +163,6 @@ change. But you *can* rely upon them always containing the most recent value.
 If you really do need every single intermediate value, then using a `Stream` would be
 the correct choice. In that case you will pay a performance penalty, because it has to
 hold the values in a queue.
-
-----
-
-At this point you might be wondering why you have to call the `signal` method: why
-can't you just use the `Mutable` directly?
-
-There's three reasons:
-
-* Because [`FutureExt`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) methods
-  like `for_each` consume their input, that would mean that after calling `for_each` on a
-  `Mutable` you would no longer be able to change the `Mutable`, which defeats the whole point
-  of using `Mutable` in the first place!
-
-* It is possible to call `signal` multiple times:
-
-  ```rust
-  let signal1 = my_state.signal();
-  let signal2 = my_state.signal();
-  ```
-
-  When the `Mutable` changes, *all* of its signals will change as well. This turns out
-  to be very useful in practice: it's common to put your program's state inside of a
-  `Mutable` (or multiple `Mutable`s) and then share it in various places.
-
-* You cannot be notified when a `Mutable` changes, but you can get/set its current value.
-
-  On the other hand, you *can* be notified when a `Signal` changes, but you cannot get/set
-  the current value of the `Signal`.
-
-  This split is necessary both for correctness and performance. Therefore, because of this
-  split, it is necessary to call the `signal` method to "convert" a `Mutable` into a `Signal`.
 
 ----
 
