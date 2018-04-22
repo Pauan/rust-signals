@@ -5,7 +5,7 @@ use futures_core::future::{Future, IntoFuture};
 use futures_util::stream;
 use futures_core::stream::Stream;
 use futures_util::stream::StreamExt;
-use signal_vec::{VecChange, SignalVec};
+use signal_vec::{VecDiff, SignalVec};
 
 
 pub trait IntoSignal {
@@ -277,8 +277,8 @@ impl<A, B> SignalVec for SignalSignalVec<A>
     type Item = B;
 
     #[inline]
-    fn poll_vec_change(&mut self, cx: &mut Context) -> Async<Option<VecChange<B>>> {
-        self.signal.poll_change(cx).map(|opt| opt.map(|values| VecChange::Replace { values }))
+    fn poll_vec_change(&mut self, cx: &mut Context) -> Async<Option<VecDiff<B>>> {
+        self.signal.poll_change(cx).map(|opt| opt.map(|values| VecDiff::Replace { values }))
     }
 }
 

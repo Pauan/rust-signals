@@ -34,7 +34,7 @@ The above example creates a new `Mutable` with an initial value of `5`.
 
 `Mutable`  is very similar to [`RwLock`](https://doc.rust-lang.org/std/sync/struct.RwLock.html):
 
-* It implements [`Send`](https://doc.rust-lang.org/std/marker/trait.Send.html) and [`Sync`](https://doc.rust-lang.org/std/marker/trait.Sync.html), so it can be sent between threads.
+* It implements [`Send`](https://doc.rust-lang.org/std/marker/trait.Send.html) and [`Sync`](https://doc.rust-lang.org/std/marker/trait.Sync.html), so it can be sent and used between multiple threads.
 * You can retrieve the current value.
 * You can change the current value.
 
@@ -78,15 +78,15 @@ To explain in more detail:
 
 3. Then whenever `my_state` changes (e.g. with `my_state.set(...)`) it will call the closure again with the new value.
 
-Because the `for_each` method returns a [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html), you need to spawn it somehow. There are
-many ways of doing so:
+Because the `for_each` method returns a [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html), you need to spawn it. There are
+many ways of doing that:
 
 * [`block_on(future)`](https://docs.rs/futures/0.2.*/futures/executor/fn.block_on.html)
 * [`tokio::run(future)`](https://docs.rs/tokio/0.1.5/tokio/runtime/fn.run.html)
 * `PromiseFuture::spawn_local(future)`
 
 And many more! Any [`Executor`](https://docs.rs/futures/0.2.*/futures/executor/trait.Executor.html) should work, since
-`for_each` is a normal [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html).
+`for_each` returns a normal [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html).
 
 That also means that you can use all of the [`FutureExt`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) methods on it as well.
 
@@ -98,10 +98,11 @@ If you need more control, you can use `to_stream` instead:
 let stream = my_state.signal().to_stream();
 ```
 
-This returns a `Stream` of values (starting with the current value of `my_state`, and
+This returns a [`Stream`](https://docs.rs/futures/0.2.*/futures/trait.Stream.html) of values (starting with the current value of `my_state`, and
 then followed by the changes to `my_state`).
 
-You can then use all of the `StreamExt` methods on it, just like with any other `Stream`.
+You can then use all of the [`StreamExt`](https://docs.rs/futures/0.2.*/futures/trait.StreamExt.html) methods on it, just like with any other
+[`Stream`](https://docs.rs/futures/0.2.*/futures/trait.Stream.html).
 
 ----
 
@@ -110,34 +111,34 @@ You might be wondering why you have to call the `signal` method: why can't you j
 
 There's three reasons:
 
-* Because [`FutureExt`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) methods
-  like `for_each` consume their input, that would mean that after calling `for_each` on a
-  `Mutable` you would no longer be able to change the `Mutable`, which defeats the whole point
-  of using `Mutable` in the first place!
+1. Because `SignalExt` methods like `for_each` consume their input, that would mean that after
+   calling `for_each` on a `Mutable` you would no longer be able to change the `Mutable`, which
+   defeats the whole point of using `Mutable` in the first place!
 
-* It is possible to call `signal` multiple times:
+2. It is possible to call `signal` multiple times:
 
-  ```rust
-  let signal1 = my_state.signal();
-  let signal2 = my_state.signal();
-  ```
+   ```rust
+   let signal1 = my_state.signal();
+   let signal2 = my_state.signal();
+   ```
 
-  When the `Mutable` changes, *all* of its signals will change as well. This turns out
-  to be very useful in practice: it's common to put your program's state inside of a
-  `Mutable` (or multiple `Mutable`s) and then share it in various places.
+   When the `Mutable` changes, *all* of its signals will change as well. This turns out
+   to be very useful in practice: it's common to put your program's state inside of a
+   `Mutable` (or multiple `Mutable`s) and then share it in various places throughout your
+   program.
 
-* You cannot be notified when a `Mutable` changes, but you can get/set its current value.
+3. You cannot be notified when a `Mutable` changes, but you can get/set its current value.
 
-  On the other hand, you *can* be notified when a `Signal` changes, but you cannot get/set
-  the current value of the `Signal`.
+   On the other hand, you *can* be notified when a `Signal` changes, but you cannot get/set
+   the current value of the `Signal`.
 
-  This split is necessary both for correctness and performance. Therefore, because of this
-  split, it is necessary to call the `signal` method to "convert" a `Mutable` into a `Signal`.
+   This split is necessary both for correctness and performance. Therefore, because of this
+   split, it is necessary to call the `signal` method to "convert" a `Mutable` into a `Signal`.
 
 ----
 
 It is important to understand that `for_each`, `to_stream`, and other `Signal` methods
-are *lossy*: they might not contain every change.
+are *lossy*: they might skip changes.
 
 That is because they only care about the *most recent value*. So if the value changes
 multiple times in a short time it will only detect the most recent change. Here is an
@@ -153,21 +154,26 @@ like as if it never happened.
 
 This is an intentional design choice: it is necessary for correctness and performance.
 
-In addition, it's not a problem in practice, because a `Signal` is supposed to represent
-a *single value that changes over time*. Just like how `RwLock` does not give you
-access to past values (only the current value), the same is true with `Mutable` and `Signal`.
+This isn't a problem in practice, because a `Signal` is supposed to represent
+a *single value that changes over time*.
 
-So whenever you are using `Signal`, you must *not* rely upon them being updated for every
-change. But you *can* rely upon them always containing the most recent value.
+`RwLock` does not give you access to past values (only the current value), and the same is
+true with `Mutable` and `Signal`.
 
-If you really do need every single intermediate value, then using a `Stream` would be
-the correct choice. In that case you will pay a performance penalty, because it has to
-hold the values in a queue.
+So whenever you are using `Signal`, you must ***not*** rely upon it being updated for every
+change. However, you ***can*** rely upon it always containing the most recent value.
+
+If you really do need every single intermediate value (not just the most recent), then using a
+[`Stream`](https://docs.rs/futures/0.2.*/futures/trait.Stream.html) would be the correct choice.
+In that case you will pay a performance penalty, because it has to hold the values in a queue.
 
 ----
 
-Now that I've fully explained `Mutable`, I can finally explain `Signal`. Just like how
-[`Future`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) and `Stream` support various
+Now that I've fully explained `Mutable`, I can finally explain `Signal`.
+
+Just like how
+[`Future`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) and
+[`Stream`](https://docs.rs/futures/0.2.*/futures/trait.StreamExt.html) support various
 useful methods, `Signal` also contains many useful methods.
 
 The most commonly used method is `map`:
@@ -186,16 +192,22 @@ value of the closure.
 This updating happens *automatically and efficiently*, and it will call the closure at
 most once for each change in `my_state`.
 
+Like I explained earlier, whenever I say "changes" what I really mean is "the current
+value, and then also any changes to the value in the future".
+
 In the above example, `mapped` will always contain the current value of `my_state`, except
-with `1` added to it. So if `my_state` is `10`, then `mapped` will be `11`. If `my_state`
-is `5`, then `mapped` will be `6`, etc.
+with `1` added to it.
 
-Also, like I explained earlier, whenever I say "changes" what I really mean is "the current
-value, and then also any changes in the future".
+So if `my_state` is `10`, then `mapped` will be `11`. If `my_state` is `5`, then `mapped`
+will be `6`, etc.
 
-And it's important to keep in mind that just like all of the `Signal` methods, `map` is
-lossy: it might "skip" values. So you *cannot* rely upon the closure being called for every
-value. But you *can* rely upon it always being called with the most recent value.
+It's important to keep in mind that just like all of the `Signal` methods, `map` is
+lossy: it might skip values.
+
+So you ***cannot*** rely upon the closure being called for every value. But you ***can***
+rely upon it always being called with the most recent value.
+
+----
 
 Because `map` returns a `Signal`, you can chain it with more `Signal` methods:
 
@@ -207,10 +219,7 @@ let mapped2 = mapped.map(|value| value + 1);
 In the above example, `mapped2` contains the same value as `mapped`, except with `1` added
 to it.
 
-Because `mapped` contains the value of `my_state + 1`, that means `mapped2` is the same as
-`my_state.signal().map(|value| value + 2)`
-
-Lastly you can use `for_each` as usual to start listening to the changes:
+Lastly you can use `for_each` as usual to listen for changes:
 
 ```rust
 let future = mapped.for_each(|value| { ... });
@@ -218,8 +227,9 @@ let future = mapped.for_each(|value| { ... });
 
 ----
 
-Another commonly used method is `map2`, except you shouldn't use it directly. Instead,
-there are `map_ref` and `map_mut` macros (which internally use `map2`). Let's take a look:
+Another commonly used method is `map2`, except you shouldn't use it directly.
+
+Instead, there are `map_ref` and `map_mut` macros (which internally use `map2`). Let's take a look:
 
 ```rust
 let mutable1 = Mutable::new(1);
@@ -238,38 +248,55 @@ In the above example, `map_ref` takes two input Signals: `mutable1.signal()` and
 and it returns an output Signal.
 
 It takes the current value of `mutable1.signal()` and puts it into the `value1` variable.
+
 And it takes the current value of `mutable2.signal()` and puts it into the `value2` variable.
+
 Then it runs the `*value1 + *value2` code, and puts the result of that code into the output Signal.
 
 Whenever `mutable1.signal()` or `mutable2.signal()` changes, it will then repeat that process again:
-it puts the current values of the signals into the `value1` and `value2` variables, then it runs the
-`*value1 + *value2` code, and puts the result of that into the output Signal.
+it puts the current values of the input Signals into the `value1` and `value2` variables, then it runs the
+`*value1 + *value2` code, and puts the result of that code into the output Signal.
 
-So the end result is that `mapped` always contains the value of `mutable1 + mutable2`. So in the above
-example, `mapped` will be `3` (because it's `1 + 2`). But let's say that `mutable1` changes:
+So the end result is that `mapped` always contains the value of `mutable1 + mutable2`.
+
+So in the above example, `mapped` will have the value `3` (because it's `1 + 2`).
+
+But let's say that `mutable1` changes...
 
 ```rust
 mutable1.set(5);
 ```
 
-Now `mapped` will be `7` (because it's `5 + 2`). And then if `mutable2` changes...
+...then `mapped` will now have the value `7` (because it's `5 + 2`). And then if `mutable2` changes...
 
 ```rust
 mutable2.set(10);
 ```
 
-...then `mapped` is now `15` (because it's `5 + 10`).
+...then `mapped` will now have the value `15` (because it's `5 + 10`).
+
+If multiple input Signals change at the same time, then it will only update once:
+
+```rust
+mutable1.set(15);
+mutable2.set(20);
+```
+
+In the above example, `mapped` will now have the value `35` (because it's `15 + 20`), and it only updated once
+(***not*** once per input Signal).
 
 You might be wondering why it's called `map_ref`: that's because `value1` and `value2` are *immutable references*
 to the current values of the Signals. That's also why you need to use `*value1` and `*value2` to dereference them.
 
-This is the reason for why they are references: if one of the Signals changes but the other one hasn't, it needs to
-use the old value for the Signal that didn't change. But because that situation might happen multiple times,
-it needs to retain ownership of the value, so it can only give out references.
+Why are they references? Let's say one of the input Signals changes but the other ones haven't changed. In that situation
+it needs to use the old values for the Signals that didn't change. But because that situation might happen multiple times,
+it needs to retain ownership of the values, so it can only give out references.
 
 The only difference between `map_ref` and `map_mut` is that `map_ref` gives immutable references and `map_mut`
-gives mutable references. `map_mut` is slightly slower than `map_ref`, and it's almost never useful to use `map_mut`,
-so I recommend only using `map_ref`.
+gives mutable references.
+
+`map_mut` is slightly slower than `map_ref`, and it's almost never useful to use `map_mut`, so I recommend only
+using `map_ref`.
 
 It's possible to combine more than two Signals:
 
@@ -282,20 +309,23 @@ let mapped = map_ref {
 };
 ```
 
-The `map_ref` and `map_mut` macros allow for an *infinite* number of Signals, there is no limit. However,
-keep in mind that each Signal has a small performance cost. The cost is very small, but it grows linearly
-with the number of Signals. You shouldn't normally worry about it, just don't put thousands of Signals
-into a `map_ref` or `map_mut` (this basically *never* happens in practice).
+The `map_ref` and `map_mut` macros allow for an *infinite* number of Signals, there is no limit.
+
+However, keep in mind that each input Signal in `map_ref` / `map_mut` has a small performance cost.
+The cost is very small, but it grows linearly with the number of input Signals.
+
+You shouldn't normally worry about it, just don't put thousands of input Signals into a `map_ref` or `map_mut`
+(this basically *never* happens in practice).
 
 ----
 
 In addition to `Mutable` and `Signal`, there is also `MutableVec` and `SignalVec`.
 
 As its name suggests, `MutableVec<A>` is very similar to `Mutable<Vec<A>>`, except it's *dramatically*
-more efficient.
+more efficient: rather than being notified with the new `Vec`, instead you are notified with the *difference*
+between the old `Vec` and the new `Vec`.
 
-Rather than being notified when the value changes, instead you are notified with the *difference* between
-the old `Vec` and the new `Vec`. Here is an example:
+Here is an example:
 
 ```rust
 let my_vec = MutableVec::new();
@@ -308,6 +338,7 @@ my_vec.push(1);
 my_vec.insert(0, 2);
 my_vec.remove(0);
 my_vec.pop().unwrap();
+// And a lot more!
 ```
 
 In addition, you can use the `signal_vec` method to convert it into a `SignalVec`, and then you can use the
@@ -316,24 +347,24 @@ In addition, you can use the `signal_vec` method to convert it into a `SignalVec
 ```rust
 let future = my_vec.signal_vec().for_each(|change| {
     match change {
-        VecChange::Replace { values } => { ... }
-        VecChange::InsertAt { index, value } => { ... },
-        VecChange::UpdateAt { index, value } => { ... },
-        VecChange::RemoveAt { index } => { ... },
-        VecChange::Move { old_index, new_index } => { ... },
-        VecChange::Push { value } => { ... },
-        VecChange::Pop {} => { ... },
-        VecChange::Clear {} => { ... },
+        VecDiff::Replace { values } => { ... }
+        VecDiff::InsertAt { index, value } => { ... },
+        VecDiff::UpdateAt { index, value } => { ... },
+        VecDiff::RemoveAt { index } => { ... },
+        VecDiff::Move { old_index, new_index } => { ... },
+        VecDiff::Push { value } => { ... },
+        VecDiff::Pop {} => { ... },
+        VecDiff::Clear {} => { ... },
     }
 });
 ```
 
-Unlike `Signal`, the `for_each` method for `SignalVec` calls the closure with a `VecChange`, which contains
+Unlike `Signal`, the `for_each` method for `SignalVec` calls the closure with a `VecDiff`, which contains
 the difference between the new `Vec` and the old `Vec`.
 
-As an example, if you call `my_vec.push(5)`, then the closure will be called with `VecChange::push { value: 5 }`
+As an example, if you call `my_vec.push(5)`, then the closure will be called with `VecDiff::push { value: 5 }`
 
-Or if you call `my_vec.insert(3, 10)`, then the closure will be called with `VecChange::InsertAt { index: 3, value: 10 }`
+Or if you call `my_vec.insert(3, 10)`, then the closure will be called with `VecDiff::InsertAt { index: 3, value: 10 }`
 
 This allows you to very efficiently update based only on that specific change. For example, if you are automatically saving
 the `MutableVec` to a database whenever it changes, you don't need to save the entire `MutableVec` when it changes, you only
@@ -364,9 +395,9 @@ For example, when calling the `retain` method, it will send out a notification f
 out 5 notifications.
 
 But the notifications are in the reverse order: it sends notifications for the right-most values first, and notifications
-for the left-most values last. In addition, it sends a mixture of `VecChange::Pop` and `VecChange::RemoveAt` as appropriate.
+for the left-most values last. In addition, it sends a mixture of `VecDiff::Pop` and `VecDiff::RemoveAt` as appropriate.
 
-Another example is that `my_vec.remove(index)` might notify with either `VecChange::RemoveAt` or `VecChange::Pop` depending on whether
+Another example is that `my_vec.remove(index)` might notify with either `VecDiff::RemoveAt` or `VecDiff::Pop` depending on whether
 `index` is the last index or not.
 
 The reason this is done is for performance reasons, and you should ***not*** rely upon it: the behavior of exactly which notifications are
@@ -380,29 +411,29 @@ let mut copied_vec = vec![];
 
 let future = my_vec.signal_vec().for_each(move |change| {
     match change {
-        VecChange::Replace { values } => {
+        VecDiff::Replace { values } => {
             *copied_vec = values;
         },
-        VecChange::InsertAt { index, value } => {
+        VecDiff::InsertAt { index, value } => {
             copied_vec.insert(index, value);
         },
-        VecChange::UpdateAt { index, value } => {
+        VecDiff::UpdateAt { index, value } => {
             copied_vec[index] = value;
         },
-        VecChange::RemoveAt { index } => {
+        VecDiff::RemoveAt { index } => {
             copied_vec.remove(index);
         },
-        VecChange::Move { old_index, new_index } => {
+        VecDiff::Move { old_index, new_index } => {
             let value = copied_vec.remove(old_index);
             copied_vec.insert(new_index, value);
         },
-        VecChange::Push { value } => {
+        VecDiff::Push { value } => {
             copied_vec.push(value);
         },
-        VecChange::Pop {} => {
+        VecDiff::Pop {} => {
             copied_vec.pop().unwrap();
         },
-        VecChange::Clear {} => {
+        VecDiff::Clear {} => {
             copied_vec.clear();
         },
     }
@@ -443,7 +474,7 @@ So in the above example, `mapped` is a `SignalVec` with the same values as `my_v
 So if `my_vec` has the values `[1, 2, 3, 4, 5]` then `mapped` has the values `[2, 3, 4, 5, 6]`
 
 This is a ***very*** efficient method: it is guaranteed constant time, regardless of how big the input `SignalVec` is.
-The only exception is when the input `SignalVec` notifies with `VecChange::Replace`, in which case `map` is linear time.
+The only exception is when the input `SignalVec` notifies with `VecDiff::Replace`, in which case `map` is linear time.
 
 ----
 
