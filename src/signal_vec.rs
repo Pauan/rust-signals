@@ -215,6 +215,79 @@ pub trait SignalVecExt: SignalVec {
         }
     }
 
+    /// Creates a `SignalVec` which uses a closure to sort the values.
+    ///
+    /// When the output `SignalVec` is spawned:
+    ///
+    /// 1. It repeatedly calls the closure with two different values from `self`, and the closure
+    ///    must return an [`Ordering`](https://doc.rust-lang.org/std/cmp/enum.Ordering.html),
+    ///    which is used to sort the values. The output `SignalVec` then contains the values in
+    ///    sorted order.
+    ///
+    /// 2. Whenever `self` changes it calls the closure repeatedly, and sorts the
+    ///    output `SignalVec` based upon the [`Ordering`](https://doc.rust-lang.org/std/cmp/enum.Ordering.html).
+    ///
+    /// This method is intentionally very similar to the [`slice::sort_by`](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by)
+    /// method, except it doesn't mutate `self` (it returns a new `SignalVec`).
+    ///
+    /// Just like [`slice::sort_by`](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by), the
+    /// sorting is *stable*: if the closure returns `Ordering::Equal`, then the order will be based upon the
+    /// order in `self`.
+    ///
+    /// The reason why it has the `_cloned` suffix is because it calls [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone)
+    /// on the values from `self`. This is necessary in order to maintain its internal state
+    /// while also simultaneously passing the values to the output `SignalVec`.
+    ///
+    /// You can avoid the cost of cloning by using `.map(Rc::new)` or `.map(Arc::new)` to wrap the values in
+    /// [`Rc`](https://doc.rust-lang.org/std/rc/struct.Rc.html) or [`Arc`](https://doc.rust-lang.org/std/sync/struct.Arc.html),
+    /// like this:
+    ///
+    /// ```rust
+    /// # use futures_signals::signal_vec::{always, SignalVecExt};
+    /// # let input = always(vec![3, 1, 6, 2, 0, 4, 5, 8, 9, 7]);
+    /// use std::rc::Rc;
+    ///
+    /// let sorted = input.map(Rc::new).sort_by_cloned(Ord::cmp);
+    /// ```
+    ///
+    /// However, this heap allocates each individual value, so it should only be done when the cost of cloning
+    /// is expensive. You should benchmark and profile so you know which one is faster for *your* particular program!
+    ///
+    /// # Examples
+    ///
+    /// Sort using the standard [`Ord`](https://doc.rust-lang.org/std/cmp/trait.Ord.html) implementation:
+    ///
+    /// ```rust
+    /// # use futures_signals::signal_vec::{always, SignalVecExt};
+    /// # let input = always(vec![3, 1, 6, 2, 0, 4, 5, 8, 9, 7]);
+    /// let sorted = input.sort_by_cloned(Ord::cmp);
+    /// ```
+    ///
+    /// If `input` has the values `[3, 1, 6, 2, 0, 4, 5, 8, 9, 7]` then `sorted` has the values `[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]`
+    ///
+    /// ----
+    ///
+    /// Sort using a custom function:
+    ///
+    /// ```rust
+    /// # use futures_signals::signal_vec::{always, SignalVecExt};
+    /// # let input = always(vec![3, 1, 6, 2, 0, 4, 5, 8, 9, 7]);
+    /// let sorted = input.sort_by_cloned(|left, right| left.cmp(right).reverse());
+    /// ```
+    ///
+    /// If `input` has the values `[3, 1, 6, 2, 0, 4, 5, 8, 9, 7]` then `sorted` has the values `[9, 8, 7, 6, 5, 4, 3, 2, 1, 0]`
+    ///
+    /// # Performance
+    ///
+    /// It has the same logarithmic performance as [`slice::sort_by`](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by),
+    /// except it's slower because it needs to keep track of extra internal state.
+    ///
+    /// As an example, if `self` has 1,000 values and a new value is inserted, then `sort_by_cloned` will require
+    /// (on average) ~2,010 operations to update its internal state. It does ***not*** call the closure while updating
+    /// its internal state.
+    ///
+    /// That might sound expensive, but each individual operation is ***extremely*** fast, so it's normally not a problem
+    /// unless `self` is ***really*** huge.
     #[inline]
     fn sort_by_cloned<F>(self, compare: F) -> SortByCloned<Self, F>
         where F: FnMut(&Self::Item, &Self::Item) -> Ordering,

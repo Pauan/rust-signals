@@ -485,53 +485,6 @@ let filter_mapped = my_vec.signal_vec()
 
 ----
 
-Another common method is `sort_by_cloned`:
-
-```rust
-let sorted = my_vec.signal_vec().sort_by_cloned(|left, right| left.cmp(right));
-```
-
-The `sort_by_cloned` method takes an input `SignalVec` and a closure, and it returns an output `SignalVec`.
-
-When the output `SignalVec` is spawned:
-
-1. It repeatedly calls the closure with two different values from the input `SignalVec`, and the closure must return an [`Ordering`](https://doc.rust-lang.org/std/cmp/enum.Ordering.html), which is used to sort the values. The output `SignalVec` then contains the values in sorted order.
-
-2. Whenever the input `SignalVec` changes it calls the closure repeatedly, and sorts the
-   output `SignalVec` as appropriate.
-
-So in the above example, `sorted` is a `SignalVec` with the same values as `my_vec`, except sorted by `left.cmp(right)`.
-
-So if `my_vec` has the values `[3, 1, 6, 2, 0, 4, 5, 8, 9, 7]` then `sorted` has the values `[0, 1, 2, 3, 4, 5, 6, 7, 8, 9]`.
-
-This method is intentionally very similar to the [`slice::sort_by`](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by) method,
-except it doesn't mutate the input `SignalVec` (it returns a new `SignalVec`).
-
-Just like [`slice::sort_by`](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by), the sorting is *stable*: if the closure
-returns `Ordering::Equal`, then the order will be based upon the order in the input `SignalVec`.
-
-The `sort_by_cloned` method has the same logarithmic performance as [`slice::sort_by`](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by),
-except it's slower because it needs to keep track of extra internal state.
-
-As an example, if you insert a value into a `SignalVec` which has 1,000 values, then `sort_by_cloned` will take on average ~2,010
-operations to update its internal state.
-
-The reason why it has the `_cloned` suffix is because it calls [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone)
-on the values from the input `SignalVec`. This is necessary in order to maintain its internal state while also simultaneously passing the
-values to the output `SignalVec`.
-
-You can avoid the cost of cloning by wrapping the values in [`Rc`](https://doc.rust-lang.org/std/rc/struct.Rc.html) or [`Arc`](https://doc.rust-lang.org/std/sync/struct.Arc.html), like this:
-
-```rust
-let sorted = my_vec.signal_vec()
-    .map(Rc::new)
-    .sort_by_cloned(|left, right| left.cmp(right));
-```
-
-However, this heap allocates each individual value, so it should only be done when the cost of cloning is expensive. You should benchmark and profile so you know which one is faster for *your* particular program!
-
-----
-
 And that's the end of the tutorial! We didn't cover every method, but we covered enough for you to get started.
 
 You can look at the documentation for information on every method (there's a lot of useful stuff in there!).
