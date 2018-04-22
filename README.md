@@ -569,6 +569,6 @@ However, this heap allocates each individual value, so it should only be done wh
 
 ----
 
-And that's it for the tutorial! We didn't cover every method, but we covered enough for you to get started.
+And that's the end of the tutorial! We didn't cover every method, but we covered enough for you to get started.
 
 You can look at the documentation for information on every method (there's a lot of useful stuff in there!).
