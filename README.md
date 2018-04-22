@@ -62,7 +62,7 @@ efficiently notified whenever the `Mutable` changes:
 
 ```rust
 let future = my_state.signal().for_each(|value| {
-    // This code is run for the initial value for my_state, and also for each change in my_state
+    // This code is run for the current value of my_state, and also every time my_state changes
     println!("{}", value);
     Ok(())
 });
@@ -141,7 +141,7 @@ There's three reasons:
 
 ----
 
-It is important to understand that `for_each`, `to_stream`, and all other `Signal` methods
+It is important to understand that `for_each`, `to_stream`, and *all* other `Signal` methods
 are *lossy*: they might skip changes.
 
 That is because they only care about the *most recent value*. So if the value changes
@@ -165,8 +165,8 @@ values.
 That might sound like a problem, but it's actually not a problem at all: it ***is*** guaranteed that it
 will be updated with the most recent value, it is *only* intermediate values that aren't guaranteed.
 
-As an analogy, `RwLock` does not give you access to past values (only the current value), and the
-same is true with `Mutable` and `Signal`.
+This is similar to `RwLock`, which does not give you access to past values (only the current value),
+and the same is true with `Mutable` and `Signal`.
 
 If you really *do* need all intermediate values (not just the most recent), then using a
 [`Stream`](https://docs.rs/futures/0.2.*/futures/trait.Stream.html) would be a great choice.
@@ -200,7 +200,7 @@ After the output Signal is spawned:
 
    This happens automatically and efficiently.
 
-It will call the closure at most once for each change in `my_state`.
+It will call the closure at most once for each value in `my_state`.
 
 In the above example, `mapped` will always contain the current value of `my_state`, except
 with `1` added to it.
@@ -316,7 +316,7 @@ let mapped = map_ref {
 };
 ```
 
-So because it gives references, you can now manually call [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) (or any other `&self` method) only when you need to. This improves performance.
+So because it gives references, you can now manually call [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) (or any other `&self` method) *only* when you need to. This improves performance.
 
 The only difference between `map_ref` and `map_mut` is that `map_ref` gives immutable references and `map_mut`
 gives mutable references.
@@ -377,7 +377,7 @@ When that `Future` is spawned:
 
 3. Whenever the `SignalVec` changes, it calls the closure with the `VecDiff` for the change.
 
-Unlike `Signal`, the `for_each` method for `SignalVec` calls the closure with a `VecDiff`, which contains
+Unlike `Signal::for_each`, the `SignalVec::for_each` method calls the closure with a `VecDiff`, which contains
 the difference between the new `Vec` and the old `Vec`.
 
 As an example, if you call `my_vec.push(5)`, then the closure will be called with `VecDiff::Push { value: 5 }`
@@ -413,7 +413,7 @@ my_vec.retain(|_| { true });
 ```
 
 The `MutableVec::retain` method is the same as [`Vec::retain`](https://doc.rust-lang.org/std/vec/struct.Vec.html#method.retain):
-it calls the `|_| { true }` closure with each value in the `MutableVec`, and if the closure returns `false` it then removes the
+it calls the closure with each value in the `MutableVec`, and if the closure returns `false` it then removes that
 value from the `MutableVec`.
 
 But in the above example, it never returns `false`, so it never removes anything, so it doesn't notify.
@@ -423,8 +423,8 @@ Also, even though it's guaranteed to send a notification for each change, the no
 For example, when calling the `retain` method, it will send out a notification for each change, so if `retain` removes 5 values it will send
 out 5 notifications.
 
-But the notifications are in the reverse order: it sends notifications for the right-most values first, and notifications
-for the left-most values last. In addition, it sends a mixture of `VecDiff::Pop` and `VecDiff::RemoveAt`.
+But, contrary to what you might expect, the notifications are in the reverse order: it sends notifications for the right-most values
+first, and notifications for the left-most values last. In addition, it sends a mixture of `VecDiff::Pop` and `VecDiff::RemoveAt`.
 
 Another example is that `my_vec.remove(index)` might notify with either `VecDiff::RemoveAt` or `VecDiff::Pop` depending on whether
 `index` is the last index or not.
@@ -469,7 +469,9 @@ let future = my_vec.signal_vec().for_each(move |change| {
 });
 ```
 
-In the above example, `copied_vec` is guaranteed to have exactly the same values as `my_vec`.
+In the above example, `copied_vec` is *always* guaranteed to have exactly the same values as `my_vec`, in the same order as `my_vec`.
+
+But even though the *end result* is guaranteed to be the same, the order of the individual changes is an unspecified implementation detail.
 
 ----
 
@@ -504,9 +506,11 @@ So in the above example, `mapped` is a `SignalVec` with the same values as `my_v
 So if `my_vec` has the values `[1, 2, 3, 4, 5]` then `mapped` has the values `[2, 3, 4, 5, 6]`
 
 This is an ***extremely*** efficient method: it is *guaranteed* constant time, regardless of how big the input `SignalVec` is.
-The only exception is when the input `SignalVec` notifies with `VecDiff::Replace`, in which case `map` is linear time.
 
-In addition, it doesn't need to maintain any extra internal state.
+In addition, it does not do any heap allocation, and it doesn't need to maintain any extra internal state.
+
+The only exception is when the input `SignalVec` notifies with `VecDiff::Replace`, in which case `map` is linear time
+(and it heap allocates a single `Vec`).
 
 ----
 
