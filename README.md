@@ -67,17 +67,12 @@ let future = my_state.signal().for_each(|value| {
 });
 ```
 
-In this case we are using the `for_each` method to be notified whenever `my_state` changes.
-
-When I say "changes", what I really mean is "the current value, and also any changes to
-the value in the future".
-
-To explain in more detail:
+This is how the `for_each` method works:
 
 1. The `for_each` method returns a new [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html).
 
-2. When that [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html) is spawned it will *immediately* call the `|value| { ... }` closure with the *current value* of
-`my_state` (which in this case is `10`).
+2. When that [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html) is spawned it will *immediately*
+   call the `|value| { ... }` closure with the *current value* of `my_state` (which in this case is `10`).
 
 3. Then whenever `my_state` changes (such as with `my_state.set(...)`) it will call the closure again with the new value.
 
@@ -190,21 +185,23 @@ let mapped = my_state.signal().map(|value| value + 1);
 
 The `map` method takes an input Signal and a closure, and it returns an output Signal.
 
-Whenever the input Signal changes, it calls the closure with the current value of the
-input Signal, and then it puts the return value of the closure into the output Signal.
+After the output Signal is spawned:
+
+1. It calls the closure with the current value of the input Signal.
+
+2. Then it puts the return value of the closure into the output Signal.
+
+3. Whenever the input Signal changes it repeats the above steps.
+
+   This happens automatically and efficiently.
 
 It will call the closure at most once for each change in `my_state`.
-
-Like I explained earlier, when I say "changes" what I really mean is "the current
-value, and also any changes to the value in the future".
 
 In the above example, `mapped` will always contain the current value of `my_state`, except
 with `1` added to it.
 
 So if `my_state` has the value `10`, then `mapped` will have the value `11`. If `my_state`
 has the value `5`, then `mapped` will have the value `6`, etc.
-
-It *automatically and efficiently* keeps `mapped` in sync with `my_state` whenever it changes.
 
 Just like *all* of the `Signal` methods, `map` is lossy: it might skip values.
 So you ***cannot*** rely upon the closure being called for every intermediate value.
@@ -238,15 +235,15 @@ let mapped = map_ref {
 In the above example, `map_ref` takes two input Signals: `mutable1.signal()` and `mutable2.signal()`,
 and it returns an output Signal.
 
-It takes the current value of `mutable1.signal()` and puts it into the `value1` variable.
+After the output Signal is spawned:
 
-And it takes the current value of `mutable2.signal()` and puts it into the `value2` variable.
+1. It takes the current value of `mutable1.signal()` and puts it into the `value1` variable.
 
-Then it runs the `*value1 + *value2` code, and puts the result of that code into the output Signal.
+2. It takes the current value of `mutable2.signal()` and puts it into the `value2` variable.
 
-Whenever `mutable1.signal()` or `mutable2.signal()` changes, it will then repeat that process again:
-it puts the current values of the input Signals into the `value1` and `value2` variables, then it runs the
-`*value1 + *value2` code, and then it puts the result of that code into the output Signal.
+3. Then it runs the `*value1 + *value2` code, and puts the result of that code into the output Signal.
+
+4. Whenever `mutable1.signal()` or `mutable2.signal()` changes it repeats the above steps.
 
 So the end result is that `mapped` always contains the value of `mutable1 + mutable2`.
 
@@ -364,6 +361,17 @@ let future = my_vec.signal_vec().for_each(|change| {
 });
 ```
 
+Just like `Signal::for_each`, the `SignalVec::for_each` method returns a `Future`.
+
+When that `Future` is spawned:
+
+1. If the `SignalVec` already has values, it immediately calls the closure with `VecDiff::Replace`,
+   which contains the current values for the `SignalVec`.
+
+2. If the `SignalVec` doesn't have any values, it doesn't call the closure.
+
+3. Whenever the `SignalVec` changes, it calls the closure with the `VecDiff` for the change.
+
 Unlike `Signal`, the `for_each` method for `SignalVec` calls the closure with a `VecDiff`, which contains
 the difference between the new `Vec` and the old `Vec`.
 
@@ -476,13 +484,15 @@ let mapped = my_vec.signal_vec().map(|value| value + 1);
 
 The `map` method takes in an input `SignalVec` and a closure, and it returns an output `SignalVec`.
 
-It calls the closure for each value in the input `SignalVec`, and the output `SignalVec` contains the
-same values as the input `SignalVec`, except each value is replaced with the return value of the closure.
+When the output `SignalVec` is spawned:
 
-It maintains the same order as the input `SignalVec`, and it is guaranteed that the closure will be called
-exactly once for each value in the input `SignalVec`.
+1. It calls the closure once for each value in the input `SignalVec`. The return values from the closure are
+   put into the output `SignalVec` in the same order as the input `SignalVec`.
 
-When the input `SignalVec` changes, it automatically updates the output `SignalVec` as needed.
+2. Whenever the input `SignalVec` changes it calls the closure for the new values, and updates the
+   output `SignalVec` as appropriate, maintaining the same order as the input `SignalVec`.
+
+It is guaranteed that the closure will be called exactly once for each value in the input `SignalVec`.
 
 So in the above example, `mapped` is a `SignalVec` with the same values as `my_vec`, except with `1` added to them.
 
@@ -503,13 +513,15 @@ let filtered = my_vec.signal_vec().filter(|value| value < 5);
 
 The `filter` method takes an input `SignalVec` and a closure, and it returns an output `SignalVec`.
 
-It calls the closure for each value in the input `SignalVec`, and the output `SignalVec` only contains the
-values where the closure returns `true`.
+When the output `SignalVec` is spawned:
 
-It maintains the same order as the input `SignalVec`, and it is guaranteed that the closure will be called
-exactly once for each value in the input `SignalVec`.
+1. It calls the closure once for each value in the input `SignalVec`. The output `SignalVec` contains all
+   of the values where the closure returned `true`, in the same order as the input `SignalVec`.
 
-When the input `SignalVec` changes, it automatically updates the output `SignalVec` as needed.
+2. Whenever the input `SignalVec` changes it calls the closure for the new values, and filters the
+   output `SignalVec` as appropriate, maintaining the same order as the input `SignalVec`.
+
+It is guaranteed that the closure will be called exactly once for each value in the input `SignalVec`.
 
 So in the above example, `filtered` is a `SignalVec` with the same values as `my_vec`, excluding the values that are greater than `4`.
 
@@ -533,9 +545,12 @@ let sorted = my_vec.signal_vec().sort_by_cloned(|left, right| left.cmp(right));
 
 The `sort_by_cloned` method takes an input `SignalVec` and a closure, and it returns an output `SignalVec`.
 
-It calls the closure with two values from the input `SignalVec`, and the closure must return an [`Ordering`](https://doc.rust-lang.org/std/cmp/enum.Ordering.html), which is used to sort the values. The output `SignalVec` then contains the sorted values.
+When the output `SignalVec` is spawned:
 
-It automatically maintains the sort order even when the input `SignalVec` changes.
+1. It repeatedly calls the closure with two different values from the input `SignalVec`, and the closure must return an [`Ordering`](https://doc.rust-lang.org/std/cmp/enum.Ordering.html), which is used to sort the values. The output `SignalVec` then contains the values in sorted order.
+
+2. Whenever the input `SignalVec` changes it calls the closure repeatedly, and sorts the
+   output `SignalVec` as appropriate.
 
 So in the above example, `sorted` is a `SignalVec` with the same values as `my_vec`, except sorted by `left.cmp(right)`.
 
