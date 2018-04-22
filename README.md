@@ -62,6 +62,7 @@ efficiently notified whenever the `Mutable` changes:
 
 ```rust
 let future = my_state.signal().for_each(|value| {
+    // This code is run for the initial value for my_state, and also for each change in my_state
     println!("{}", value);
     Ok(())
 });
@@ -76,15 +77,19 @@ This is how the `for_each` method works:
 
 3. Then whenever `my_state` changes (such as with `my_state.set(...)`) it will call the closure again with the new value.
 
-Because the `for_each` method returns a [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html), you need to spawn it. There are
-many ways of doing that:
+Just like [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html) and [`Stream`](https://docs.rs/futures/0.2.*/futures/trait.Stream.html),
+when you create a `Signal` it does not actually do anything until it is spawned.
+
+In order to spawn a `Signal` you first use the `for_each` method (as shown above) to convert it into a `Future`, and then you spawn that `Future`.
+
+There are many ways of spawning a `Future`:
 
 * [`block_on(future)`](https://docs.rs/futures/0.2.*/futures/executor/fn.block_on.html)
 * [`tokio::run(future)`](https://docs.rs/tokio/0.1.5/tokio/runtime/fn.run.html)
 * `PromiseFuture::spawn_local(future)`
 
-And many more! Any [`Executor`](https://docs.rs/futures/0.2.*/futures/executor/trait.Executor.html) should work, since
-`for_each` returns a normal [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html).
+And many more! Since `for_each` returns a normal [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html),
+any [`Executor`](https://docs.rs/futures/0.2.*/futures/executor/trait.Executor.html) should work.
 
 That also means that you can use all of the [`FutureExt`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) methods on it as well.
 
