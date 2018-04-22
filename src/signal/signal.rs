@@ -49,6 +49,60 @@ pub trait SignalExt: Signal {
         }
     }
 
+    /// Creates a `Signal` which uses a closure to transform the value.
+    ///
+    /// When the output `Signal` is spawned:
+    ///
+    /// 1. It calls the closure with the current value of `self`.
+    ///
+    /// 2. Then it puts the return value of the closure into the output `Signal`.
+    ///
+    /// 3. Whenever `self` changes it repeats the above steps.
+    ///
+    ///    This happens automatically and efficiently.
+    ///
+    /// It will call the closure at most once for each change in `self`.
+    ///
+    /// Like *all* of the `Signal` methods, `map` might skip intermediate changes.
+    /// So you ***cannot*** rely upon the closure being called for every intermediate change.
+    /// But you ***can*** rely upon it always being called with the most recent change.
+    ///
+    /// # Examples
+    ///
+    /// Add `1` to the value:
+    ///
+    /// ```rust
+    /// # use futures_signals::signal::{always, SignalExt};
+    /// # let input = always(1);
+    /// let mapped = input.map(|value| value + 1);
+    /// ```
+    ///
+    /// `mapped` will always contain the current value of `input`, except with `1` added to it.
+    ///
+    /// If `input` has the value `10`, then `mapped` will have the value `11`.
+    ///
+    /// If `input` has the value `5`, then `mapped` will have the value `6`, etc.
+    ///
+    /// ----
+    ///
+    /// Formatting to a `String`:
+    ///
+    /// ```rust
+    /// # use futures_signals::signal::{always, SignalExt};
+    /// # let input = always(1);
+    /// let mapped = input.map(|value| format!("{}", value));
+    /// ```
+    ///
+    /// `mapped` will always contain the current value of `input`, except formatted as a `String`.
+    ///
+    /// If `input` has the value `10`, then `mapped` will have the value `"10"`.
+    ///
+    /// If `input` has the value `5`, then `mapped` will have the value `"5"`, etc.
+    ///
+    /// # Performance
+    ///
+    /// This is ***extremely*** efficient: it is *guaranteed* constant time, and it does not do
+    /// any heap allocation.
     #[inline]
     fn map<A, B>(self, callback: B) -> Map<Self, B>
         where B: FnMut(Self::Item) -> A,

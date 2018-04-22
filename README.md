@@ -3,7 +3,7 @@
 This is a Rust crate that provides zero-cost Signals which are built on top of the
 [futures](https://crates.io/crates/futures) crate.
 
-Hold on, zero-cost? Yeah, that's right: if you don't use a feature you don't pay any performance penalty,
+Hold on, zero-cost? Yup, that's right: if you don't use a feature you don't pay any performance penalty,
 and the features that you *do* use are as fast as possible. Signals are *very* efficient.
 
 What is a Signal? It is a *value that changes over time*, and you can be efficiently
@@ -181,36 +181,7 @@ Just like how
 [`Stream`](https://docs.rs/futures/0.2.*/futures/trait.StreamExt.html) support various
 useful methods, `Signal` also contains many useful methods.
 
-The most commonly used method is `map`:
 
-```rust
-// This contains the value of `my_state + 1`
-let mapped = my_state.signal().map(|value| value + 1);
-```
-
-The `map` method takes an input Signal and a closure, and it returns an output Signal.
-
-After the output Signal is spawned:
-
-1. It calls the closure with the current value of the input Signal.
-
-2. Then it puts the return value of the closure into the output Signal.
-
-3. Whenever the input Signal changes it repeats the above steps.
-
-   This happens automatically and efficiently.
-
-It will call the closure at most once for each value in `my_state`.
-
-In the above example, `mapped` will always contain the current value of `my_state`, except
-with `1` added to it.
-
-So if `my_state` has the value `10`, then `mapped` will have the value `11`. If `my_state`
-has the value `5`, then `mapped` will have the value `6`, etc.
-
-Just like *all* of the `Signal` methods, `map` is lossy: it might skip values.
-So you ***cannot*** rely upon the closure being called for every intermediate value.
-But you ***can*** rely upon it always being called with the most recent value.
 
 Because `map` returns a `Signal`, you can chain it with more `Signal` methods:
 
