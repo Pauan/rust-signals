@@ -1,7 +1,10 @@
 # What is this?
 
-This Rust crate provides zero-cost Signals which are built on top of the
+This is a Rust crate that provides zero-cost Signals which are built on top of the
 [futures](https://crates.io/crates/futures) crate.
+
+Hold on, zero-cost? Yeah, that's right: if you don't use a feature you don't pay any performance penalty,
+and the features that you *do* use are as fast as possible. Signals are *very* efficient.
 
 What is a Signal? It is a *value that changes over time*, and you can be efficiently
 notified whenever its value changes.
@@ -76,7 +79,7 @@ To explain in more detail:
 2. When that [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html) is spawned it will *immediately* call the `|value| { ... }` closure with the *current value* of
 `my_state` (which in this case is `10`).
 
-3. Then whenever `my_state` changes (e.g. with `my_state.set(...)`) it will call the closure again with the new value.
+3. Then whenever `my_state` changes (such as with `my_state.set(...)`) it will call the closure again with the new value.
 
 Because the `for_each` method returns a [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html), you need to spawn it. There are
 many ways of doing that:
@@ -122,9 +125,10 @@ There's three reasons:
    let signal2 = my_state.signal();
    ```
 
-   When the `Mutable` changes, *all* of its signals will change as well. This turns out
-   to be very useful in practice: it's common to put your program's state inside of a
-   `Mutable` (or multiple `Mutable`s) and then share it in various places throughout your
+   When the `Mutable` changes, *all* of its Signals will change as well.
+
+   This turns out to be very useful in practice: it's common to put your program's state inside
+   of a `Mutable` (or multiple `Mutable`s) and then share it in various places throughout your
    program.
 
 3. You cannot be notified when a `Mutable` changes, but you can get/set its current value.
@@ -137,12 +141,13 @@ There's three reasons:
 
 ----
 
-It is important to understand that `for_each`, `to_stream`, and other `Signal` methods
+It is important to understand that `for_each`, `to_stream`, and all other `Signal` methods
 are *lossy*: they might skip changes.
 
 That is because they only care about the *most recent value*. So if the value changes
-multiple times in a short time it will only detect the most recent change. Here is an
-example:
+multiple times in a short period of time it will only detect the most recent change.
+
+Here is an example:
 
 ```rust
 my_state.set(2);
@@ -157,15 +162,15 @@ This is an intentional design choice: it is necessary for correctness and perfor
 This isn't a problem in practice, because a `Signal` is supposed to represent
 a *single value that changes over time*.
 
-`RwLock` does not give you access to past values (only the current value), and the same is
-true with `Mutable` and `Signal`.
+As an analogy, `RwLock` does not give you access to past values (only the current value), and the
+same is true with `Mutable` and `Signal`.
 
 So whenever you are using `Signal`, you must ***not*** rely upon it being updated for every
 change. However, you ***can*** rely upon it always containing the most recent value.
 
-If you really do need every single intermediate value (not just the most recent), then using a
-[`Stream`](https://docs.rs/futures/0.2.*/futures/trait.Stream.html) would be the correct choice.
-In that case you will pay a performance penalty, because it has to hold the values in a queue.
+If you really *do* need every single intermediate value (not just the most recent), then using a
+[`Stream`](https://docs.rs/futures/0.2.*/futures/trait.Stream.html) would be a great choice.
+In that case you will pay a small performance penalty, because it has to hold the values in a queue.
 
 ----
 
@@ -183,11 +188,10 @@ The most commonly used method is `map`:
 let mapped = my_state.signal().map(|value| value + 1);
 ```
 
-The `map` method takes an input `Signal` and a closure, and it returns an output `Signal`.
+The `map` method takes an input Signal and a closure, and it returns an output Signal.
 
-Whenever the input `Signal` changes, it calls the closure with the current value of the
-input `Signal`, and then it updates the value of the output `Signal` with the return
-value of the closure.
+Whenever the input Signal changes, it calls the closure with the current value of the
+input Signal, and then it puts the return value of the closure into the output Signal.
 
 This updating happens *automatically and efficiently*, and it will call the closure at
 most once for each change in `my_state`.
@@ -198,38 +202,34 @@ value, and then also any changes to the value in the future".
 In the above example, `mapped` will always contain the current value of `my_state`, except
 with `1` added to it.
 
-So if `my_state` is `10`, then `mapped` will be `11`. If `my_state` is `5`, then `mapped`
-will be `6`, etc.
+So if `my_state` has the value `10`, then `mapped` will have the value `11`. If `my_state`
+has the value `5`, then `mapped` will have the value `6`, etc.
 
 It's important to keep in mind that just like all of the `Signal` methods, `map` is
-lossy: it might skip values.
-
-So you ***cannot*** rely upon the closure being called for every value. But you ***can***
-rely upon it always being called with the most recent value.
-
-----
+lossy: it might skip values. So you ***cannot*** rely upon the closure being called for every
+value. But you ***can*** rely upon it always being called with the most recent value.
 
 Because `map` returns a `Signal`, you can chain it with more `Signal` methods:
 
 ```rust
-// This contains the value of `mapped + 1`, which is the same as `my_state + 2`
-let mapped2 = mapped.map(|value| value + 1);
+// This contains the value of `mapped + 5`, which is the same as `my_state + 6`
+let mapped2 = mapped.map(|value| value + 5);
 ```
 
-In the above example, `mapped2` contains the same value as `mapped`, except with `1` added
+In the above example, `mapped2` contains the same value as `mapped`, except with `5` added
 to it.
 
 Lastly you can use `for_each` as usual to listen for changes:
 
 ```rust
-let future = mapped.for_each(|value| { ... });
+let future = mapped2.for_each(|value| { ... });
 ```
 
 ----
 
-Another commonly used method is `map2`, except you shouldn't use it directly.
+There are also the `map_ref` and `map_mut` macros, which can be used to *combine* multiple Signals together.
 
-Instead, there are `map_ref` and `map_mut` macros (which internally use `map2`). Let's take a look:
+Let's take a look:
 
 ```rust
 let mutable1 = Mutable::new(1);
@@ -241,8 +241,6 @@ let mapped = map_ref {
     *value1 + *value2
 };
 ```
-
-The purpose of `map_ref` and `map_mut` is to *combine* multiple Signals together.
 
 In the above example, `map_ref` takes two input Signals: `mutable1.signal()` and `mutable2.signal()`,
 and it returns an output Signal.
@@ -374,7 +372,7 @@ time, no matter how big the `MutableVec` is.
 
 ----
 
-Unlike `Mutable` and `Signal`, it is guaranteed that the `SignalVec` will never skip a change, and the changes will always
+Unlike `Mutable` and `Signal`, it is guaranteed that the `SignalVec` will never skip a change. In addition, the changes will always
 be in the correct order.
 
 This is because it is notifying with the difference between the old `Vec` and the new `Vec`, so it is very important that
@@ -463,9 +461,7 @@ let filter_mapped = my_vec.signal_vec()
     .map(|value| value + 10);
 ```
 
-----
-
-A very common `SignalVec` method is `map`:
+The most common `SignalVec` method is `map`:
 
 ```rust
 let mapped = my_vec.signal_vec().map(|value| value + 1);
