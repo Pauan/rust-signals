@@ -227,9 +227,7 @@ let future = mapped2.for_each(|value| { ... });
 
 ----
 
-There are also the `map_ref` and `map_mut` macros, which can be used to *combine* multiple Signals together.
-
-Let's take a look:
+There are also the `map_ref` and `map_mut` macros, which can be used to *combine* multiple Signals together:
 
 ```rust
 let mutable1 = Mutable::new(1);
@@ -280,21 +278,8 @@ mutable1.set(15);
 mutable2.set(20);
 ```
 
-In the above example, `mapped` will now have the value `35` (because it's `15 + 20`), and it only updated once
+In the above example, `mapped` will now have the value `35` (because it's `15 + 20`), and it only updates once
 (***not*** once per input Signal).
-
-You might be wondering why it's called `map_ref`: that's because `value1` and `value2` are *immutable references*
-to the current values of the Signals. That's also why you need to use `*value1` and `*value2` to dereference them.
-
-Why are they references? Let's say one of the input Signals changes but the other ones haven't changed. In that situation
-it needs to use the old values for the Signals that didn't change. But because that situation might happen multiple times,
-it needs to retain ownership of the values, so it can only give out references.
-
-The only difference between `map_ref` and `map_mut` is that `map_ref` gives immutable references and `map_mut`
-gives mutable references.
-
-`map_mut` is slightly slower than `map_ref`, and it's almost never useful to use `map_mut`, so I recommend only
-using `map_ref`.
 
 It's possible to combine more than two Signals:
 
@@ -314,6 +299,33 @@ The cost is very small, but it grows linearly with the number of input Signals.
 
 You shouldn't normally worry about it, just don't put thousands of input Signals into a `map_ref` or `map_mut`
 (this basically *never* happens in practice).
+
+You might be wondering why it's called `map_ref`: that's because `value1` and `value2` are *immutable references*
+to the current values of the Signals. That's also why you need to use `*value1` and `*value2` to dereference them.
+
+Why does it give references? Let's say one of the input Signals changes but the other ones haven't changed. In that situation
+it needs to use the old values for the Signals that didn't change. But because that situation might happen multiple times,
+it needs to retain ownership of the values, so it can only give out references.
+
+Rather than giving out references, I could instead have designed it to always [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) the values, but that's expensive.
+
+And because [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) only requires an immutable reference, it's easy to call [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) yourself when you need to:
+
+```rust
+let mapped = map_ref {
+    let value1 = mutable1.signal(),
+    let value2 = mutable2.signal() =>
+    value1.clone() + value2.clone()
+};
+```
+
+So rather than always using [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone), it instead gives you references, so you can manually call [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) (or any other `&self` method) only when you need to. This improves performance.
+
+The only difference between `map_ref` and `map_mut` is that `map_ref` gives immutable references and `map_mut`
+gives mutable references.
+
+`map_mut` is slightly slower than `map_ref`, and it's almost never useful to use `map_mut`, so I recommend only
+using `map_ref`.
 
 ----
 
