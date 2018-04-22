@@ -188,11 +188,6 @@ pub trait SignalExt: Signal {
             value: value,
         }
     }
-
-    #[inline]
-    fn as_mut(&mut self) -> &mut Self where Self: Sized {
-        self
-    }
 }
 
 // TODO why is this ?Sized
