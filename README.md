@@ -1,3 +1,5 @@
+# What is this?
+
 This crate provides zero-cost Signals which are built on top of the
 [futures](https://crates.io/crates/futures) crate.
 
@@ -15,6 +17,11 @@ This is useful in many situations:
   program's state changes.
 
 * And many more situations!
+
+# Tutorial
+
+This tutorial is long, but it's intended to explain everything you need to know in order to use Signals.
+It is highly recommended to read through all of it.
 
 Before I can fully explain Signals, first I have to explain `Mutable`:
 
