@@ -283,7 +283,7 @@ As its name suggests, `MutableVec<A>` is very similar to `Mutable<Vec<A>>`, exce
 more efficient.
 
 Rather than being notified when the value changes, instead you are notified with the *difference* between
-the change and the old value. Here is an example:
+the old `Vec` and the new `Vec`. Here is an example:
 
 ```rust
 let my_vec = MutableVec::new();
@@ -316,22 +316,24 @@ let future = my_vec.signal_vec().for_each(|change| {
 });
 ```
 
-Unlike `Signal`, the `for_each` method for `SignalVec` calls the closure with a `VecChange`, which represents
-the difference between a single change and the old value.
+Unlike `Signal`, the `for_each` method for `SignalVec` calls the closure with a `VecChange`, which contains
+the difference between the new `Vec` and the old `Vec`.
 
-As an example, if you call `my_vec.push(5)`, then the closure will be called with `VecChange::push { value: 5 }`.
+As an example, if you call `my_vec.push(5)`, then the closure will be called with `VecChange::push { value: 5 }`
 
-Or if you call `my_vec.insert(3, 10)`, then the closure will be called with `VecChange::InsertAt { index: 3, value: 10 }`.
+Or if you call `my_vec.insert(3, 10)`, then the closure will be called with `VecChange::InsertAt { index: 3, value: 10 }`
 
 This allows you to very efficiently update based only on that specific change. For example, if you are automatically saving
-the `MutableVec` to a database whenever it changes, you don't need to save the entire `MutableVec` on every change, you only
+the `MutableVec` to a database whenever it changes, you don't need to save the entire `MutableVec` when it changes, you only
 need to save the individual change. This means that updates are often constant time, no matter how big the `MutableVec` is.
 
 ----
 
 Unlike `Mutable` and `Signal`, it is guaranteed that the closure will be called with every single change: it will never "skip"
-a change, and the changes will always be in the correct order. This is because it is notifying with the *difference* between the
-old `Vec` and the new `Vec`, so it is very important that it is in the correct order, and that it doesn't skip anything!
+a change, and the changes will always be in the correct order.
+
+This is because it is notifying with the difference between the old `Vec` and the new `Vec`, so it is very important that
+it is in the correct order, and that it doesn't skip anything!
 
 However, if you call a `MutableVec` method which doesn't *actually* make any changes, then it will not notify at all:
 
@@ -344,19 +346,21 @@ and if the closure returns `false` it then removes the value from the `MutableVe
 
 But in the above example, it never returns `false`, so it never removes anything, so it doesn't notify.
 
-Also, even though it's guaranteed to send a notification for changes, the notification might be different than what you expect.
+Also, even though it's guaranteed to send a notification for each change, the notification might be different than what you expect.
 
-For example, when calling the `retain` method, it will send out a notification for each change, so if it removes 5 values it will send
-out 5 notifications. But the notifications are in the reverse order: it sends notifications for the right-most values first, and notifications
+For example, when calling the `retain` method, it will send out a notification for each change, so if `retain` removes 5 values it will send
+out 5 notifications.
+
+But the notifications are in the reverse order: it sends notifications for the right-most values first, and notifications
 for the left-most values last. In addition, it sends a mixture of `VecChange::Pop` and `VecChange::RemoveAt` as appropriate.
 
 Another example is that `my_vec.remove(index)` might notify with either `VecChange::RemoveAt` or `VecChange::Pop` depending on whether
 `index` is the last index or not.
 
-The reason this is done is for performance reasons, and you should *not* rely upon it: the behavior of exactly which notifications are
+The reason this is done is for performance reasons, and you should ***not*** rely upon it: the behavior of exactly which notifications are
 sent is an implementation detail.
 
-The only thing you can rely upon is that if you apply the notifications in the same order they are sent, it will exactly recreate the
+The only thing you can rely upon is that if you apply the notifications in the same order they are received, it will exactly recreate the
 `SignalVec`:
 
 ```rust
@@ -384,7 +388,7 @@ let future = my_vec.signal_vec().for_each(move |change| {
             copied_vec.push(value);
         },
         VecChange::Pop {} => {
-            copied_vec.pop();
+            copied_vec.pop().unwrap();
         },
         VecChange::Clear {} => {
             copied_vec.clear();
@@ -397,7 +401,17 @@ In the above example, `copied_vec` is guaranteed to have exactly the same values
 
 ----
 
-Just like `Signal`, `SignalVec` has a lot of useful methods. A very common one is `map`:
+Just like `Signal`, `SignalVec` has a lot of useful methods, and most of them return a `SignalVec` so they can be chained:
+
+```rust
+let filter_mapped = my_vec.signal_vec()
+    .filter(|value| value < 5)
+    .map(|value| value + 10);
+```
+
+----
+
+A very common `SignalVec` method is `map`:
 
 ```rust
 let mapped = my_vec.signal_vec().map(|value| value + 1);
@@ -405,14 +419,19 @@ let mapped = my_vec.signal_vec().map(|value| value + 1);
 
 The `map` method takes in an input `SignalVec` and a closure, and it returns an output `SignalVec`.
 
-Whenever the input `SignalVec` inserts a new value (such as with `VecChange::Replace`, `VecChange::InsertAt`,
-`VecChange::UpdateAt`, or `VecChange::Push`), it will call the closure and will use its return value instead.
+It calls the closure for each value in the input `SignalVec`, and the output `SignalVec` contains the
+same values as the input `SignalVec`, except each value is replaced with the return value of the closure.
+
+It is guaranteed that the closure will be called exactly once for each value in the input `SignalVec`.
+
+When the input `SignalVec` changes, it automatically updates the output `SignalVec` as needed.
 
 So in the above example, `mapped` is a `SignalVec` with the same values as `my_vec`, except with `1` added to them.
 
 So if `my_vec` has the values `[1, 2, 3, 4, 5]` then `mapped` has the values `[2, 3, 4, 5, 6]`
 
-This is a ***very*** efficient method: it is always guaranteed constant time, regardless of how big the input `SignalVec` is.
+This is a ***very*** efficient method: it is guaranteed constant time, regardless of how big the input `SignalVec` is.
+The only exception is when the input `SignalVec` notifies with `VecChange::Replace`, in which case `map` is linear time.
 
 ----
 
@@ -427,23 +446,17 @@ The `filter` method takes an input `SignalVec` and a closure, and it returns an 
 It calls the closure for each value in the input `SignalVec`, and the output `SignalVec` only contains the
 values where the closure returns `true`.
 
-It always maintains that property even when the input `SignalVec` changes.
+It is guaranteed that the closure will be called exactly once for each value in the input `SignalVec`.
+
+When the input `SignalVec` changes, it automatically updates the output `SignalVec` as needed.
 
 So in the above example, `filtered` is a `SignalVec` with the same values as `my_vec`, excluding the values that are greater than `4`.
 
 So if `my_vec` has the values `[3, 1, 6, 2, 0, 4, 5, 8, 9, 7]` then `filtered` has the values `[3, 1, 2, 0, 4]`.
 
 The performance is linear with the number of values in the input `SignalVec`. As an example, if you push a value into a `MutableVec`
-which has 1,000 values, `filter` will take roughly 1,000 operations to update its internal state. That might sound
+which has 1,000 values, `filter` will take on average 1,000 operations to update its internal state. That might sound
 expensive, but each individual operation is *very* fast, so it's normally not a problem unless you have a *huge* `SignalVec`.
-
-Just like `SignalExt`, the `SignalVecExt` methods return a new `SignalVec`, so they can be chained:
-
-```rust
-let filter_mapped = my_vec.signal_vec()
-    .filter(|value| value < 5)
-    .map(|value| value + 10);
-```
 
 ----
 
