@@ -366,26 +366,37 @@ As an example, if you call `my_vec.push(5)`, then the closure will be called wit
 
 Or if you call `my_vec.insert(3, 10)`, then the closure will be called with `VecDiff::InsertAt { index: 3, value: 10 }`
 
-This allows you to very efficiently update based only on that specific change. For example, if you are automatically saving
-the `MutableVec` to a database whenever it changes, you don't need to save the entire `MutableVec` when it changes, you only
-need to save the individual change. This means that updates are often constant time, no matter how big the `MutableVec` is.
+This allows you to very efficiently update based only on that specific change.
+
+For example, if you are automatically saving the `MutableVec` to a database whenever it changes, you don't need to save the
+entire `MutableVec` when it changes, you only need to save the individual change. This means that it will often be constant
+time, no matter how big the `MutableVec` is.
 
 ----
 
-Unlike `Mutable` and `Signal`, it is guaranteed that the closure will be called with every single change: it will never "skip"
-a change, and the changes will always be in the correct order.
+Unlike `Mutable` and `Signal`, it is guaranteed that the `SignalVec` will never skip a change, and the changes will always
+be in the correct order.
 
 This is because it is notifying with the difference between the old `Vec` and the new `Vec`, so it is very important that
 it is in the correct order, and that it doesn't skip anything!
 
-However, if you call a `MutableVec` method which doesn't *actually* make any changes, then it will not notify at all:
+That does mean that `MutableVec` needs to maintain a queue of changes, so this has a minor performance cost.
+
+But because it's so efficient to update based upon the difference between the old and new `Vec`, it's still often faster
+to use `MutableVec<A>` rather than `Mutable<Vec<A>>`, even with the extra performance overhead.
+
+In addition, even though `MutableVec` needs to maintain a queue, `SignalVec` does ***not***, so it's quite efficient.
+
+Even though it does not skip changes, if you call a `MutableVec` method which doesn't *actually* make any changes, then it will
+not notify at all:
 
 ```rust
 my_vec.retain(|_| { true });
 ```
 
-The `MutableVec::retain` method is the same as `Vec::retain`: it calls the `|_| { true }` closure with each value in the `MutableVec`,
-and if the closure returns `false` it then removes the value from the `MutableVec`.
+The `MutableVec::retain` method is the same as [`Vec::retain`](https://doc.rust-lang.org/std/vec/struct.Vec.html#method.retain):
+it calls the `|_| { true }` closure with each value in the `MutableVec`, and if the closure returns `false` it then removes the
+value from the `MutableVec`.
 
 But in the above example, it never returns `false`, so it never removes anything, so it doesn't notify.
 
@@ -395,7 +406,7 @@ For example, when calling the `retain` method, it will send out a notification f
 out 5 notifications.
 
 But the notifications are in the reverse order: it sends notifications for the right-most values first, and notifications
-for the left-most values last. In addition, it sends a mixture of `VecDiff::Pop` and `VecDiff::RemoveAt` as appropriate.
+for the left-most values last. In addition, it sends a mixture of `VecDiff::Pop` and `VecDiff::RemoveAt`.
 
 Another example is that `my_vec.remove(index)` might notify with either `VecDiff::RemoveAt` or `VecDiff::Pop` depending on whether
 `index` is the last index or not.
@@ -465,7 +476,8 @@ The `map` method takes in an input `SignalVec` and a closure, and it returns an 
 It calls the closure for each value in the input `SignalVec`, and the output `SignalVec` contains the
 same values as the input `SignalVec`, except each value is replaced with the return value of the closure.
 
-It is guaranteed that the closure will be called exactly once for each value in the input `SignalVec`.
+It maintains the same order as the input `SignalVec`, and it is guaranteed that the closure will be called
+exactly once for each value in the input `SignalVec`.
 
 When the input `SignalVec` changes, it automatically updates the output `SignalVec` as needed.
 
@@ -473,8 +485,10 @@ So in the above example, `mapped` is a `SignalVec` with the same values as `my_v
 
 So if `my_vec` has the values `[1, 2, 3, 4, 5]` then `mapped` has the values `[2, 3, 4, 5, 6]`
 
-This is a ***very*** efficient method: it is guaranteed constant time, regardless of how big the input `SignalVec` is.
+This is an ***extremely*** efficient method: it is *guaranteed* constant time, regardless of how big the input `SignalVec` is.
 The only exception is when the input `SignalVec` notifies with `VecDiff::Replace`, in which case `map` is linear time.
+
+In addition, it doesn't need to maintain any extra internal state.
 
 ----
 
@@ -489,7 +503,8 @@ The `filter` method takes an input `SignalVec` and a closure, and it returns an 
 It calls the closure for each value in the input `SignalVec`, and the output `SignalVec` only contains the
 values where the closure returns `true`.
 
-It is guaranteed that the closure will be called exactly once for each value in the input `SignalVec`.
+It maintains the same order as the input `SignalVec`, and it is guaranteed that the closure will be called
+exactly once for each value in the input `SignalVec`.
 
 When the input `SignalVec` changes, it automatically updates the output `SignalVec` as needed.
 
@@ -497,9 +512,13 @@ So in the above example, `filtered` is a `SignalVec` with the same values as `my
 
 So if `my_vec` has the values `[3, 1, 6, 2, 0, 4, 5, 8, 9, 7]` then `filtered` has the values `[3, 1, 2, 0, 4]`.
 
-The performance is linear with the number of values in the input `SignalVec`. As an example, if you push a value into a `MutableVec`
-which has 1,000 values, `filter` will take on average 1,000 operations to update its internal state. That might sound
-expensive, but each individual operation is *very* fast, so it's normally not a problem unless you have a *huge* `SignalVec`.
+The performance is linear with the number of values in the input `SignalVec` (it's the same algorithmic performance as [`Vec`](https://doc.rust-lang.org/std/vec/struct.Vec.html)).
+
+As an example, if you insert a value into a `SignalVec` which has 1,000 values, `filter` will take on average 1,000 operations
+to update its internal state.
+
+That might sound expensive, but each individual operation is *very* fast, so it's normally not a problem unless you have a
+*huge* `SignalVec`.
 
 ----
 
@@ -522,9 +541,24 @@ So if `my_vec` has the values `[3, 1, 6, 2, 0, 4, 5, 8, 9, 7]` then `sorted` has
 This method is intentionally very similar to the [`slice::sort_by`](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by) method,
 except it doesn't mutate the input `SignalVec` (it returns a new `SignalVec`).
 
+Just like [`slice::sort_by`](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by), the sorting is *stable*: if the closure
+returns `Ordering::Equal`, then the order will be based upon the order in the input `SignalVec`.
+
+The `sort_by_cloned` method has the same logarithmic performance as [`slice::sort_by`](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by),
+except it's slower because it needs to keep track of extra internal state.
+
+As an example, if you insert a value into a `SignalVec` which has 1,000 values, then `sort_by_cloned` will take on average ~2,010
+operations to update its internal state.
+
 The reason why it has the `_cloned` suffix is because it *clones* the values from the input `SignalVec`. This is
 necessary in order to maintain its internal state while also simultaneously passing the values to the output `SignalVec`.
 
-This method has the same logarithmic performance as [`slice::sort_by`](https://doc.rust-lang.org/std/primitive.slice.html#method.sort_by),
-except it's slower because it needs to keep track of extra internal state. As an example, if you insert a value into a `MutableVec` which
-has 1,000 values, then `sort_by_cloned` will take on average ~2,010 operations to update its internal state.
+You can avoid the cost of cloning by wrapping the values in [`Rc`](https://doc.rust-lang.org/std/rc/struct.Rc.html) or [`Arc`](https://doc.rust-lang.org/std/sync/struct.Arc.html), like this:
+
+```rust
+let sorted = my_vec.signal_vec()
+    .map(Rc::new)
+    .sort_by_cloned(|left, right| left.cmp(right));
+```
+
+However, this heap allocates each individual value, so it should only be done when the cost of cloning is expensive. You should benchmark and profile so you know which one is faster for *your* particular program!
