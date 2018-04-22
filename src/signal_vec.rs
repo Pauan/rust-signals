@@ -103,6 +103,50 @@ impl<F: ?Sized + SignalVec> SignalVec for ::std::boxed::Box<F> {
 
 
 pub trait SignalVecExt: SignalVec {
+    /// Creates a `SignalVec` which uses a closure to transform the values.
+    ///
+    /// When the output `SignalVec` is spawned:
+    ///
+    /// 1. It calls the closure once for each value in `self`. The return values from the closure are
+    ///    put into the output `SignalVec` in the same order as `self`.
+    ///
+    /// 2. Whenever `self` changes it calls the closure for the new values, and updates the
+    ///    output `SignalVec` as appropriate, maintaining the same order as `self`.
+    ///
+    /// It is guaranteed that the closure will be called *exactly* once for each value in `self`.
+    ///
+    /// # Examples
+    ///
+    /// Add `1` to each value:
+    ///
+    /// ```rust
+    /// # use futures_signals::signal_vec::{always, SignalVecExt};
+    /// # let input = always(vec![1, 2, 3, 4, 5]);
+    /// let mapped = input.map(|value| value + 1);
+    /// ```
+    ///
+    /// If `input` has the values `[1, 2, 3, 4, 5]` then `mapped` has the values `[2, 3, 4, 5, 6]`
+    ///
+    /// ----
+    ///
+    /// Formatting to a `String`:
+    ///
+    /// ```rust
+    /// # use futures_signals::signal_vec::{always, SignalVecExt};
+    /// # let input = always(vec![1, 2, 3, 4, 5]);
+    /// let mapped = input.map(|value| format!("{}", value));
+    /// ```
+    ///
+    /// If `input` has the values `[1, 2, 3, 4, 5]` then `mapped` has the values `["1", "2", "3", "4", "5"]`
+    ///
+    /// # Performance
+    ///
+    /// This is an ***extremely*** efficient method: it is *guaranteed* constant time, regardless of how big `self` is.
+    ///
+    /// In addition, it does not do any heap allocation, and it doesn't need to maintain any extra internal state.
+    ///
+    /// The only exception is when `self` notifies with `VecDiff::Replace`, in which case it is linear time
+    /// (and it heap allocates a single [`Vec`](https://doc.rust-lang.org/std/vec/struct.Vec.html)).
     #[inline]
     fn map<A, F>(self, callback: F) -> Map<Self, F>
         where F: FnMut(Self::Item) -> A,

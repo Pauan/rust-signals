@@ -483,35 +483,6 @@ let filter_mapped = my_vec.signal_vec()
     .map(|value| value + 10);
 ```
 
-The most common `SignalVec` method is `map`:
-
-```rust
-let mapped = my_vec.signal_vec().map(|value| value + 1);
-```
-
-The `map` method takes in an input `SignalVec` and a closure, and it returns an output `SignalVec`.
-
-When the output `SignalVec` is spawned:
-
-1. It calls the closure once for each value in the input `SignalVec`. The return values from the closure are
-   put into the output `SignalVec` in the same order as the input `SignalVec`.
-
-2. Whenever the input `SignalVec` changes it calls the closure for the new values, and updates the
-   output `SignalVec` as appropriate, maintaining the same order as the input `SignalVec`.
-
-It is guaranteed that the closure will be called exactly once for each value in the input `SignalVec`.
-
-So in the above example, `mapped` is a `SignalVec` with the same values as `my_vec`, except with `1` added to them.
-
-So if `my_vec` has the values `[1, 2, 3, 4, 5]` then `mapped` has the values `[2, 3, 4, 5, 6]`
-
-This is an ***extremely*** efficient method: it is *guaranteed* constant time, regardless of how big the input `SignalVec` is.
-
-In addition, it does not do any heap allocation, and it doesn't need to maintain any extra internal state.
-
-The only exception is when the input `SignalVec` notifies with `VecDiff::Replace`, in which case `map` is linear time
-(and it heap allocates a single [`Vec`](https://doc.rust-lang.org/std/vec/struct.Vec.html)).
-
 ----
 
 Another common method is `sort_by_cloned`:
