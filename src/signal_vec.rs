@@ -338,11 +338,11 @@ pub trait SignalVecExt: SignalVec {
 impl<T: ?Sized> SignalVecExt for T where T: SignalVec {}
 
 
-pub struct AlwaysSignalVec<A> {
+pub struct Always<A> {
     values: Option<Vec<A>>,
 }
 
-impl<A> SignalVec for AlwaysSignalVec<A> {
+impl<A> SignalVec for Always<A> {
     type Item = A;
 
     fn poll_vec_change(&mut self, _cx: &mut Context) -> Async<Option<VecDiff<Self::Item>>> {
@@ -351,8 +351,8 @@ impl<A> SignalVec for AlwaysSignalVec<A> {
 }
 
 #[inline]
-pub fn always<A>(values: Vec<A>) -> AlwaysSignalVec<A> {
-    AlwaysSignalVec {
+pub fn always<A>(values: Vec<A>) -> Always<A> {
+    Always {
         values: Some(values),
     }
 }
