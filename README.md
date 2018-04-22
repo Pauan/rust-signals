@@ -69,7 +69,7 @@ let future = my_state.signal().for_each(|value| {
 
 In this case we are using the `for_each` method to be notified whenever `my_state` changes.
 
-Whenever I say "changes", what I really mean is "the current value, and also any changes to
+When I say "changes", what I really mean is "the current value, and also any changes to
 the value in the future".
 
 To explain in more detail:
@@ -125,10 +125,10 @@ There's three reasons:
    let signal2 = my_state.signal();
    ```
 
-   When the `Mutable` changes, *all* of its Signals will change as well.
+   When the `Mutable` changes, *all* of its Signals are notified.
 
    This turns out to be very useful in practice: it's common to put your program's state inside
-   of a `Mutable` (or multiple `Mutable`s) and then share it in various places throughout your
+   of a global `Mutable` (or multiple `Mutable`s) and then share it in various places throughout your
    program.
 
 3. You cannot be notified when a `Mutable` changes, but you can get/set its current value.
@@ -159,16 +159,16 @@ like as if it never happened.
 
 This is an intentional design choice: it is necessary for correctness and performance.
 
-This isn't a problem in practice, because a `Signal` is supposed to represent
-a *single value that changes over time*.
+So whenever you are using `Signal`, you must ***not*** rely upon it being updated for intermediate
+values.
+
+That might sound like a problem, but it's actually not a problem at all: it ***is*** guaranteed that it
+will be updated with the most recent value, it is *only* intermediate values that aren't guaranteed.
 
 As an analogy, `RwLock` does not give you access to past values (only the current value), and the
 same is true with `Mutable` and `Signal`.
 
-So whenever you are using `Signal`, you must ***not*** rely upon it being updated for every
-change. However, you ***can*** rely upon it always containing the most recent value.
-
-If you really *do* need every single intermediate value (not just the most recent), then using a
+If you really *do* need all intermediate values (not just the most recent), then using a
 [`Stream`](https://docs.rs/futures/0.2.*/futures/trait.Stream.html) would be a great choice.
 In that case you will pay a small performance penalty, because it has to hold the values in a queue.
 
@@ -193,11 +193,10 @@ The `map` method takes an input Signal and a closure, and it returns an output S
 Whenever the input Signal changes, it calls the closure with the current value of the
 input Signal, and then it puts the return value of the closure into the output Signal.
 
-This updating happens *automatically and efficiently*, and it will call the closure at
-most once for each change in `my_state`.
+It will call the closure at most once for each change in `my_state`.
 
-Like I explained earlier, whenever I say "changes" what I really mean is "the current
-value, and then also any changes to the value in the future".
+Like I explained earlier, when I say "changes" what I really mean is "the current
+value, and also any changes to the value in the future".
 
 In the above example, `mapped` will always contain the current value of `my_state`, except
 with `1` added to it.
@@ -205,25 +204,21 @@ with `1` added to it.
 So if `my_state` has the value `10`, then `mapped` will have the value `11`. If `my_state`
 has the value `5`, then `mapped` will have the value `6`, etc.
 
-It's important to keep in mind that just like all of the `Signal` methods, `map` is
-lossy: it might skip values. So you ***cannot*** rely upon the closure being called for every
-value. But you ***can*** rely upon it always being called with the most recent value.
+It *automatically and efficiently* keeps `mapped` in sync with `my_state` whenever it changes.
+
+Just like *all* of the `Signal` methods, `map` is lossy: it might skip values.
+So you ***cannot*** rely upon the closure being called for every intermediate value.
+But you ***can*** rely upon it always being called with the most recent value.
 
 Because `map` returns a `Signal`, you can chain it with more `Signal` methods:
 
 ```rust
 // This contains the value of `mapped + 5`, which is the same as `my_state + 6`
-let mapped2 = mapped.map(|value| value + 5);
+let mapped5 = mapped.map(|value| value + 5);
 ```
 
-In the above example, `mapped2` contains the same value as `mapped`, except with `5` added
+In the above example, `mapped5` contains the same value as `mapped`, except with `5` added
 to it.
-
-Lastly you can use `for_each` as usual to listen for changes:
-
-```rust
-let future = mapped2.for_each(|value| { ... });
-```
 
 ----
 
@@ -251,7 +246,7 @@ Then it runs the `*value1 + *value2` code, and puts the result of that code into
 
 Whenever `mutable1.signal()` or `mutable2.signal()` changes, it will then repeat that process again:
 it puts the current values of the input Signals into the `value1` and `value2` variables, then it runs the
-`*value1 + *value2` code, and puts the result of that code into the output Signal.
+`*value1 + *value2` code, and then it puts the result of that code into the output Signal.
 
 So the end result is that `mapped` always contains the value of `mutable1 + mutable2`.
 
@@ -301,15 +296,15 @@ You shouldn't normally worry about it, just don't put thousands of input Signals
 (this basically *never* happens in practice).
 
 You might be wondering why it's called `map_ref`: that's because `value1` and `value2` are *immutable references*
-to the current values of the Signals. That's also why you need to use `*value1` and `*value2` to dereference them.
+to the current values of the input Signals. That's also why you need to use `*value1` and `*value2` to dereference them.
 
-Why does it give references? Let's say one of the input Signals changes but the other ones haven't changed. In that situation
+Why does it use references? Let's say one of the input Signals changes but the other ones haven't changed. In that situation
 it needs to use the old values for the Signals that didn't change. But because that situation might happen multiple times,
 it needs to retain ownership of the values, so it can only give out references.
 
-Rather than giving out references, I could instead have designed it to always [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) the values, but that's expensive.
+Rather than giving out references, I could instead have designed it to always [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) the values, but that's expensive (and it means that it only works with types that implement [`Clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html)).
 
-And because [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) only requires an immutable reference, it's easy to call [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) yourself when you need to:
+Because [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) only requires an immutable reference, it's easy to call [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) yourself when you need to:
 
 ```rust
 let mapped = map_ref {
@@ -319,7 +314,7 @@ let mapped = map_ref {
 };
 ```
 
-So rather than always using [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone), it instead gives you references, so you can manually call [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) (or any other `&self` method) only when you need to. This improves performance.
+So because it gives references, you can now manually call [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) (or any other `&self` method) only when you need to. This improves performance.
 
 The only difference between `map_ref` and `map_mut` is that `map_ref` gives immutable references and `map_mut`
 gives mutable references.
@@ -372,9 +367,9 @@ let future = my_vec.signal_vec().for_each(|change| {
 Unlike `Signal`, the `for_each` method for `SignalVec` calls the closure with a `VecDiff`, which contains
 the difference between the new `Vec` and the old `Vec`.
 
-As an example, if you call `my_vec.push(5)`, then the closure will be called with `VecDiff::push { value: 5 }`
+As an example, if you call `my_vec.push(5)`, then the closure will be called with `VecDiff::Push { value: 5 }`
 
-Or if you call `my_vec.insert(3, 10)`, then the closure will be called with `VecDiff::InsertAt { index: 3, value: 10 }`
+And if you call `my_vec.insert(3, 10)`, then the closure will be called with `VecDiff::InsertAt { index: 3, value: 10 }`
 
 This allows you to very efficiently update based only on that specific change.
 
@@ -384,7 +379,7 @@ time, no matter how big the `MutableVec` is.
 
 ----
 
-Unlike `Mutable` and `Signal`, it is guaranteed that the `SignalVec` will never skip a change. In addition, the changes will always
+Unlike `Signal`, it is guaranteed that the `SignalVec` will never skip a change. In addition, the changes will always
 be in the correct order.
 
 This is because it is notifying with the difference between the old `Vec` and the new `Vec`, so it is very important that
@@ -421,7 +416,7 @@ for the left-most values last. In addition, it sends a mixture of `VecDiff::Pop`
 Another example is that `my_vec.remove(index)` might notify with either `VecDiff::RemoveAt` or `VecDiff::Pop` depending on whether
 `index` is the last index or not.
 
-The reason this is done is for performance reasons, and you should ***not*** rely upon it: the behavior of exactly which notifications are
+The reason this is done is for performance, and you should ***not*** rely upon it: the behavior of exactly which notifications are
 sent is an implementation detail.
 
 The only thing you can rely upon is that if you apply the notifications in the same order they are received, it will exactly recreate the
@@ -558,8 +553,9 @@ except it's slower because it needs to keep track of extra internal state.
 As an example, if you insert a value into a `SignalVec` which has 1,000 values, then `sort_by_cloned` will take on average ~2,010
 operations to update its internal state.
 
-The reason why it has the `_cloned` suffix is because it *clones* the values from the input `SignalVec`. This is
-necessary in order to maintain its internal state while also simultaneously passing the values to the output `SignalVec`.
+The reason why it has the `_cloned` suffix is because it calls [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone)
+on the values from the input `SignalVec`. This is necessary in order to maintain its internal state while also simultaneously passing the
+values to the output `SignalVec`.
 
 You can avoid the cost of cloning by wrapping the values in [`Rc`](https://doc.rust-lang.org/std/rc/struct.Rc.html) or [`Arc`](https://doc.rust-lang.org/std/sync/struct.Arc.html), like this:
 
@@ -570,3 +566,9 @@ let sorted = my_vec.signal_vec()
 ```
 
 However, this heap allocates each individual value, so it should only be done when the cost of cloning is expensive. You should benchmark and profile so you know which one is faster for *your* particular program!
+
+----
+
+And that's it for the tutorial! We didn't cover every method, but we covered enough for you to get started.
+
+You can look at the documentation for information on every method (there's a lot of useful stuff in there!).
