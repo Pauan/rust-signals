@@ -125,6 +125,41 @@ pub trait SignalVecExt: SignalVec {
         }
     }
 
+    /// Creates a `SignalVec` which uses a closure to determine if a value should be included or not.
+    ///
+    /// When the output `SignalVec` is spawned:
+    ///
+    /// 1. It calls the closure once for each value in `self`. The output `SignalVec` contains all
+    ///    of the values where the closure returned `true`, in the same order as `self`.
+    ///
+    /// 2. Whenever `self` changes it calls the closure for the new values, and filters the
+    ///    output `SignalVec` as appropriate, maintaining the same order as `self`.
+    ///
+    /// It is guaranteed that the closure will be called *exactly* once for each value in `self`.
+    ///
+    /// # Examples
+    ///
+    /// Only include values less than `5`:
+    ///
+    /// ```rust
+    /// # use futures_signals::signal_vec::{always, SignalVecExt};
+    /// # let input = always(vec![3, 1, 6, 2, 0, 4, 5, 8, 9, 7]);
+    /// let filtered = input.filter(|value| *value < 5);
+    /// ```
+    ///
+    /// If `input` has the values `[3, 1, 6, 2, 0, 4, 5, 8, 9, 7]` then `filtered` has the values `[3, 1, 2, 0, 4]`
+    ///
+    /// # Performance
+    ///
+    /// The performance is linear with the number of values in `self` (it's the same algorithmic
+    /// performance as [`Vec`](https://doc.rust-lang.org/std/vec/struct.Vec.html)).
+    ///
+    /// As an example, if `self` has 1,000 values and a new value is inserted, `filter` will require (on
+    /// average) 1,000 operations to update its internal state. It does ***not*** call the closure while updating
+    /// its internal state.
+    ///
+    /// That might sound expensive, but each individual operation is ***extremely*** fast, so it's normally not a problem
+    /// unless `self` is ***really*** huge.
     #[inline]
     fn filter<F>(self, callback: F) -> Filter<Self, F>
         where F: FnMut(&Self::Item) -> bool,
@@ -189,6 +224,26 @@ pub trait SignalVecExt: SignalVec {
 
 // TODO why is this ?Sized
 impl<T: ?Sized> SignalVecExt for T where T: SignalVec {}
+
+
+pub struct AlwaysSignalVec<A> {
+    values: Option<Vec<A>>,
+}
+
+impl<A> SignalVec for AlwaysSignalVec<A> {
+    type Item = A;
+
+    fn poll_vec_change(&mut self, _cx: &mut Context) -> Async<Option<VecDiff<Self::Item>>> {
+        Async::Ready(self.values.take().map(|values| VecDiff::Replace { values }))
+    }
+}
+
+#[inline]
+pub fn always<A>(values: Vec<A>) -> AlwaysSignalVec<A> {
+    AlwaysSignalVec {
+        values: Some(values),
+    }
+}
 
 
 pub struct ForEach<A, B, C> where B: IntoFuture {

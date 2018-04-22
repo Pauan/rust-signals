@@ -469,7 +469,7 @@ let future = my_vec.signal_vec().for_each(move |change| {
 });
 ```
 
-In the above example, `copied_vec` is *always* guaranteed to have exactly the same values as `my_vec`, in the same order as `my_vec`.
+In the above example, `copied_vec` is guaranteed to always have exactly the same values as `my_vec`, in the same order as `my_vec`.
 
 But even though the *end result* is guaranteed to be the same, the order of the individual changes is an unspecified implementation detail.
 
@@ -510,39 +510,7 @@ This is an ***extremely*** efficient method: it is *guaranteed* constant time, r
 In addition, it does not do any heap allocation, and it doesn't need to maintain any extra internal state.
 
 The only exception is when the input `SignalVec` notifies with `VecDiff::Replace`, in which case `map` is linear time
-(and it heap allocates a single `Vec`).
-
-----
-
-Another common method is `filter`:
-
-```rust
-let filtered = my_vec.signal_vec().filter(|value| value < 5);
-```
-
-The `filter` method takes an input `SignalVec` and a closure, and it returns an output `SignalVec`.
-
-When the output `SignalVec` is spawned:
-
-1. It calls the closure once for each value in the input `SignalVec`. The output `SignalVec` contains all
-   of the values where the closure returned `true`, in the same order as the input `SignalVec`.
-
-2. Whenever the input `SignalVec` changes it calls the closure for the new values, and filters the
-   output `SignalVec` as appropriate, maintaining the same order as the input `SignalVec`.
-
-It is guaranteed that the closure will be called exactly once for each value in the input `SignalVec`.
-
-So in the above example, `filtered` is a `SignalVec` with the same values as `my_vec`, excluding the values that are greater than `4`.
-
-So if `my_vec` has the values `[3, 1, 6, 2, 0, 4, 5, 8, 9, 7]` then `filtered` has the values `[3, 1, 2, 0, 4]`.
-
-The performance is linear with the number of values in the input `SignalVec` (it's the same algorithmic performance as [`Vec`](https://doc.rust-lang.org/std/vec/struct.Vec.html)).
-
-As an example, if you insert a value into a `SignalVec` which has 1,000 values, `filter` will take on average 1,000 operations
-to update its internal state.
-
-That might sound expensive, but each individual operation is *very* fast, so it's normally not a problem unless you have a
-*huge* `SignalVec`.
+(and it heap allocates a single [`Vec`](https://doc.rust-lang.org/std/vec/struct.Vec.html)).
 
 ----
 
