@@ -98,6 +98,11 @@ macro_rules! __internal_map_mut {
     (a.clone(), *b, *c, *d, e.clone())
 });*/
 
+/// `map_mut` is exactly the same as `map_ref`, except it gives
+/// *mutable* references (`map_ref` gives *immutable* references).
+///
+/// `map_mut` is almost never useful, and it's a little slower than
+/// `map_ref`, so it's ***highly*** recommended to use `map_ref` instead.
 #[macro_export]
 macro_rules! map_mut {
     ($($input:tt)*) => { __internal_map_split!(__internal_map_mut, (), $($input)*) };
@@ -201,6 +206,149 @@ macro_rules! __internal_map_ref {
     (a.clone(), *b, *c, *d, e.clone())
 });*/
 
+/// The `map_ref` macro can be used to *combine* multiple `Signal`s together:
+///
+/// ```rust
+/// let mutable1 = Mutable::new(1);
+/// let mutable2 = Mutable::new(2);
+///
+/// let mapped = map_ref {
+///     let value1 = mutable1.signal(),
+///     let value2 = mutable2.signal() =>
+///     *value1 + *value2
+/// };
+/// ```
+///
+/// In the above example, `map_ref` takes two input Signals: `mutable1.signal()` and `mutable2.signal()`,
+/// and it returns an output Signal.
+///
+/// When the output Signal is spawned:
+///
+/// 1. It takes the current value of `mutable1.signal()` and puts it into the `value1` variable.
+///
+/// 2. It takes the current value of `mutable2.signal()` and puts it into the `value2` variable.
+///
+/// 3. Then it runs the `*value1 + *value2` code, and puts the result of that code into the output Signal.
+///
+/// 4. Whenever `mutable1.signal()` or `mutable2.signal()` changes it repeats the above steps.
+///
+/// So the end result is that `mapped` always contains the value of `mutable1 + mutable2`.
+///
+/// So in the above example, `mapped` will have the value `3` (because it's `1 + 2`).
+///
+/// But let's say that `mutable1` changes...
+///
+/// ```rust
+/// mutable1.set(5);
+/// ```
+///
+/// ...then `mapped` will now have the value `7` (because it's `5 + 2`). And then if `mutable2` changes...
+///
+/// ```rust
+/// mutable2.set(10);
+/// ```
+///
+/// ...then `mapped` will now have the value `15` (because it's `5 + 10`).
+///
+/// If multiple input Signals change at the same time, then it will only update once:
+///
+/// ```rust
+/// mutable1.set(15);
+/// mutable2.set(20);
+/// ```
+///
+/// In the above example, `mapped` will now have the value `35` (because it's `15 + 20`), and it only
+/// updates once (***not*** once per input Signal).
+///
+/// ----
+///
+/// There is also a shorthand syntax:
+///
+/// ```rust
+/// let mapped = map_ref(signal1, signal2 => *signal1 + *signal2);
+/// ```
+///
+/// The above code is exactly the same as this:
+///
+/// ```rust
+/// let mapped = map_ref {
+///     let signal1 = signal1,
+///     let signal2 = signal2 =>
+///     *signal1 + *signal2
+/// };
+/// ```
+///
+/// This only works if the input Signals are variables. If you want to use expressions for the input
+/// Signals then you must either assign them to variables first, or you must use the longer syntax.
+///
+/// In addition, it's possible to use pattern matching with the longer syntax:
+///
+/// ```rust
+/// let mapped = map_ref {
+///     let (t1, t2) = signal1,
+///     let SomeStruct { foo } = signal2 =>
+///     ...
+/// };
+/// ```
+///
+/// It's also possible to combine more than two Signals:
+///
+/// ```rust
+/// let mapped = map_ref {
+///     let value1 = mutable1.signal(),
+///     let value2 = mutable2.signal(),
+///     let value3 = mutable3.signal() =>
+///     *value1 + *value2 + *value3
+/// };
+/// ```
+///
+/// You can combine an *infinite* number of Signals, there is no limit.
+///
+/// However, keep in mind that each input Signal has a small performance cost.
+/// The cost is very small, but it grows linearly with the number of input Signals.
+///
+/// You shouldn't normally worry about it, just don't put thousands of input Signals
+/// into a `map_ref` (this basically *never* happens in practice).
+///
+/// ----
+///
+/// You might be wondering why it's called `map_ref`: that's because `value1` and `value2` are *immutable references*
+/// to the current values of the input Signals. That's also why you need to use `*value1` and `*value2` to dereference them.
+///
+/// Why does it use references? Let's say one of the input Signals changes but the other ones haven't changed. In that situation
+/// it needs to use the old values for the Signals that didn't change. But because that situation might happen multiple times,
+/// it needs to retain ownership of the values, so it can only give out references.
+///
+/// Rather than giving out references, it could instead have been designed so it always
+/// [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone)s the values, but that's expensive
+/// (and it means that it only works with types that implement [`Clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html)).
+///
+/// Because [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) only requires an immutable
+/// reference, it's easy to call [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone) yourself
+/// when you need to:
+///
+/// ```rust
+/// let mapped = map_ref {
+///     let value1 = mutable1.signal(),
+///     let value2 = mutable2.signal() =>
+///     value1.clone() + value2.clone()
+/// };
+/// ```
+///
+/// So because it gives references, you can now manually call [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone)
+/// (or any other `&self` method) *only* when you need to. This improves performance.
+///
+/// # Performance
+///
+/// If you use 1 or 2 input Signals it is ***extremely*** fast, and everything is stack allocated.
+///
+/// If you use 3+ input Signals, it will do a heap allocation for each input Signal.
+/// However, this heap allocation only happens once, when the `map_ref` is created.
+/// It does *not* do any heap allocation while polling. So it's still ***very*** fast.
+///
+/// In addition, if you use 3+ input Signals, there is a *very* small additional performance
+/// cost on every poll, and this additional cost scales linearly with the number of input
+/// Signals.
 #[macro_export]
 macro_rules! map_ref {
     ($($input:tt)*) => { __internal_map_split!(__internal_map_ref, (), $($input)*) };
