@@ -1,9 +1,65 @@
-use futures_signals::signal::Signal;
+use futures_signals::signal::{Signal, IntoSignal};
 use futures_core::{Async, Never};
 use futures_core::task::{Context, LocalMap, Waker, Wake};
 use futures_util::future::poll_fn;
 use futures_executor::{LocalPool, block_on};
 use std::sync::Arc;
+
+
+#[allow(dead_code)]
+pub struct ForEachSignal<A> where A: IntoSignal {
+    signal: A,
+    callbacks: Vec<Box<FnMut(&mut Context, Async<Option<A::Item>>)>>,
+}
+
+#[allow(dead_code)]
+impl<A> ForEachSignal<A> where A: IntoSignal {
+    pub fn new(signal: A) -> Self {
+        Self {
+            signal,
+            callbacks: vec![],
+        }
+    }
+
+    pub fn next<B>(mut self, callback: B) -> Self where B: FnMut(&mut Context, Async<Option<A::Item>>) + 'static {
+        self.callbacks.insert(0, Box::new(callback));
+        self
+    }
+
+    pub fn run(self) {
+        let mut callbacks = self.callbacks;
+        let mut signal = self.signal.into_signal();
+
+        block_on(poll_fn(move |cx| -> Result<Async<()>, Never> {
+            loop {
+                return match callbacks.pop() {
+                    Some(mut callback) => {
+                        let poll = signal.poll_change(cx);
+
+                        match poll {
+                            Async::Ready(None) => {
+                                callback(cx, poll);
+                                Ok(Async::Ready(()))
+                            },
+                            Async::Ready(Some(_)) => {
+                                callback(cx, poll);
+                                continue;
+                            },
+                            Async::Pending => {
+                                callback(cx, poll);
+                                Ok(Async::Pending)
+                            },
+                        }
+                    },
+                    None => {
+                        Ok(Async::Ready(()))
+                    },
+                }
+            }
+        })).unwrap()
+    }
+}
+
 
 
 #[allow(dead_code)]

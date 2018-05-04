@@ -3,10 +3,13 @@ extern crate futures_util;
 extern crate futures_executor;
 extern crate futures_signals;
 
+use std::rc::Rc;
+use std::cell::Cell;
 use futures_signals::cancelable_future;
-use futures_signals::signal::{Signal, Mutable, channel};
+use futures_signals::signal::{Signal, SignalExt, Mutable, channel};
 use futures_core::Async;
-use futures_core::future::{FutureResult};
+use futures_core::future::FutureResult;
+use futures_util::future::poll_fn;
 
 mod util;
 
@@ -109,4 +112,50 @@ fn test_send_sync() {
     let a = channel(1);
     let _: Box<Send + Sync> = Box::new(a.0);
     let _: Box<Send + Sync> = Box::new(a.1);
+}
+
+
+#[test]
+fn test_map_future() {
+    let mutable = Rc::new(Mutable::new(1));
+
+    let first = Rc::new(Cell::new(true));
+
+    let s = {
+        let first = first.clone();
+
+        mutable.signal().map_future(move |value| {
+            let first = first.clone();
+
+            poll_fn(move |_| {
+                if first.get() {
+                    Ok(Async::Pending)
+
+                } else {
+                    Ok(Async::Ready(value))
+                }
+            })
+        })
+    };
+
+    util::ForEachSignal::new(s)
+        .next({
+            let mutable = mutable.clone();
+            move |_, change| {
+                assert_eq!(change, Async::Ready(Some(None)));
+                mutable.set(2);
+            }
+        })
+        .next({
+            let mutable = mutable.clone();
+            move |_, change| {
+                assert_eq!(change, Async::Pending);
+                first.set(false);
+                mutable.set(3);
+            }
+        })
+        .next(|_, change| {
+            assert_eq!(change, Async::Ready(Some(Some(3))));
+        })
+        .run();
 }

@@ -314,20 +314,27 @@ impl<A, B, C> Signal for MapFuture<A, B, C>
     type Item = Option<B::Item>;
 
     fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        let mut done = match self.signal.as_mut().map(|signal| signal.poll_change(cx)) {
-            None => true,
-            Some(Async::Ready(None)) => {
-                self.signal = None;
-                true
-            },
-            Some(Async::Ready(Some(value))) => {
-                self.future = Some((self.callback)(value).into_future());
-                false
-            },
-            Some(Async::Pending) => {
-                false
-            },
-        };
+        let mut done = false;
+
+        loop {
+            match self.signal.as_mut().map(|signal| signal.poll_change(cx)) {
+                None => {
+                    done = true;
+                    break;
+                },
+                Some(Async::Ready(None)) => {
+                    self.signal = None;
+                    done = true;
+                    break;
+                },
+                Some(Async::Ready(Some(value))) => {
+                    self.future = Some((self.callback)(value).into_future());
+                },
+                Some(Async::Pending) => {
+                    break;
+                },
+            }
+        }
 
         match self.future.as_mut().map(|future| future.poll(cx)) {
             None => {},
