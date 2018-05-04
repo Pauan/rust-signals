@@ -113,6 +113,30 @@ pub trait SignalExt: Signal {
         }
     }
 
+    /// Creates a `Signal` which uses a closure to transform the value.
+    ///
+    /// This is exactly the same as `map`, except:
+    ///
+    /// 1. It calls the closure with a mutable reference to the input value.
+    ///
+    /// 2. If the new input value is the same as the old input value, it will ***not*** call the closure, instead
+    ///    it will completely ignore the new value, like as if it never happened.
+    ///
+    ///    It uses the `PartialEq` implementation to determine whether the new value is the same as the old value.
+    ///
+    ///    It only keeps track of the most recent value: that means that it ***won't*** call the closure for consecutive
+    ///    duplicates, however it ***will*** call the closure for non-consecutive duplicates.
+    ///
+    /// Because `map_dedupe` has the same behavior as `map`, it is useful solely as a performance optimization.
+    ///
+    /// # Performance
+    ///
+    /// The performance is the same as `map`, except with an additional call to `eq`.
+    ///
+    /// If the `eq` call is fast, then `map_dedupe` can be faster than `map`, because it doesn't call the closure
+    /// when the new and old values are the same, and it also doesn't update any child Signals.
+    ///
+    /// On the other hand, if the `eq` call is slow, then `map_dedupe` is probably slower than `map`.
     #[inline]
     fn map_dedupe<A, B>(self, callback: B) -> MapDedupe<Self, B>
         // TODO should this use & instead of &mut ?
@@ -125,6 +149,52 @@ pub trait SignalExt: Signal {
         }
     }
 
+    /// Creates a `Signal` which uses a closure to asynchronously transform the value.
+    ///
+    /// When the output `Signal` is spawned:
+    ///
+    /// 1. It calls the closure with the current value of `self`.
+    ///
+    /// 2. The closure returns an `IntoFuture`. It waits for that `Future` to finish, and then
+    ///    it puts the return value of the `Future` into the output `Signal`.
+    ///
+    /// 3. Whenever `self` changes it repeats the above steps.
+    ///
+    /// It will call the closure at most once for each change in `self`.
+    ///
+    /// Because Signals must always have a current value, if the `Future` is not ready yet, then the
+    /// output `Signal` will start with the value `None`. When the `Future` finishes it then changes
+    /// to `Some`. This can be used to detect whether the `Future` has finished or not.
+    ///
+    /// If `self` changes before the old `Future` is finished, it will cancel the old `Future`.
+    /// That means if `self` changes faster than the `Future`, then it will never output any values.
+    ///
+    /// Like *all* of the `Signal` methods, `map_future` might skip intermediate changes.
+    /// So you ***cannot*** rely upon the closure being called for every intermediate change.
+    /// But you ***can*** rely upon it always being called with the most recent change.
+    ///
+    /// # Examples
+    ///
+    /// Call an asynchronous network API whenever the input changes:
+    ///
+    /// ```rust
+    /// # extern crate futures_core;
+    /// # extern crate futures_signals;
+    /// # use futures_core::Never;
+    /// # use futures_signals::signal::{always, SignalExt};
+    /// # fn call_network_api(value: u32) -> Result<(), Never> { Ok(()) }
+    /// # fn main() {
+    /// # let input = always(1);
+    /// #
+    /// let mapped = input.map_future(|value| call_network_api(value));
+    /// # }
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// This is ***extremely*** efficient: it does not do any heap allocation, and it has *very* little overhead.
+    ///
+    /// Of course the performance will also depend upon the `Future` which is returned from the closure.
     #[inline]
     fn map_future<A, B>(self, callback: B) -> MapFuture<Self, A, B>
         where A: IntoFuture<Error = Never>,
