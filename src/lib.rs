@@ -181,14 +181,19 @@
 ///! methods, and most of them return a `Signal` so they can be chained:
 ///!
 ///! ```rust
+///! # extern crate futures_core;
+///! # extern crate futures_signals;
+///! # use futures_core::Never;
 ///! # use futures_signals::signal::Mutable;
-///! # let my_state = Mutable::new(3);
 ///! # use futures_signals::signal::SignalExt;
-///! # fn do_some_async_calculation(value: u32) -> Result<(), ()> { Ok(()) }
+///! # fn do_some_async_calculation(value: u32) -> Result<(), Never> { Ok(()) }
+///! # fn main() {
+///! # let my_state = Mutable::new(3);
 ///! #
 ///! let mapped = my_state.signal()
 ///!     .map(|value| value + 5)
 ///!     .map_future(|value| do_some_async_calculation(value));
+///! # }
 ///! ```
 ///!
 ///! ----

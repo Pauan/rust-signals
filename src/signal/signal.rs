@@ -126,6 +126,19 @@ pub trait SignalExt: Signal {
     }
 
     #[inline]
+    fn map_future<A, B>(self, callback: B) -> MapFuture<Self, A, B>
+        where A: IntoFuture<Error = Never>,
+              B: FnMut(Self::Item) -> A,
+              Self: Sized {
+        MapFuture {
+            signal: Some(self),
+            future: None,
+            callback,
+            first: true,
+        }
+    }
+
+    #[inline]
     fn filter_map<A, B>(self, callback: B) -> FilterMap<Self, B>
         where B: FnMut(Self::Item) -> Option<A>,
               Self: Sized {
@@ -283,6 +296,61 @@ impl<A, B, C> Signal for Map<A, B>
     #[inline]
     fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
         self.signal.poll_change(cx).map(|opt| opt.map(|value| (self.callback)(value)))
+    }
+}
+
+
+pub struct MapFuture<A, B, C> where B: IntoFuture<Error = Never> {
+    signal: Option<A>,
+    future: Option<B::Future>,
+    callback: C,
+    first: bool,
+}
+
+impl<A, B, C> Signal for MapFuture<A, B, C>
+    where A: Signal,
+          B: IntoFuture<Error = Never>,
+          C: FnMut(A::Item) -> B {
+    type Item = Option<B::Item>;
+
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        let mut done = match self.signal.as_mut().map(|signal| signal.poll_change(cx)) {
+            None => true,
+            Some(Async::Ready(None)) => {
+                self.signal = None;
+                true
+            },
+            Some(Async::Ready(Some(value))) => {
+                self.future = Some((self.callback)(value).into_future());
+                false
+            },
+            Some(Async::Pending) => {
+                false
+            },
+        };
+
+        match self.future.as_mut().map(|future| future.poll(cx)) {
+            None => {},
+            Some(Ok(Async::Ready(value))) => {
+                self.future = None;
+                return Async::Ready(Some(Some(value)));
+            },
+            Some(Ok(Async::Pending)) => {
+                done = false;
+            },
+            Some(Err(_)) => unreachable!(),
+        }
+
+        if self.first {
+            self.first = false;
+            Async::Ready(Some(None))
+
+        } else if done {
+            Async::Ready(None)
+
+        } else {
+            Async::Pending
+        }
     }
 }
 
