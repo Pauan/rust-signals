@@ -209,14 +209,20 @@ macro_rules! __internal_map_ref {
 /// The `map_ref` macro can be used to *combine* multiple `Signal`s together:
 ///
 /// ```rust
+/// # #[macro_use]
+/// # extern crate futures_signals;
+/// # use futures_signals::signal::Mutable;
+/// # fn main() {
+/// #
 /// let mutable1 = Mutable::new(1);
 /// let mutable2 = Mutable::new(2);
 ///
-/// let mapped = map_ref {
+/// let mapped = map_ref! {
 ///     let value1 = mutable1.signal(),
 ///     let value2 = mutable2.signal() =>
 ///     *value1 + *value2
 /// };
+/// # }
 /// ```
 ///
 /// In the above example, `map_ref` takes two input Signals: `mutable1.signal()` and `mutable2.signal()`,
@@ -239,12 +245,18 @@ macro_rules! __internal_map_ref {
 /// But let's say that `mutable1` changes...
 ///
 /// ```rust
+/// # use futures_signals::signal::Mutable;
+/// # let mutable1 = Mutable::new(1);
+/// #
 /// mutable1.set(5);
 /// ```
 ///
 /// ...then `mapped` will now have the value `7` (because it's `5 + 2`). And then if `mutable2` changes...
 ///
 /// ```rust
+/// # use futures_signals::signal::Mutable;
+/// # let mutable2 = Mutable::new(2);
+/// #
 /// mutable2.set(10);
 /// ```
 ///
@@ -253,6 +265,10 @@ macro_rules! __internal_map_ref {
 /// If multiple input Signals change at the same time, then it will only update once:
 ///
 /// ```rust
+/// # use futures_signals::signal::Mutable;
+/// # let mutable1 = Mutable::new(5);
+/// # let mutable2 = Mutable::new(10);
+/// #
 /// mutable1.set(15);
 /// mutable2.set(20);
 /// ```
@@ -265,17 +281,33 @@ macro_rules! __internal_map_ref {
 /// There is also a shorthand syntax:
 ///
 /// ```rust
-/// let mapped = map_ref(signal1, signal2 => *signal1 + *signal2);
+/// # #[macro_use]
+/// # extern crate futures_signals;
+/// # use futures_signals::signal::always;
+/// # fn main() {
+/// # let signal1 = always(1);
+/// # let signal2 = always(2);
+/// #
+/// let mapped = map_ref!(signal1, signal2 => *signal1 + *signal2);
+/// # }
 /// ```
 ///
 /// The above code is exactly the same as this:
 ///
 /// ```rust
-/// let mapped = map_ref {
+/// # #[macro_use]
+/// # extern crate futures_signals;
+/// # use futures_signals::signal::always;
+/// # fn main() {
+/// # let signal1 = always(1);
+/// # let signal2 = always(2);
+/// #
+/// let mapped = map_ref! {
 ///     let signal1 = signal1,
 ///     let signal2 = signal2 =>
 ///     *signal1 + *signal2
 /// };
+/// # }
 /// ```
 ///
 /// This only works if the input Signals are variables. If you want to use expressions for the input
@@ -284,22 +316,41 @@ macro_rules! __internal_map_ref {
 /// In addition, it's possible to use pattern matching with the longer syntax:
 ///
 /// ```rust
-/// let mapped = map_ref {
+/// # #[macro_use]
+/// # extern crate futures_signals;
+/// # use futures_signals::signal::always;
+/// # fn main() {
+/// # struct SomeStruct { foo: u32 }
+/// # let signal1 = always((1, 2));
+/// # let signal2 = always(SomeStruct { foo: 3 });
+/// #
+/// let mapped = map_ref! {
 ///     let (t1, t2) = signal1,
 ///     let SomeStruct { foo } = signal2 =>
-///     ...
+///     // ...
+/// #   ()
 /// };
+/// # }
 /// ```
 ///
 /// It's also possible to combine more than two Signals:
 ///
 /// ```rust
-/// let mapped = map_ref {
+/// # #[macro_use]
+/// # extern crate futures_signals;
+/// # use futures_signals::signal::Mutable;
+/// # fn main() {
+/// # let mutable1 = Mutable::new(1);
+/// # let mutable2 = Mutable::new(2);
+/// # let mutable3 = Mutable::new(3);
+/// #
+/// let mapped = map_ref! {
 ///     let value1 = mutable1.signal(),
 ///     let value2 = mutable2.signal(),
 ///     let value3 = mutable3.signal() =>
 ///     *value1 + *value2 + *value3
 /// };
+/// # }
 /// ```
 ///
 /// You can combine an *infinite* number of Signals, there is no limit.
@@ -328,11 +379,19 @@ macro_rules! __internal_map_ref {
 /// when you need to:
 ///
 /// ```rust
-/// let mapped = map_ref {
+/// # #[macro_use]
+/// # extern crate futures_signals;
+/// # use futures_signals::signal::Mutable;
+/// # fn main() {
+/// # let mutable1 = Mutable::new(1);
+/// # let mutable2 = Mutable::new(2);
+/// #
+/// let mapped = map_ref! {
 ///     let value1 = mutable1.signal(),
 ///     let value2 = mutable2.signal() =>
 ///     value1.clone() + value2.clone()
 /// };
+/// # }
 /// ```
 ///
 /// So because it gives references, you can now manually call [`clone`](https://doc.rust-lang.org/std/clone/trait.Clone.html#tymethod.clone)

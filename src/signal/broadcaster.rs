@@ -10,6 +10,15 @@ struct BroadcasterStatus {
     waker: Mutex<Option<Waker>>,
 }
 
+impl BroadcasterStatus {
+    fn new() -> Self {
+        Self {
+            has_changed: AtomicBool::new(true),
+            waker: Mutex::new(None),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 /// This is responsible for propagating a "wake" down to any pending tasks
@@ -20,6 +29,13 @@ struct BroadcasterNotifier {
 }
 
 impl BroadcasterNotifier {
+    fn new() -> Self {
+        Self {
+            is_waiting: AtomicBool::new(false),
+            targets: Mutex::new(vec![]),
+        }
+    }
+
     fn notify(&self, is_changed: bool) {
         let mut lock = self.targets.lock().unwrap();
 
@@ -65,6 +81,14 @@ struct BroadcasterSharedState<A> where A: Signal {
 }
 
 impl<A> BroadcasterSharedState<A> where A: Signal {
+    fn new(signal: A) -> Self {
+        Self {
+            signal: Mutex::new(signal),
+            value: RwLock::new(None),
+            notifier: Arc::new(BroadcasterNotifier::new()),
+        }
+    }
+
     // Poll the underlying signal for changes, giving it a BroadcasterNotifier
     // to wake in the future if it is in Pending state.
     //
@@ -100,17 +124,14 @@ struct BroadcasterState<A> where A: Signal {
 
 impl<A> BroadcasterState<A> where A: Signal {
     fn new(shared_state: &Arc<BroadcasterSharedState<A>>) -> Self {
-        let new_status = Arc::new(BroadcasterStatus {
-            has_changed: AtomicBool::new(true),
-            waker: Mutex::new(None)
-        });
+        let new_status = Arc::new(BroadcasterStatus::new());
 
         {
             let mut lock = shared_state.notifier.targets.lock().unwrap();
             lock.push(Arc::downgrade(&new_status));
         }
 
-        BroadcasterState {
+        Self {
             status: new_status,
             shared_state: shared_state.clone(),
         }
@@ -152,26 +173,9 @@ pub struct Broadcaster<A> where A: Signal {
 impl<A> Broadcaster<A> where A: Signal {
     /// Create a new `Broadcaster`
     pub fn new(signal: A) -> Self {
-        let notifier = Arc::new(BroadcasterNotifier {
-            is_waiting: AtomicBool::new(false),
-            targets: Mutex::new(vec![]),
-        });
-
-        let shared_state = Arc::new(BroadcasterSharedState {
-            signal: Mutex::new(signal),
-            value: RwLock::new(None),
-            notifier: notifier,
-        });
-
         Self {
-            shared_state: shared_state
+            shared_state: Arc::new(BroadcasterSharedState::new(signal)),
         }
-    }
-}
-
-impl<A> Drop for Broadcaster<A> where A: Signal {
-    fn drop(&mut self) {
-
     }
 }
 

@@ -9,6 +9,8 @@
 ///! Before I can fully explain Signals, first I have to explain `Mutable`:
 ///!
 ///! ```rust
+///! use futures_signals::signal::Mutable;
+///!
 ///! let my_state = Mutable::new(5);
 ///! ```
 ///!
@@ -23,14 +25,15 @@
 ///! Let's see it in action:
 ///!
 ///! ```rust
-///! // Prints 5
-///! println!("{}", my_state.get());
+///! # use futures_signals::signal::Mutable;
+///! # let my_state = Mutable::new(5);
+///! #
+///! assert_eq!(my_state.get(), 5);
 ///!
 ///! // Changes the current value to 10
 ///! my_state.set(10);
 ///!
-///! // Prints 10
-///! println!("{}", my_state.get());
+///! assert_eq!(my_state.get(), 10);
 ///! ```
 ///!
 ///! However, if that was all `Mutable` could do, it wouldn't be very useful, because `RwLock`
@@ -40,11 +43,19 @@
 ///! efficiently notified whenever the `Mutable` changes:
 ///!
 ///! ```rust
+///! # use futures_signals::signal::Mutable;
+///! # let my_state = Mutable::new(10);
+///! #
+///! use futures_signals::signal::SignalExt;
+///!
 ///! let future = my_state.signal().for_each(|value| {
 ///!     // This code is run for the current value of my_state, and also every time my_state changes
 ///!     println!("{}", value);
 ///!     Ok(())
 ///! });
+///! #
+///! # use futures_signals::signal::ForEach;
+///! # let future: ForEach<_, Result<(), ()>, _> = future;
 ///! ```
 ///!
 ///! This is how the `for_each` method works:
@@ -77,6 +88,10 @@
 ///! If you need more control, you can use `to_stream` instead:
 ///!
 ///! ```rust
+///! # use futures_signals::signal::Mutable;
+///! # let my_state = Mutable::new(10);
+///! # use futures_signals::signal::SignalExt;
+///! #
 ///! let stream = my_state.signal().to_stream();
 ///! ```
 ///!
@@ -100,6 +115,9 @@
 ///! 2. It is possible to call `signal` multiple times:
 ///!
 ///!    ```rust
+///!    # use futures_signals::signal::Mutable;
+///!    # let my_state = Mutable::new(10);
+///!    #
 ///!    let signal1 = my_state.signal();
 ///!    let signal2 = my_state.signal();
 ///!    ```
@@ -129,6 +147,9 @@
 ///! Here is an example:
 ///!
 ///! ```rust
+///! # use futures_signals::signal::Mutable;
+///! # let my_state = Mutable::new(10);
+///! #
 ///! my_state.set(2);
 ///! my_state.set(3);
 ///! ```
@@ -155,22 +176,20 @@
 ///!
 ///! Now that I've fully explained `Mutable`, I can finally explain `Signal`.
 ///!
-///! Just like how
-///! [`Future`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) and
-///! [`Stream`](https://docs.rs/futures/0.2.*/futures/trait.StreamExt.html) support various
-///! useful methods, `Signal` also contains many useful methods.
-///!
-///!
-///!
-///! Because `map` returns a `Signal`, you can chain it with more `Signal` methods:
+///! Just like [`Future`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) and
+///! [`Stream`](https://docs.rs/futures/0.2.*/futures/trait.StreamExt.html), `Signal` has many useful
+///! methods, and most of them return a `Signal` so they can be chained:
 ///!
 ///! ```rust
-///! // This contains the value of `mapped + 5`, which is the same as `my_state + 6`
-///! let mapped5 = mapped.map(|value| value + 5);
+///! # use futures_signals::signal::Mutable;
+///! # let my_state = Mutable::new(3);
+///! # use futures_signals::signal::SignalExt;
+///! # fn do_some_async_calculation(value: u32) -> Result<(), ()> { Ok(()) }
+///! #
+///! let mapped = my_state.signal()
+///!     .map(|value| value + 5)
+///!     .map_future(|value| do_some_async_calculation(value));
 ///! ```
-///!
-///! In the above example, `mapped5` contains the same value as `mapped`, except with `5` added
-///! to it.
 ///!
 ///! ----
 ///!
@@ -183,12 +202,17 @@
 ///! Here is an example:
 ///!
 ///! ```rust
-///! let my_vec = MutableVec::new();
+///! # use futures_signals::signal_vec::MutableVec;
+///! #
+///! let my_vec: MutableVec<u32> = MutableVec::new();
 ///! ```
 ///!
 ///! The above creates a new empty `MutableVec`. You can then use many of the `Vec` methods on it:
 ///!
 ///! ```rust
+///! # use futures_signals::signal_vec::MutableVec;
+///! # let my_vec: MutableVec<u32> = MutableVec::new();
+///! #
 ///! my_vec.push(1);
 ///! my_vec.insert(0, 2);
 ///! my_vec.remove(0);
@@ -200,18 +224,44 @@
 ///! `for_each` method to be efficiently notified when it changes:
 ///!
 ///! ```rust
+///! # use futures_signals::signal_vec::MutableVec;
+///! # let my_vec: MutableVec<u32> = MutableVec::new();
+///! #
+///! use futures_signals::signal_vec::{SignalVecExt, VecDiff};
+///!
 ///! let future = my_vec.signal_vec().for_each(|change| {
 ///!     match change {
-///!         VecDiff::Replace { values } => { ... }
-///!         VecDiff::InsertAt { index, value } => { ... },
-///!         VecDiff::UpdateAt { index, value } => { ... },
-///!         VecDiff::RemoveAt { index } => { ... },
-///!         VecDiff::Move { old_index, new_index } => { ... },
-///!         VecDiff::Push { value } => { ... },
-///!         VecDiff::Pop {} => { ... },
-///!         VecDiff::Clear {} => { ... },
+///!         VecDiff::Replace { values } => {
+///!             // ...
+///!         },
+///!         VecDiff::InsertAt { index, value } => {
+///!             // ...
+///!         },
+///!         VecDiff::UpdateAt { index, value } => {
+///!             // ...
+///!         },
+///!         VecDiff::RemoveAt { index } => {
+///!             // ...
+///!         },
+///!         VecDiff::Move { old_index, new_index } => {
+///!             // ...
+///!         },
+///!         VecDiff::Push { value } => {
+///!             // ...
+///!         },
+///!         VecDiff::Pop {} => {
+///!             // ...
+///!         },
+///!         VecDiff::Clear {} => {
+///!             // ...
+///!         },
 ///!     }
+///!
+///!     Ok(())
 ///! });
+///! #
+///! # use futures_signals::signal_vec::ForEach;
+///! # let future: ForEach<_, Result<(), ()>, _> = future;
 ///! ```
 ///!
 ///! Just like `Signal::for_each`, the `SignalVec::for_each` method returns a `Future`.
@@ -257,6 +307,9 @@
 ///! not notify at all:
 ///!
 ///! ```rust
+///! # use futures_signals::signal_vec::MutableVec;
+///! # let my_vec: MutableVec<u32> = MutableVec::new();
+///! #
 ///! my_vec.retain(|_| { true });
 ///! ```
 ///!
@@ -284,12 +337,16 @@
 ///! `SignalVec`:
 ///!
 ///! ```rust
+///! # use futures_signals::signal_vec::MutableVec;
+///! # let my_vec: MutableVec<u32> = MutableVec::new();
+///! # use futures_signals::signal_vec::{SignalVecExt, VecDiff};
+///! #
 ///! let mut copied_vec = vec![];
 ///!
 ///! let future = my_vec.signal_vec().for_each(move |change| {
 ///!     match change {
 ///!         VecDiff::Replace { values } => {
-///!             *copied_vec = values;
+///!             copied_vec = values;
 ///!         },
 ///!         VecDiff::InsertAt { index, value } => {
 ///!             copied_vec.insert(index, value);
@@ -314,7 +371,12 @@
 ///!             copied_vec.clear();
 ///!         },
 ///!     }
+///!
+///!     Ok(())
 ///! });
+///! #
+///! # use futures_signals::signal_vec::ForEach;
+///! # let future: ForEach<_, Result<(), ()>, _> = future;
 ///! ```
 ///!
 ///! In the above example, `copied_vec` is guaranteed to always have exactly the same values as `my_vec`, in the same order as `my_vec`.
@@ -326,8 +388,12 @@
 ///! Just like `Signal`, `SignalVec` has a lot of useful methods, and most of them return a `SignalVec` so they can be chained:
 ///!
 ///! ```rust
+///! # use futures_signals::signal_vec::MutableVec;
+///! # let my_vec: MutableVec<u32> = MutableVec::new();
+///! # use futures_signals::signal_vec::SignalVecExt;
+///! #
 ///! let filter_mapped = my_vec.signal_vec()
-///!     .filter(|value| value < 5)
+///!     .filter(|value| *value < 5)
 ///!     .map(|value| value + 10);
 ///! ```
 ///!
