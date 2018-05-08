@@ -40,6 +40,22 @@ impl<F: ?Sized + Signal> Signal for ::std::boxed::Box<F> {
 
 
 pub trait SignalExt: Signal {
+    /// Creates a `Stream` which contains the values of `self`.
+    ///
+    /// When the output `Stream` is spawned:
+    ///
+    /// 1. It immediately outputs the current value of `self`.
+    ///
+    /// 2. Whenever `self` changes it outputs the new value of `self`.
+    ///
+    /// Like *all* of the `Signal` methods, `to_stream` might skip intermediate changes.
+    /// So you ***cannot*** rely upon it containing every intermediate change.
+    /// But you ***can*** rely upon it always containing the most recent change.
+    ///
+    /// # Performance
+    ///
+    /// This is ***extremely*** efficient: it is *guaranteed* constant time, and it does not do
+    /// any heap allocation.
     #[inline]
     fn to_stream(self) -> SignalStream<Self, Never>
         where Self: Sized {
@@ -208,6 +224,56 @@ pub trait SignalExt: Signal {
         }
     }
 
+    /// Creates a `Signal` which uses a closure to filter and transform the value.
+    ///
+    /// When the output `Signal` is spawned:
+    ///
+    /// 1. The output `Signal` starts with the value `None`.
+    ///
+    /// 2. It calls the closure with the current value of `self`.
+    ///
+    /// 3. If the closure returns `Some`, then it puts the return value of the closure into the output `Signal`.
+    ///
+    /// 4. If the closure returns `None`, then it does nothing.
+    ///
+    /// 5. Whenever `self` changes it repeats steps 2 - 4.
+    ///
+    /// The output `Signal` will only be `None` for the initial value. After that it will always be `Some`.
+    ///
+    /// If the closure returns `Some` for the initial value, then the output `Signal` will never be `None`.
+    ///
+    /// It will call the closure at most once for each change in `self`.
+    ///
+    /// Like *all* of the `Signal` methods, `filter_map` might skip intermediate changes.
+    /// So you ***cannot*** rely upon the closure being called for every intermediate change.
+    /// But you ***can*** rely upon it always being called with the most recent change.
+    ///
+    /// # Examples
+    ///
+    /// Add `1` to the value, but only if the value is less than `5`:
+    ///
+    /// ```rust
+    /// # use futures_signals::signal::{always, SignalExt};
+    /// # let input = always(1);
+    /// let mapped = input.filter_map(|value| {
+    ///     if value < 5 {
+    ///         Some(value + 1)
+    ///
+    ///     } else {
+    ///         None
+    ///     }
+    /// });
+    /// ```
+    ///
+    /// If the initial value of `input` is `5` or greater then `mapped` will be `None`.
+    ///
+    /// If the current value of `input` is `5` or greater then `mapped` will keep its old value.
+    ///
+    /// Otherwise `mapped` will be `Some(input + 1)`.
+    ///
+    /// # Performance
+    ///
+    /// This is ***extremely*** efficient: it does not do any heap allocation, and it has *very* little overhead.
     #[inline]
     fn filter_map<A, B>(self, callback: B) -> FilterMap<Self, B>
         where B: FnMut(Self::Item) -> Option<A>,
