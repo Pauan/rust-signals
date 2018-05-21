@@ -285,6 +285,28 @@ pub trait SignalExt: Signal {
         }
     }
 
+    /// Creates a `Signal` which flattens `self`.
+    ///
+    /// When the output `Signal` is spawned:
+    ///
+    /// 1. It retrieves the current value of `self` (this value is also a `Signal`).
+    ///
+    /// 2. Then it puts the current value of the inner `Signal` into the output `Signal`.
+    ///
+    /// 3. Whenever the inner `Signal` changes it puts the new value into the output `Signal`.
+    ///
+    /// 4. Whenever `self` changes it repeats the above steps.
+    ///
+    ///    This happens automatically and efficiently.
+    ///
+    /// Like *all* of the `Signal` methods, `flatten` might skip intermediate changes.
+    /// So you ***cannot*** rely upon it containing every intermediate change.
+    /// But you ***can*** rely upon it always containing the most recent change.
+    ///
+    /// # Performance
+    ///
+    /// This is very efficient: it is *guaranteed* constant time, and it does not do
+    /// any heap allocation.
     #[inline]
     fn flatten(self) -> Flatten<Self>
         where Self::Item: IntoSignal,
@@ -661,30 +683,21 @@ impl<A> Signal for Flatten<A>
             Some(Async::Pending) => false,
         };
 
-        let poll = match self.inner {
-            Some(ref mut inner) => inner.poll_change(cx),
-
-            None => if done {
-                return Async::Ready(None);
-
-            } else {
-                return Async::Pending;
-            }
-        };
-
-        match poll {
-            Async::Ready(None) => {
+        match self.inner.as_mut().map(|inner| inner.poll_change(cx)) {
+            Some(Async::Ready(None)) => {
                 self.inner = None;
-
-                if done {
-                    Async::Ready(None)
-
-                } else {
-                    Async::Pending
-                }
             },
+            Some(poll) => {
+                return poll;
+            },
+            None => {},
+        }
 
-            a => a,
+        if done {
+            Async::Ready(None)
+
+        } else {
+            Async::Pending
         }
     }
 }
