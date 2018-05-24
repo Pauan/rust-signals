@@ -2,8 +2,8 @@ use std::marker::PhantomData;
 use futures_core::task::Context;
 use futures_core::{Async, Poll, Never};
 use futures_core::future::{Future, IntoFuture};
-use futures_util::stream;
 use futures_core::stream::Stream;
+use futures_util::stream;
 use futures_util::stream::StreamExt;
 use signal_vec::{VecDiff, SignalVec};
 
@@ -374,7 +374,7 @@ impl<A> Signal for FromFuture<A> where A: Future<Error = Never> {
     type Item = Option<A::Item>;
 
     fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        match self.future.as_mut().map(|signal| signal.poll(cx)) {
+        match self.future.as_mut().map(|future| future.poll(cx)) {
             None => {
                 Async::Ready(None)
             },
@@ -402,6 +402,45 @@ impl<A> Signal for FromFuture<A> where A: Future<Error = Never> {
 #[inline]
 pub fn from_future<A>(future: A) -> FromFuture<A::Future> where A: IntoFuture {
     FromFuture { future: Some(future.into_future()), first: true }
+}
+
+
+pub struct FromStream<A> {
+    stream: A,
+    first: bool,
+}
+
+impl<A> Signal for FromStream<A> where A: Stream<Error = Never> {
+    type Item = Option<A::Item>;
+
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        match self.stream.poll_next(cx) {
+            Ok(Async::Ready(None)) => {
+                Async::Ready(None)
+            },
+
+            Ok(Async::Ready(Some(value))) => {
+                Async::Ready(Some(Some(value)))
+            },
+
+            Ok(Async::Pending) => {
+                if self.first {
+                    self.first = false;
+                    Async::Ready(Some(None))
+
+                } else {
+                    Async::Pending
+                }
+            },
+
+            Err(_) => unreachable!(),
+        }
+    }
+}
+
+#[inline]
+pub fn from_stream<A>(stream: A) -> FromStream<A> where A: Stream {
+    FromStream { stream, first: true }
 }
 
 
