@@ -65,6 +65,15 @@ pub trait SignalExt: Signal {
         }
     }
 
+    #[inline]
+    fn to_future(self) -> SignalFuture<Self>
+        where Self: Sized {
+        SignalFuture {
+            signal: self,
+            value: None,
+        }
+    }
+
     /// Creates a `Signal` which uses a closure to transform the value.
     ///
     /// When the output `Signal` is spawned:
@@ -516,6 +525,35 @@ impl<A: Signal, Error> Stream for SignalStream<A, Error> {
     #[inline]
     fn poll_next(&mut self, cx: &mut Context) -> Poll<Option<Self::Item>, Self::Error> {
         Ok(self.signal.poll_change(cx))
+    }
+}
+
+
+pub struct SignalFuture<A> where A: Signal {
+    signal: A,
+    value: Option<A::Item>,
+}
+
+impl<A: Signal> Future for SignalFuture<A> {
+    type Item = A::Item;
+    type Error = Never;
+
+    #[inline]
+    fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
+        loop {
+            return match self.signal.poll_change(cx) {
+                Async::Ready(None) => {
+                    Ok(Async::Ready(self.value.take().unwrap()))
+                },
+                Async::Ready(Some(value)) => {
+                    self.value = Some(value);
+                    continue;
+                },
+                Async::Pending => {
+                    Ok(Async::Pending)
+                },
+            }
+        }
     }
 }
 
