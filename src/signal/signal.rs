@@ -365,6 +365,46 @@ pub trait SignalExt: Signal {
 impl<T: ?Sized> SignalExt for T where T: Signal {}
 
 
+pub struct FromFuture<A> {
+    future: Option<A>,
+    first: bool,
+}
+
+impl<A> Signal for FromFuture<A> where A: Future<Error = Never> {
+    type Item = Option<A::Item>;
+
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        match self.future.as_mut().map(|signal| signal.poll(cx)) {
+            None => {
+                Async::Ready(None)
+            },
+
+            Some(Ok(Async::Ready(value))) => {
+                self.future = None;
+                Async::Ready(Some(Some(value)))
+            },
+
+            Some(Ok(Async::Pending)) => {
+                if self.first {
+                    self.first = false;
+                    Async::Ready(Some(None))
+
+                } else {
+                    Async::Pending
+                }
+            },
+
+            Some(Err(_)) => unreachable!(),
+        }
+    }
+}
+
+#[inline]
+pub fn from_future<A>(future: A) -> FromFuture<A::Future> where A: IntoFuture {
+    FromFuture { future: Some(future.into_future()), first: true }
+}
+
+
 pub struct Always<A> {
     value: Option<A>,
 }
