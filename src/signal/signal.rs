@@ -152,22 +152,22 @@ pub trait SignalExt: Signal {
     ///    It only keeps track of the most recent value: that means that it ***won't*** call the closure for consecutive
     ///    duplicates, however it ***will*** call the closure for non-consecutive duplicates.
     ///
-    /// Because `map_dedupe` has the same behavior as `map`, it is useful solely as a performance optimization.
+    /// Because `dedupe_map` has the same behavior as `map`, it is useful solely as a performance optimization.
     ///
     /// # Performance
     ///
     /// The performance is the same as `map`, except with an additional call to `eq`.
     ///
-    /// If the `eq` call is fast, then `map_dedupe` can be faster than `map`, because it doesn't call the closure
+    /// If the `eq` call is fast, then `dedupe_map` can be faster than `map`, because it doesn't call the closure
     /// when the new and old values are the same, and it also doesn't update any child Signals.
     ///
-    /// On the other hand, if the `eq` call is slow, then `map_dedupe` is probably slower than `map`.
+    /// On the other hand, if the `eq` call is slow, then `dedupe_map` is probably slower than `map`.
     #[inline]
-    fn map_dedupe<A, B>(self, callback: B) -> MapDedupe<Self, B>
+    fn dedupe_map<A, B>(self, callback: B) -> DedupeMap<Self, B>
         // TODO should this use & instead of &mut ?
         where B: FnMut(&mut Self::Item) -> A,
               Self: Sized {
-        MapDedupe {
+        DedupeMap {
             old_value: None,
             signal: self,
             callback,
@@ -682,13 +682,13 @@ impl<A, B> SignalVec for SignalSignalVec<A>
 }
 
 
-pub struct MapDedupe<A: Signal, B> {
+pub struct DedupeMap<A: Signal, B> {
     old_value: Option<A::Item>,
     signal: A,
     callback: B,
 }
 
-impl<A, B, C> Signal for MapDedupe<A, B>
+impl<A, B, C> Signal for DedupeMap<A, B>
     where A: Signal,
           A::Item: PartialEq,
           // TODO should this use & instead of &mut ?
