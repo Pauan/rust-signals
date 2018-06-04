@@ -174,6 +174,22 @@ pub trait SignalExt: Signal {
         }
     }
 
+    #[inline]
+    fn dedupe(self) -> Dedupe<Self> where Self: Sized {
+        Dedupe {
+            old_value: None,
+            signal: self,
+        }
+    }
+
+    #[inline]
+    fn dedupe_cloned(self) -> DedupeCloned<Self> where Self: Sized {
+        DedupeCloned {
+            old_value: None,
+            signal: self,
+        }
+    }
+
     /// Creates a `Signal` which uses a closure to asynchronously transform the value.
     ///
     /// When the output `Signal` is spawned:
@@ -682,6 +698,33 @@ impl<A, B> SignalVec for SignalSignalVec<A>
 }
 
 
+macro_rules! dedupe {
+    ($signal:expr, $cx:expr, $value:expr, $pat:pat, $name:ident => $output:expr) => {
+        loop {
+            return match $signal.poll_change($cx) {
+                Async::Ready(Some($pat)) => {
+                    let has_changed = match $value {
+                        Some(ref old_value) => *old_value != $name,
+                        None => true,
+                    };
+
+                    if has_changed {
+                        let output = $output;
+                        $value = Some($name);
+                        Async::Ready(Some(output))
+
+                    } else {
+                        continue;
+                    }
+                },
+                Async::Ready(None) => Async::Ready(None),
+                Async::Pending => Async::Pending,
+            }
+        }
+    };
+}
+
+
 pub struct DedupeMap<A: Signal, B> {
     old_value: Option<A::Item>,
     signal: A,
@@ -699,27 +742,43 @@ impl<A, B, C> Signal for DedupeMap<A, B>
 
     // TODO should this use #[inline] ?
     fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        loop {
-            return match self.signal.poll_change(cx) {
-                Async::Ready(Some(mut value)) => {
-                    let has_changed = match self.old_value {
-                        Some(ref old_value) => *old_value != value,
-                        None => true,
-                    };
+        dedupe!(self.signal, cx, self.old_value, mut value, value => (self.callback)(&mut value))
+    }
+}
 
-                    if has_changed {
-                        let output = (self.callback)(&mut value);
-                        self.old_value = Some(value);
-                        Async::Ready(Some(output))
 
-                    } else {
-                        continue;
-                    }
-                },
-                Async::Ready(None) => Async::Ready(None),
-                Async::Pending => Async::Pending,
-            }
-        }
+pub struct Dedupe<A: Signal> {
+    old_value: Option<A::Item>,
+    signal: A,
+}
+
+impl<A> Signal for Dedupe<A>
+    where A: Signal,
+          A::Item: PartialEq + Copy {
+
+    type Item = A::Item;
+
+    // TODO should this use #[inline] ?
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        dedupe!(self.signal, cx, self.old_value, value, value => value)
+    }
+}
+
+
+pub struct DedupeCloned<A: Signal> {
+    old_value: Option<A::Item>,
+    signal: A,
+}
+
+impl<A> Signal for DedupeCloned<A>
+    where A: Signal,
+          A::Item: PartialEq + Clone {
+
+    type Item = A::Item;
+
+    // TODO should this use #[inline] ?
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        dedupe!(self.signal, cx, self.old_value, value, value => value.clone())
     }
 }
 
