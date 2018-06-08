@@ -63,6 +63,24 @@ impl<A> MutableSignalState<A> {
 
         state
     }
+
+    fn poll_change<B, F>(&self, cx: &mut Context, f: F) -> Async<Option<B>> where F: FnOnce(&A) -> B {
+        // TODO is this correct ?
+        let lock = self.state.read().unwrap();
+
+        // TODO verify that this is correct
+        if self.has_changed.swap(false, Ordering::SeqCst) {
+            Async::Ready(Some(f(&lock.value)))
+
+        } else if lock.senders == 0 {
+            Async::Ready(None)
+
+        } else {
+            // TODO is this correct ?
+            *self.waker.lock().unwrap() = Some(cx.waker().clone());
+            Async::Pending
+        }
+    }
 }
 
 
@@ -121,6 +139,10 @@ impl<A> Mutable<A> {
     pub fn with_ref<B, F>(&self, f: F) -> B where F: FnOnce(&A) -> B {
         let state = self.0.read().unwrap();
         f(&state.value)
+    }
+
+    pub fn signal_map<B, F>(&self, f: F) -> MutableSignalMap<A, F> where F: FnMut(&A) -> B {
+        MutableSignalMap(MutableSignalState::new(&self.0), f)
     }
 }
 
@@ -200,21 +222,21 @@ impl<A: Copy> Signal for MutableSignal<A> {
     type Item = A;
 
     fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        // TODO is this correct ?
-        let lock = self.0.state.read().unwrap();
+        self.0.poll_change(cx, |value| *value)
+    }
+}
 
-        // TODO verify that this is correct
-        if self.0.has_changed.swap(false, Ordering::SeqCst) {
-            Async::Ready(Some(lock.value))
 
-        } else if lock.senders == 0 {
-            Async::Ready(None)
+// TODO remove it from receivers when it's dropped
+pub struct MutableSignalMap<A, F>(Arc<MutableSignalState<A>>, F);
 
-        } else {
-            // TODO is this correct ?
-            *self.0.waker.lock().unwrap() = Some(cx.waker().clone());
-            Async::Pending
-        }
+impl<A, B, F> Signal for MutableSignalMap<A, F> where F: FnMut(&A) -> B {
+    type Item = B;
+
+    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+        let state = &self.0;
+        let callback = &mut self.1;
+        state.poll_change(cx, callback)
     }
 }
 
@@ -228,20 +250,6 @@ impl<A: Clone> Signal for MutableSignalCloned<A> {
 
     // TODO code duplication with MutableSignal::poll
     fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        // TODO is this correct ?
-        let lock = self.0.state.read().unwrap();
-
-        // TODO verify that this is correct
-        if self.0.has_changed.swap(false, Ordering::SeqCst) {
-            Async::Ready(Some(lock.value.clone()))
-
-        } else if lock.senders == 0 {
-            Async::Ready(None)
-
-        } else {
-            // TODO is this correct ?
-            *self.0.waker.lock().unwrap() = Some(cx.waker().clone());
-            Async::Pending
-        }
+        self.0.poll_change(cx, |value| value.clone())
     }
 }
