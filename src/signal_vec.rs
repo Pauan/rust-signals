@@ -5,7 +5,7 @@ use futures_core::{Future, Stream, Poll, Async, Never};
 use futures_core::future::IntoFuture;
 use futures_util::stream;
 use futures_util::stream::StreamExt;
-use signal::{Signal, Mutable};
+use signal::{Signal, Mutable, MutableSignal};
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -410,7 +410,19 @@ impl MutableIndex {
     fn new(value: usize) -> Self {
         MutableIndex(Mutable::new(Some(value)))
     }
+
+    #[inline]
+    pub fn get(&self) -> Option<usize> {
+        self.0.get()
+    }
+
+    // TODO use custom type for this ?
+    #[inline]
+    pub fn signal(&self) -> MutableSignal<Option<usize>> {
+        self.0.signal()
+    }
 }
+
 
 pub struct Enumerate<A> {
     signal: A,
