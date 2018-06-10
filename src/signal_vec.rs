@@ -5,7 +5,7 @@ use futures_core::{Future, Stream, Poll, Async, Never};
 use futures_core::future::IntoFuture;
 use futures_util::stream;
 use futures_util::stream::StreamExt;
-use signal::Signal;
+use signal::{Signal, Mutable};
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -332,6 +332,14 @@ pub trait SignalVecExt: SignalVec {
             len: 0,
         }
     }
+
+    #[inline]
+    fn enumerate(self) -> Enumerate<Self> where Self: Sized {
+        Enumerate {
+            signal: self,
+            mutables: vec![],
+        }
+    }
 }
 
 // TODO why is this ?Sized
@@ -391,6 +399,125 @@ impl<A, B, F> SignalVec for Map<A, F>
     #[inline]
     fn poll_vec_change(&mut self, cx: &mut Context) -> Async<Option<VecDiff<Self::Item>>> {
         self.signal.poll_vec_change(cx).map(|some| some.map(|change| change.map(|value| (self.callback)(value))))
+    }
+}
+
+
+#[derive(Clone)]
+pub struct MutableIndex(Mutable<Option<usize>>);
+
+impl MutableIndex {
+    fn new(value: usize) -> Self {
+        MutableIndex(Mutable::new(Some(value)))
+    }
+}
+
+pub struct Enumerate<A> {
+    signal: A,
+    mutables: Vec<MutableIndex>,
+}
+
+impl<A> SignalVec for Enumerate<A> where A: SignalVec {
+    type Item = (MutableIndex, A::Item);
+
+    #[inline]
+    fn poll_vec_change(&mut self, cx: &mut Context) -> Async<Option<VecDiff<Self::Item>>> {
+        fn increment_indexes(range: &[MutableIndex]) {
+            for mutable in range {
+                mutable.0.replace_with(|value| value.map(|value| value + 1));
+            }
+        }
+
+        fn decrement_indexes(range: &[MutableIndex]) {
+            for mutable in range {
+                mutable.0.replace_with(|value| value.map(|value| value - 1));
+            }
+        }
+
+        // TODO use map ?
+        match self.signal.poll_vec_change(cx) {
+            Async::Ready(Some(change)) => Async::Ready(Some(match change {
+                VecDiff::Replace { values } => {
+                    for mutable in self.mutables.drain(..) {
+                        mutable.0.set(None);
+                    }
+
+                    self.mutables = Vec::with_capacity(values.len());
+
+                    VecDiff::Replace {
+                        values: values.into_iter().enumerate().map(|(index, value)| {
+                            let mutable = MutableIndex::new(index);
+                            self.mutables.push(mutable.clone());
+                            (mutable, value)
+                        }).collect()
+                    }
+                },
+
+                VecDiff::InsertAt { index, value } => {
+                    let mutable = MutableIndex::new(index);
+
+                    self.mutables.insert(index, mutable.clone());
+
+                    increment_indexes(&self.mutables[(index + 1)..]);
+
+                    VecDiff::InsertAt { index, value: (mutable, value) }
+                },
+
+                VecDiff::UpdateAt { index, value } => {
+                    VecDiff::UpdateAt { index, value: (self.mutables[index].clone(), value) }
+                },
+
+                VecDiff::Push { value } => {
+                    let mutable = MutableIndex::new(self.mutables.len());
+
+                    self.mutables.push(mutable.clone());
+
+                    VecDiff::Push { value: (mutable, value) }
+                },
+
+                VecDiff::Move { old_index, new_index } => {
+                    let mutable = self.mutables.remove(old_index);
+
+                    // TODO figure out a way to avoid this clone ?
+                    self.mutables.insert(new_index, mutable.clone());
+
+                    // TODO test this
+                    decrement_indexes(&self.mutables[old_index..new_index]);
+
+                    mutable.0.set(Some(new_index));
+
+                    VecDiff::Move { old_index, new_index }
+                },
+
+                VecDiff::RemoveAt { index } => {
+                    let mutable = self.mutables.remove(index);
+
+                    decrement_indexes(&self.mutables[index..]);
+
+                    mutable.0.set(None);
+
+                    VecDiff::RemoveAt { index }
+                },
+
+                VecDiff::Pop {} => {
+                    let mutable = self.mutables.pop().unwrap();
+
+                    mutable.0.set(None);
+
+                    VecDiff::Pop {}
+                },
+
+                VecDiff::Clear {} => {
+                    for mutable in self.mutables.drain(..) {
+                        mutable.0.set(None);
+                    }
+
+                    VecDiff::Clear {}
+                },
+            })),
+            Async::Ready(None) => Async::Ready(None),
+            Async::Pending => Async::Pending,
+        }
     }
 }
 

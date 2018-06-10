@@ -192,13 +192,13 @@ impl<T: Default> Default for Mutable<T> {
     }
 }
 
-/*impl<A> Clone for Mutable<A> {
+impl<A> Clone for Mutable<A> {
     #[inline]
     fn clone(&self) -> Self {
         self.0.write().unwrap().senders += 1;
         Mutable(self.0.clone())
     }
-}*/
+}
 
 impl<A> Drop for Mutable<A> {
     #[inline]
