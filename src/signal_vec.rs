@@ -494,7 +494,12 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
                     self.mutables.insert(new_index, mutable.clone());
 
                     // TODO test this
-                    decrement_indexes(&self.mutables[old_index..new_index]);
+                    if old_index < new_index {
+                        decrement_indexes(&self.mutables[old_index..new_index]);
+
+                    } else if new_index < old_index {
+                        increment_indexes(&self.mutables[(new_index + 1)..(old_index + 1)]);
+                    }
 
                     mutable.0.set(Some(new_index));
 
