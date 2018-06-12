@@ -85,12 +85,12 @@ impl<A> MutableSignalState<A> {
 }
 
 
-pub struct MutableMut<'a, A> where A: 'a {
+pub struct MutableLockMut<'a, A> where A: 'a {
     mutated: bool,
     lock: RwLockWriteGuard<'a, MutableState<A>>,
 }
 
-impl<'a, A> Deref for MutableMut<'a, A> {
+impl<'a, A> Deref for MutableLockMut<'a, A> {
     type Target = A;
 
     fn deref(&self) -> &Self::Target {
@@ -98,15 +98,15 @@ impl<'a, A> Deref for MutableMut<'a, A> {
     }
 }
 
-impl<'a, A> DerefMut for MutableMut<'a, A> {
+impl<'a, A> DerefMut for MutableLockMut<'a, A> {
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.mutated = true;
         &mut self.lock.value
     }
 }
 
-impl<'a, A> MutableMut<'a, A> {
-    fn notify(&mut self) {
+impl<'a, A> Drop for MutableLockMut<'a, A> {
+    fn drop(&mut self) {
         if self.mutated {
             self.lock.notify(true);
         }
@@ -171,19 +171,12 @@ impl<A> Mutable<A> {
         f(&state.value)
     }
 
-    pub fn with_mut<B, F>(&self, f: F) -> B where F: FnOnce(&mut MutableMut<A>) -> B {
-        let state = self.0.write().unwrap();
-
-        let mut mutable_mut = MutableMut {
+    // TODO lots of unit tests to verify that it only notifies when the object is mutated
+    pub fn lock_mut(&self) -> MutableLockMut<A> {
+        MutableLockMut {
             mutated: false,
-            lock: state,
-        };
-
-        let output = f(&mut mutable_mut);
-
-        mutable_mut.notify();
-
-        output
+            lock: self.0.write().unwrap(),
+        }
     }
 
     pub fn signal_map<B, F>(&self, f: F) -> MutableSignalMap<A, F> where F: FnMut(&A) -> B {
