@@ -2,7 +2,7 @@ use super::Signal;
 use std;
 use std::ops::{Deref, DerefMut};
 // TODO use parking_lot ?
-use std::sync::{Arc, Weak, Mutex, RwLock, RwLockWriteGuard};
+use std::sync::{Arc, Weak, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 // TODO use parking_lot ?
 use std::sync::atomic::{AtomicBool, Ordering};
 use futures_core::Async;
@@ -114,6 +114,19 @@ impl<'a, A> Drop for MutableLockMut<'a, A> {
 }
 
 
+pub struct MutableLockRef<'a, A> where A: 'a {
+    lock: RwLockReadGuard<'a, MutableState<A>>,
+}
+
+impl<'a, A> Deref for MutableLockRef<'a, A> {
+    type Target = A;
+
+    fn deref(&self) -> &Self::Target {
+        &self.lock.value
+    }
+}
+
+
 pub struct Mutable<A>(Arc<RwLock<MutableState<A>>>);
 
 impl<A> Mutable<A> {
@@ -165,13 +178,15 @@ impl<A> Mutable<A> {
         state.notify(true);
     }
 
-    // TODO figure out a better name for this ?
-    pub fn with_ref<B, F>(&self, f: F) -> B where F: FnOnce(&A) -> B {
-        let state = self.0.read().unwrap();
-        f(&state.value)
+    // TODO return Result ?
+    pub fn lock_ref(&self) -> MutableLockRef<A> {
+        MutableLockRef {
+            lock: self.0.read().unwrap(),
+        }
     }
 
     // TODO lots of unit tests to verify that it only notifies when the object is mutated
+    // TODO return Result ?
     pub fn lock_mut(&self) -> MutableLockMut<A> {
         MutableLockMut {
             mutated: false,
