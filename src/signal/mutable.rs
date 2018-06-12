@@ -1,7 +1,8 @@
 use super::Signal;
 use std;
+use std::ops::{Deref, DerefMut};
 // TODO use parking_lot ?
-use std::sync::{Arc, Weak, Mutex, RwLock};
+use std::sync::{Arc, Weak, Mutex, RwLock, RwLockWriteGuard};
 // TODO use parking_lot ?
 use std::sync::atomic::{AtomicBool, Ordering};
 use futures_core::Async;
@@ -84,6 +85,35 @@ impl<A> MutableSignalState<A> {
 }
 
 
+pub struct MutableMut<'a, A> where A: 'a {
+    mutated: bool,
+    lock: RwLockWriteGuard<'a, MutableState<A>>,
+}
+
+impl<'a, A> Deref for MutableMut<'a, A> {
+    type Target = A;
+
+    fn deref(&self) -> &Self::Target {
+        &self.lock.value
+    }
+}
+
+impl<'a, A> DerefMut for MutableMut<'a, A> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.mutated = true;
+        &mut self.lock.value
+    }
+}
+
+impl<'a, A> MutableMut<'a, A> {
+    fn notify(&mut self) {
+        if self.mutated {
+            self.lock.notify(true);
+        }
+    }
+}
+
+
 pub struct Mutable<A>(Arc<RwLock<MutableState<A>>>);
 
 impl<A> Mutable<A> {
@@ -141,12 +171,17 @@ impl<A> Mutable<A> {
         f(&state.value)
     }
 
-    pub fn with_mut<B, F>(&self, f: F) -> B where F: FnOnce(&mut A) -> B {
-        let mut state = self.0.write().unwrap();
+    pub fn with_mut<B, F>(&self, f: F) -> B where F: FnOnce(&mut MutableMut<A>) -> B {
+        let state = self.0.write().unwrap();
 
-        let output = f(&mut state.value);
+        let mut mutable_mut = MutableMut {
+            mutated: false,
+            lock: state,
+        };
 
-        state.notify(true);
+        let output = f(&mut mutable_mut);
+
+        mutable_mut.notify();
 
         output
     }
