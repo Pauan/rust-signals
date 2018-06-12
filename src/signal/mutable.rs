@@ -141,6 +141,16 @@ impl<A> Mutable<A> {
         f(&state.value)
     }
 
+    pub fn with_mut<B, F>(&self, f: F) -> B where F: FnOnce(&mut A) -> B {
+        let mut state = self.0.write().unwrap();
+
+        let output = f(&mut state.value);
+
+        state.notify(true);
+
+        output
+    }
+
     pub fn signal_map<B, F>(&self, f: F) -> MutableSignalMap<A, F> where F: FnMut(&A) -> B {
         MutableSignalMap(MutableSignalState::new(&self.0), f)
     }
