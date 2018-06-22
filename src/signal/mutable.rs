@@ -194,8 +194,8 @@ impl<A> Mutable<A> {
         }
     }
 
-    pub fn signal_map<B, F>(&self, f: F) -> MutableSignalMap<A, F> where F: FnMut(&A) -> B {
-        MutableSignalMap(MutableSignalState::new(&self.0), f)
+    pub fn signal_ref<B, F>(&self, f: F) -> MutableSignalRef<A, F> where F: FnMut(&A) -> B {
+        MutableSignalRef(MutableSignalState::new(&self.0), f)
     }
 }
 
@@ -281,9 +281,9 @@ impl<A: Copy> Signal for MutableSignal<A> {
 
 
 // TODO remove it from receivers when it's dropped
-pub struct MutableSignalMap<A, F>(Arc<MutableSignalState<A>>, F);
+pub struct MutableSignalRef<A, F>(Arc<MutableSignalState<A>>, F);
 
-impl<A, B, F> Signal for MutableSignalMap<A, F> where F: FnMut(&A) -> B {
+impl<A, B, F> Signal for MutableSignalRef<A, F> where F: FnMut(&A) -> B {
     type Item = B;
 
     fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
