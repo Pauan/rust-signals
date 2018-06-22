@@ -1113,7 +1113,8 @@ impl<A, F> SignalVec for SortByCloned<A, F>
 // TODO verify that this is correct
 mod mutable_vec {
     use super::{SignalVec, VecDiff};
-    use std::sync::{Arc, RwLock};
+    use std::ops::Deref;
+    use std::sync::{Arc, RwLock, RwLockReadGuard};
     use futures_channel::mpsc;
     use futures_core::{Async, Stream};
     use futures_core::task::Context;
@@ -1355,6 +1356,20 @@ mod mutable_vec {
     }
 
 
+    pub struct MutableVecLockSlice<'a, A> where A: 'a {
+        lock: RwLockReadGuard<'a, MutableVecState<A>>,
+    }
+
+    impl<'a, A> Deref for MutableVecLockSlice<'a, A> {
+        type Target = [A];
+
+        #[inline]
+        fn deref(&self) -> &Self::Target {
+            &self.lock.values
+        }
+    }
+
+
     // TODO get rid of the Arc
     pub struct MutableVec<A>(Arc<RwLock<MutableVecState<A>>>);
 
@@ -1397,9 +1412,11 @@ mod mutable_vec {
             self.0.write().unwrap().retain(f)
         }
 
-        pub fn with_slice<B, F>(&self, f: F) -> B where F: FnOnce(&[A]) -> B {
-            let lock = self.0.read().unwrap();
-            f(&lock.values)
+        // TODO return Result ?
+        pub fn lock_slice(&self) -> MutableVecLockSlice<A> {
+            MutableVecLockSlice {
+                lock: self.0.read().unwrap(),
+            }
         }
 
         #[inline]

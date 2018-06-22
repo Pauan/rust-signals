@@ -93,12 +93,14 @@ pub struct MutableLockMut<'a, A> where A: 'a {
 impl<'a, A> Deref for MutableLockMut<'a, A> {
     type Target = A;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.lock.value
     }
 }
 
 impl<'a, A> DerefMut for MutableLockMut<'a, A> {
+    #[inline]
     fn deref_mut(&mut self) -> &mut Self::Target {
         self.mutated = true;
         &mut self.lock.value
@@ -106,6 +108,7 @@ impl<'a, A> DerefMut for MutableLockMut<'a, A> {
 }
 
 impl<'a, A> Drop for MutableLockMut<'a, A> {
+    #[inline]
     fn drop(&mut self) {
         if self.mutated {
             self.lock.notify(true);
@@ -121,6 +124,7 @@ pub struct MutableLockRef<'a, A> where A: 'a {
 impl<'a, A> Deref for MutableLockRef<'a, A> {
     type Target = A;
 
+    #[inline]
     fn deref(&self) -> &Self::Target {
         &self.lock.value
     }
