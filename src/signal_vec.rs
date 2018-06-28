@@ -314,7 +314,7 @@ pub trait SignalVecExt: SignalVec {
     fn for_each<U, F>(self, callback: F) -> ForEach<Self, U, F>
         where U: IntoFuture<Item = ()>,
               F: FnMut(VecDiff<Self::Item>) -> U,
-              Self:Sized {
+              Self: Sized {
         // TODO a little hacky
         ForEach {
             inner: SignalVecStream {
@@ -338,6 +338,18 @@ pub trait SignalVecExt: SignalVec {
         Enumerate {
             signal: self,
             mutables: vec![],
+        }
+    }
+
+    #[inline]
+    fn delay_remove<A, F>(self, f: F) -> DelayRemove<Self, A, F>
+        where A: Future<Item = (), Error = Never>,
+              F: FnMut(&Self::Item) -> A,
+              Self: Sized {
+        DelayRemove {
+            signal: Some(self),
+            futures: vec![],
+            callback: f,
         }
     }
 }
@@ -1104,6 +1116,204 @@ impl<A, F> SignalVec for SortByCloned<A, F>
                         },
                     },
                 }
+            },
+        }
+    }
+}
+
+
+struct DelayRemoveState<A> {
+    future: A,
+    is_removing: bool,
+}
+
+impl<A> DelayRemoveState<A> {
+    #[inline]
+    fn new(future: A) -> Self {
+        Self {
+            future,
+            is_removing: false,
+        }
+    }
+}
+
+pub struct DelayRemove<A, B, F> {
+    signal: Option<A>,
+    futures: Vec<DelayRemoveState<B>>,
+    callback: F,
+}
+
+impl<S, A, F> DelayRemove<S, A, F>
+    where S: SignalVec,
+          A: Future<Item = (), Error = Never>,
+          F: FnMut(&S::Item) -> A {
+
+    fn remove_index(&mut self, index: usize) -> Async<Option<VecDiff<S::Item>>> {
+        if index == (self.futures.len() - 1) {
+            self.futures.pop();
+            Async::Ready(Some(VecDiff::Pop {}))
+
+        } else {
+            self.futures.remove(index);
+            Async::Ready(Some(VecDiff::RemoveAt { index }))
+        }
+    }
+
+    fn should_remove(&mut self, cx: &mut Context, index: usize) -> bool {
+        let state = &mut self.futures[index];
+
+        assert!(!state.is_removing);
+
+        if state.future.poll(cx).unwrap().is_ready() {
+            true
+
+        } else {
+            state.is_removing = true;
+            false
+        }
+    }
+
+    fn find_index(&self, parent_index: usize) -> Option<usize> {
+        let mut seen = 0;
+
+        // TODO is there a combinator that can simplify this ?
+        self.futures.iter().position(|state| {
+            if state.is_removing {
+                false
+
+            } else if seen == parent_index {
+                true
+
+            } else {
+                seen += 1;
+                false
+            }
+        })
+    }
+
+    fn find_last_index(&self) -> Option<usize> {
+        self.futures.iter().rposition(|state| !state.is_removing)
+    }
+}
+
+impl<S, A, F> SignalVec for DelayRemove<S, A, F>
+    where S: SignalVec,
+          A: Future<Item = (), Error = Never>,
+          F: FnMut(&S::Item) -> A {
+    type Item = S::Item;
+
+    // TODO this can probably be implemented more efficiently
+    fn poll_vec_change(&mut self, cx: &mut Context) -> Async<Option<VecDiff<Self::Item>>> {
+        let mut is_done = true;
+
+        // TODO is this loop correct ?
+        while let Some(result) = self.signal.as_mut().map(|signal| signal.poll_vec_change(cx)) {
+            match result {
+                Async::Ready(Some(change)) => return match change {
+                    VecDiff::Replace { values } => {
+                        // TODO handle old futures
+                        self.futures = values.iter().map(|value| DelayRemoveState::new((self.callback)(value))).collect();
+
+                        Async::Ready(Some(VecDiff::Replace { values }))
+                    },
+
+                    VecDiff::InsertAt { index, value } => {
+                        let index = self.find_index(index).unwrap_or_else(|| self.futures.len());
+                        let state = DelayRemoveState::new((self.callback)(&value));
+                        self.futures.insert(index, state);
+                        Async::Ready(Some(VecDiff::InsertAt { index, value }))
+                    },
+
+                    VecDiff::Push { value } => {
+                        let state = DelayRemoveState::new((self.callback)(&value));
+                        self.futures.push(state);
+                        Async::Ready(Some(VecDiff::Push { value }))
+                    },
+
+                    VecDiff::UpdateAt { index, value } => {
+                        // TODO what about removing the old future ?
+                        let index = self.find_index(index).expect("Could not find value");
+                        let state = DelayRemoveState::new((self.callback)(&value));
+                        self.futures[index] = state;
+                        Async::Ready(Some(VecDiff::UpdateAt { index, value }))
+                    },
+
+                    // TODO test this
+                    // TODO should this be treated as a removal + insertion ?
+                    VecDiff::Move { old_index, new_index } => {
+                        let old_index = self.find_index(old_index).expect("Could not find value");
+
+                        let state = self.futures.remove(old_index);
+
+                        let new_index = self.find_index(new_index).unwrap_or_else(|| self.futures.len());
+
+                        self.futures.insert(new_index, state);
+
+                        Async::Ready(Some(VecDiff::Move { old_index, new_index }))
+                    },
+
+                    VecDiff::RemoveAt { index } => {
+                        let index = self.find_index(index).expect("Could not find value");
+
+                        if self.should_remove(cx, index) {
+                            self.remove_index(index)
+
+                        } else {
+                            continue;
+                        }
+                    },
+
+                    VecDiff::Pop {} => {
+                        let index = self.find_last_index().expect("Cannot pop from empty vec");
+
+                        if self.should_remove(cx, index) {
+                            self.remove_index(index)
+
+                        } else {
+                            continue;
+                        }
+                    },
+
+                    // TODO maybe it should play remove animation for this ?
+                    VecDiff::Clear {} => {
+                        self.futures.clear();
+                        Async::Ready(Some(VecDiff::Clear {}))
+                    },
+                },
+                Async::Ready(None) => {
+                    self.signal = None;
+                    break;
+                },
+                Async::Pending => {
+                    is_done = false;
+                    break;
+                },
+            }
+        }
+
+        let mut is_removing = false;
+
+        // TODO make this more efficient (e.g. using a similar strategy as FuturesUnordered)
+        // This uses rposition so that way it will return VecDiff::Pop in more situations
+        let index = self.futures.iter_mut().rposition(|state| {
+            if state.is_removing {
+                is_removing = true;
+                state.future.poll(cx).unwrap().is_ready()
+
+            } else {
+                false
+            }
+        });
+
+        match index {
+            Some(index) => {
+                self.remove_index(index)
+            },
+            None => if is_done && !is_removing {
+                Async::Ready(None)
+
+            } else {
+                Async::Pending
             },
         }
     }
