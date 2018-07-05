@@ -1,4 +1,5 @@
 #![recursion_limit="128"]
+#![warn(unreachable_pub)]
 
 ///! It is *very highly* recommended to read the tutorial.
 ///! It explains all of the concepts you will need to use Signals effectively.
