@@ -215,6 +215,18 @@ pub trait SignalVecExt: SignalVec {
         }
     }
 
+    #[inline]
+    fn filter_signal_cloned<A, F>(self, callback: F) -> FilterSignalCloned<Self, A, F>
+        where A: Signal<Item = bool>,
+              F: FnMut(&Self::Item) -> A,
+              Self: Sized {
+        FilterSignalCloned {
+            signal: Some(self),
+            signals: vec![],
+            callback,
+        }
+    }
+
     /// Creates a `SignalVec` which uses a closure to sort the values.
     ///
     /// When the output `SignalVec` is spawned:
@@ -658,6 +670,240 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
                         has_pending = true;
                     },
                     None => {},
+                },
+                None => return if done && !has_pending {
+                    Async::Ready(None)
+
+                } else {
+                    Async::Pending
+                },
+            }
+        }
+    }
+}
+
+
+struct FilterSignalClonedState<A, B> {
+    signal: Option<B>,
+    value: A,
+    exists: bool,
+}
+
+pub struct FilterSignalCloned<A, B, F> where A: SignalVec {
+    signal: Option<A>,
+    signals: Vec<FilterSignalClonedState<A::Item, B>>,
+    callback: F,
+}
+
+impl<A, B, F> FilterSignalCloned<A, B, F> where A: SignalVec {
+    fn find_index(&self, index: usize) -> usize {
+        self.signals[0..index].into_iter().filter(|x| x.exists).count()
+    }
+}
+
+impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
+    where A: SignalVec,
+          A::Item: Clone,
+          B: Signal<Item = bool>,
+          F: FnMut(&A::Item) -> B {
+    type Item = A::Item;
+
+    fn poll_vec_change(&mut self, cx: &mut Context) -> Async<Option<VecDiff<Self::Item>>> {
+        let done = loop {
+            break match self.signal.as_mut().map(|signal| signal.poll_vec_change(cx)) {
+                None => true,
+                Some(Async::Ready(None)) => {
+                    self.signal = None;
+                    true
+                },
+                Some(Async::Ready(Some(change))) => {
+                    return Async::Ready(Some(match change {
+                        VecDiff::Replace { values } => {
+                            self.signals = Vec::with_capacity(values.len());
+
+                            VecDiff::Replace {
+                                values: values.into_iter().filter(|value| {
+                                    let mut signal = (self.callback)(value);
+                                    let poll = unwrap(signal.poll_change(cx));
+
+                                    self.signals.push(FilterSignalClonedState {
+                                        signal: Some(signal),
+                                        value: value.clone(),
+                                        exists: poll,
+                                    });
+
+                                    poll
+                                }).collect()
+                            }
+                        },
+
+                        VecDiff::InsertAt { index, value } => {
+                            let mut signal = (self.callback)(&value);
+                            let poll = unwrap(signal.poll_change(cx));
+
+                            self.signals.insert(index, FilterSignalClonedState {
+                                signal: Some(signal),
+                                value: value.clone(),
+                                exists: poll,
+                            });
+
+                            if poll {
+                                VecDiff::InsertAt { index: self.find_index(index), value }
+
+                            } else {
+                                continue;
+                            }
+                        },
+
+                        VecDiff::UpdateAt { index, value } => {
+                            let mut signal = (self.callback)(&value);
+                            let new_poll = unwrap(signal.poll_change(cx));
+
+                            let old_poll = {
+                                let state = &mut self.signals[index];
+
+                                let exists = state.exists;
+
+                                state.signal = Some(signal);
+                                state.value = value.clone();
+                                state.exists = new_poll;
+
+                                exists
+                            };
+
+                            if new_poll {
+                                if old_poll {
+                                    VecDiff::UpdateAt { index: self.find_index(index), value }
+
+                                } else {
+                                    VecDiff::InsertAt { index: self.find_index(index), value }
+                                }
+
+                            } else {
+                                if old_poll {
+                                    VecDiff::RemoveAt { index: self.find_index(index) }
+
+                                } else {
+                                    continue;
+                                }
+                            }
+                        },
+
+                        VecDiff::Push { value } => {
+                            let mut signal = (self.callback)(&value);
+                            let poll = unwrap(signal.poll_change(cx));
+
+                            self.signals.push(FilterSignalClonedState {
+                                signal: Some(signal),
+                                value: value.clone(),
+                                exists: poll,
+                            });
+
+                            if poll {
+                                VecDiff::Push { value }
+
+                            } else {
+                                continue;
+                            }
+                        },
+
+                        // TODO unit tests for this
+                        VecDiff::Move { old_index, new_index } => {
+                            let state = self.signals.remove(old_index);
+                            let exists = state.exists;
+
+                            self.signals.insert(new_index, state);
+
+                            if exists {
+                                VecDiff::Move {
+                                    old_index: self.find_index(old_index),
+                                    new_index: self.find_index(new_index),
+                                }
+
+                            } else {
+                                continue;
+                            }
+                        },
+
+                        VecDiff::RemoveAt { index } => {
+                            let state = self.signals.remove(index);
+
+                            if state.exists {
+                                VecDiff::RemoveAt { index: self.find_index(index) }
+
+                            } else {
+                                continue;
+                            }
+                        },
+
+                        VecDiff::Pop {} => {
+                            let state = self.signals.pop().expect("Cannot pop from empty vec");
+
+                            if state.exists {
+                                VecDiff::Pop {}
+
+                            } else {
+                                continue;
+                            }
+                        },
+
+                        VecDiff::Clear {} => {
+                            self.signals.clear();
+                            VecDiff::Clear {}
+                        },
+                    }));
+                },
+                Some(Async::Pending) => false,
+            }
+        };
+
+        // TODO make this more efficient (e.g. using a similar strategy as FuturesUnordered)
+        let mut iter = self.signals.as_mut_slice().into_iter();
+
+        let mut has_pending = false;
+
+        let mut real_index = 0;
+
+        // TODO ensure that this is as efficient as possible
+        // TODO make this more efficient (e.g. using a similar strategy as FuturesUnordered)
+        // TODO replace this with find_map ?
+        loop {
+            match iter.next() {
+                // TODO is this loop correct ?
+                Some(state) => {
+                    loop {
+                        match state.signal.as_mut().map(|s| s.poll_change(cx)) {
+                            Some(Async::Ready(Some(value))) => {
+                                if state.exists == value {
+                                    continue;
+
+                                } else {
+                                    state.exists = value;
+
+                                    // TODO test these
+                                    // TODO use Push and Pop when the index is at the end
+                                    if value {
+                                        return Async::Ready(Some(VecDiff::InsertAt { index: real_index, value: state.value.clone() }));
+
+                                    } else {
+                                        return Async::Ready(Some(VecDiff::RemoveAt { index: real_index }));
+                                    }
+                                }
+                            },
+                            Some(Async::Ready(None)) => {
+                                state.signal = None;
+                            },
+                            Some(Async::Pending) => {
+                                has_pending = true;
+                            },
+                            None => {},
+                        }
+                        break;
+                    }
+
+                    if state.exists {
+                        real_index += 1;
+                    }
                 },
                 None => return if done && !has_pending {
                     Async::Ready(None)
