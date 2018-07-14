@@ -709,6 +709,7 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
     type Item = A::Item;
 
     fn poll_vec_change(&mut self, cx: &mut Context) -> Async<Option<VecDiff<Self::Item>>> {
+        // TODO maybe it should check the filter signals first, before checking the signalvec ?
         let done = loop {
             break match self.signal.as_mut().map(|signal| signal.poll_vec_change(cx)) {
                 None => true,

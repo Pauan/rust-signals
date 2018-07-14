@@ -182,6 +182,15 @@ impl<A> Mutable<A> {
         state.notify(true);
     }
 
+    pub fn set_if<F>(&self, value: A, f: F) where F: FnOnce(&A, &A) -> bool {
+        let mut state = self.0.write().unwrap();
+
+        if f(&state.value, &value) {
+            state.value = value;
+            state.notify(true);
+        }
+    }
+
     // TODO return Result ?
     pub fn lock_ref(&self) -> MutableLockRef<A> {
         MutableLockRef {
@@ -200,6 +209,13 @@ impl<A> Mutable<A> {
 
     pub fn signal_ref<B, F>(&self, f: F) -> MutableSignalRef<A, F> where F: FnMut(&A) -> B {
         MutableSignalRef(MutableSignalState::new(&self.0), f)
+    }
+}
+
+impl<A: PartialEq> Mutable<A> {
+    #[inline]
+    pub fn set_neq(&self, value: A) {
+        self.set_if(value, PartialEq::ne);
     }
 }
 
