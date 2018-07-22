@@ -475,6 +475,7 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
             Async::Ready(Some(change)) => Async::Ready(Some(match change {
                 VecDiff::Replace { values } => {
                     for mutable in self.mutables.drain(..) {
+                        // TODO use set_neq ?
                         mutable.0.set(None);
                     }
 
@@ -525,6 +526,7 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
                         increment_indexes(&self.mutables[(new_index + 1)..(old_index + 1)]);
                     }
 
+                    // TODO use set_neq ?
                     mutable.0.set(Some(new_index));
 
                     VecDiff::Move { old_index, new_index }
@@ -535,6 +537,7 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
 
                     decrement_indexes(&self.mutables[index..]);
 
+                    // TODO use set_neq ?
                     mutable.0.set(None);
 
                     VecDiff::RemoveAt { index }
@@ -543,6 +546,7 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
                 VecDiff::Pop {} => {
                     let mutable = self.mutables.pop().unwrap();
 
+                    // TODO use set_neq ?
                     mutable.0.set(None);
 
                     VecDiff::Pop {}
@@ -550,6 +554,7 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
 
                 VecDiff::Clear {} => {
                     for mutable in self.mutables.drain(..) {
+                        // TODO use set_neq ?
                         mutable.0.set(None);
                     }
 
@@ -1571,7 +1576,7 @@ impl<S, A, F> SignalVec for DelayRemove<S, A, F>
 mod mutable_vec {
     use super::{SignalVec, VecDiff};
     use std::ops::Deref;
-    use std::sync::{Arc, RwLock, RwLockReadGuard};
+    use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
     use futures_channel::mpsc;
     use futures_core::{Async, Stream};
     use futures_core::task::Context;
@@ -1813,11 +1818,98 @@ mod mutable_vec {
     }
 
 
-    pub struct MutableVecLockSlice<'a, A> where A: 'a {
+    pub struct MutableVecLockRef<'a, A> where A: 'a {
         lock: RwLockReadGuard<'a, MutableVecState<A>>,
     }
 
-    impl<'a, A> Deref for MutableVecLockSlice<'a, A> {
+    impl<'a, A> Deref for MutableVecLockRef<'a, A> {
+        type Target = [A];
+
+        #[inline]
+        fn deref(&self) -> &Self::Target {
+            &self.lock.values
+        }
+    }
+
+
+    pub struct MutableVecLockMut<'a, A> where A: 'a {
+        lock: RwLockWriteGuard<'a, MutableVecState<A>>,
+    }
+
+    impl<'a, A> MutableVecLockMut<'a, A> {
+        #[inline]
+        pub fn pop(&mut self) -> Option<A> {
+            self.lock.pop()
+        }
+
+        #[inline]
+        pub fn remove(&mut self, index: usize) -> A {
+            self.lock.remove(index)
+        }
+
+        #[inline]
+        pub fn clear(&mut self) {
+            self.lock.clear()
+        }
+
+        #[inline]
+        pub fn move_from_to(&mut self, old_index: usize, new_index: usize) {
+            self.lock.move_from_to(old_index, new_index);
+        }
+
+        #[inline]
+        pub fn retain<F>(&mut self, f: F) where F: FnMut(&A) -> bool {
+            self.lock.retain(f)
+        }
+    }
+
+    impl<'a, A> MutableVecLockMut<'a, A> where A: Copy {
+        #[inline]
+        pub fn push(&mut self, value: A) {
+            self.lock.push_copy(value)
+        }
+
+        #[inline]
+        pub fn insert(&mut self, index: usize, value: A) {
+            self.lock.insert_copy(index, value)
+        }
+
+        // TODO replace this with something else, like entry or IndexMut or whatever
+        #[inline]
+        pub fn set(&mut self, index: usize, value: A) {
+            self.lock.set_copy(index, value)
+        }
+
+        #[inline]
+        pub fn replace(&mut self, values: Vec<A>) {
+            self.lock.replace_copy(values)
+        }
+    }
+
+    impl<'a, A> MutableVecLockMut<'a, A> where A: Clone {
+        #[inline]
+        pub fn push_cloned(&mut self, value: A) {
+            self.lock.push_clone(value)
+        }
+
+        #[inline]
+        pub fn insert_cloned(&mut self, index: usize, value: A) {
+            self.lock.insert_clone(index, value)
+        }
+
+        // TODO replace this with something else, like entry or IndexMut or whatever
+        #[inline]
+        pub fn set_cloned(&mut self, index: usize, value: A) {
+            self.lock.set_clone(index, value)
+        }
+
+        #[inline]
+        pub fn replace_cloned(&mut self, values: Vec<A>) {
+            self.lock.replace_clone(values)
+        }
+    }
+
+    impl<'a, A> Deref for MutableVecLockMut<'a, A> {
         type Target = [A];
 
         #[inline]
@@ -1844,46 +1936,20 @@ mod mutable_vec {
             Self::new_with_values(vec![])
         }
 
-        #[inline]
-        pub fn pop(&self) -> Option<A> {
-            self.0.write().unwrap().pop()
-        }
-
-        #[inline]
-        pub fn remove(&self, index: usize) -> A {
-            self.0.write().unwrap().remove(index)
-        }
-
-        #[inline]
-        pub fn clear(&self) {
-            self.0.write().unwrap().clear()
-        }
-
-        #[inline]
-        pub fn move_from_to(&self, old_index: usize, new_index: usize) {
-            self.0.write().unwrap().move_from_to(old_index, new_index);
-        }
-
-        #[inline]
-        pub fn retain<F>(&self, f: F) where F: FnMut(&A) -> bool {
-            self.0.write().unwrap().retain(f)
-        }
-
         // TODO return Result ?
-        pub fn lock_slice(&self) -> MutableVecLockSlice<A> {
-            MutableVecLockSlice {
+        #[inline]
+        pub fn lock_ref(&self) -> MutableVecLockRef<A> {
+            MutableVecLockRef {
                 lock: self.0.read().unwrap(),
             }
         }
 
+        // TODO return Result ?
         #[inline]
-        pub fn len(&self) -> usize {
-            self.0.read().unwrap().values.len()
-        }
-
-        #[inline]
-        pub fn is_empty(&self) -> bool {
-            self.0.read().unwrap().values.is_empty()
+        pub fn lock_mut(&self) -> MutableVecLockMut<A> {
+            MutableVecLockMut {
+                lock: self.0.write().unwrap(),
+            }
         }
     }
 
@@ -1892,54 +1958,12 @@ mod mutable_vec {
         pub fn signal_vec(&self) -> MutableSignalVec<A> {
             self.0.write().unwrap().signal_vec_copy()
         }
-
-        #[inline]
-        pub fn push(&self, value: A) {
-            self.0.write().unwrap().push_copy(value)
-        }
-
-        #[inline]
-        pub fn insert(&self, index: usize, value: A) {
-            self.0.write().unwrap().insert_copy(index, value)
-        }
-
-        // TODO replace this with something else, like entry or IndexMut or whatever
-        #[inline]
-        pub fn set(&self, index: usize, value: A) {
-            self.0.write().unwrap().set_copy(index, value)
-        }
-
-        #[inline]
-        pub fn replace(&self, values: Vec<A>) {
-            self.0.write().unwrap().replace_copy(values)
-        }
     }
 
     impl<A: Clone> MutableVec<A> {
         #[inline]
         pub fn signal_vec_cloned(&self) -> MutableSignalVec<A> {
             self.0.write().unwrap().signal_vec_clone()
-        }
-
-        #[inline]
-        pub fn push_cloned(&self, value: A) {
-            self.0.write().unwrap().push_clone(value)
-        }
-
-        #[inline]
-        pub fn insert_cloned(&self, index: usize, value: A) {
-            self.0.write().unwrap().insert_clone(index, value)
-        }
-
-        // TODO replace this with something else, like entry or IndexMut or whatever
-        #[inline]
-        pub fn set_cloned(&self, index: usize, value: A) {
-            self.0.write().unwrap().set_clone(index, value)
-        }
-
-        #[inline]
-        pub fn replace_cloned(&self, values: Vec<A>) {
-            self.0.write().unwrap().replace_clone(values)
         }
     }
 

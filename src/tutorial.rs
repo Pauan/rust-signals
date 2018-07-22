@@ -210,20 +210,40 @@
 ///! let my_vec: MutableVec<u32> = MutableVec::new();
 ///! ```
 ///!
-///! The above creates a new empty `MutableVec`. You can then use many of the `Vec` methods on it:
+///! The above creates a new empty `MutableVec`.
+///!
+///! You can then use `lock_mut`, which returns a lock. As its name implies, while you are holding the lock
+///! you have exclusive access to the `MutableVec`.
+///!
+///! The lock contains many of the `Vec` methods:
 ///!
 ///! ```rust
 ///! # use futures_signals::signal_vec::MutableVec;
 ///! # let my_vec: MutableVec<u32> = MutableVec::new();
 ///! #
-///! my_vec.push(1);
-///! my_vec.insert(0, 2);
-///! my_vec.remove(0);
-///! my_vec.pop().unwrap();
+///! let mut lock = my_vec.lock_mut();
+///! lock.push(1);
+///! lock.insert(0, 2);
+///! lock.remove(0);
+///! lock.pop().unwrap();
 ///! // And a lot more!
 ///! ```
 ///!
-///! In addition, you can use the `signal_vec` method to convert it into a `SignalVec`, and then you can use the
+///! It also has a `Deref` implementation for `&[T]`, so you can use *all* of the [`slice`](https://doc.rust-lang.org/std/primitive.slice.html) methods on it:
+///!
+///! ```rust
+///! # use futures_signals::signal_vec::MutableVec;
+///! # let my_vec: MutableVec<u32> = MutableVec::new_with_values(vec![0]);
+///! # let lock = my_vec.lock_mut();
+///! #
+///! let _ = lock[0];
+///! let _ = lock.len();
+///! let _ = lock.last();
+///! let _ = lock.iter();
+///! // And a lot more!
+///! ```
+///!
+///! Lastly, you can use the `MutableVec::signal_vec` method to convert it into a `SignalVec`, and then you can use the
 ///! `for_each` method to be efficiently notified when it changes:
 ///!
 ///! ```rust
@@ -313,7 +333,7 @@
 ///! # use futures_signals::signal_vec::MutableVec;
 ///! # let my_vec: MutableVec<u32> = MutableVec::new();
 ///! #
-///! my_vec.retain(|_| { true });
+///! my_vec.lock_mut().retain(|_| { true });
 ///! ```
 ///!
 ///! The `MutableVec::retain` method is the same as [`Vec::retain`](https://doc.rust-lang.org/std/vec/struct.Vec.html#method.retain):
