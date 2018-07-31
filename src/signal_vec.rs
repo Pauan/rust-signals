@@ -1575,6 +1575,7 @@ impl<S, A, F> SignalVec for DelayRemove<S, A, F>
 // TODO verify that this is correct
 mod mutable_vec {
     use super::{SignalVec, VecDiff};
+    use std::fmt;
     use std::ops::Deref;
     use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
     use futures_channel::mpsc;
@@ -1964,6 +1965,16 @@ mod mutable_vec {
         #[inline]
         pub fn signal_vec_cloned(&self) -> MutableSignalVec<A> {
             self.0.write().unwrap().signal_vec_clone()
+        }
+    }
+
+    impl<A> fmt::Debug for MutableVec<A> where A: fmt::Debug {
+        fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+            let state = self.0.read().unwrap();
+
+            fmt.debug_tuple("MutableVec")
+                .field(&state.values)
+                .finish()
         }
     }
 

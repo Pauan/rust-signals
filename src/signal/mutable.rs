@@ -1,5 +1,6 @@
 use super::Signal;
 use std;
+use std::fmt;
 use std::ops::{Deref, DerefMut};
 // TODO use parking_lot ?
 use std::sync::{Arc, Weak, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
@@ -240,6 +241,16 @@ impl<A: Clone> Mutable<A> {
     #[inline]
     pub fn signal_cloned(&self) -> MutableSignalCloned<A> {
         MutableSignalCloned(MutableSignalState::new(&self.0))
+    }
+}
+
+impl<A> fmt::Debug for Mutable<A> where A: fmt::Debug {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        let state = self.0.read().unwrap();
+
+        fmt.debug_tuple("Mutable")
+            .field(&state.value)
+            .finish()
     }
 }
 
