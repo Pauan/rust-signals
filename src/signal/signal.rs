@@ -505,8 +505,7 @@ impl<A> Signal for First<A> where A: Signal {
     type Item = A::Item;
 
     fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        if let Some(signal) = self.signal.as_mut().map(|signal| signal.poll_change(cx)) {
-            self.signal = None;
+        if let Some(signal) = self.signal.take().map(|signal| signal.poll_change(cx)) {
             signal
 
         } else {
