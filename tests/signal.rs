@@ -1,3 +1,6 @@
+#![feature(pin, futures_api)]
+
+extern crate pin_utils;
 extern crate futures_core;
 extern crate futures_util;
 extern crate futures_executor;
@@ -6,10 +9,9 @@ extern crate futures_signals;
 use std::rc::Rc;
 use std::cell::Cell;
 use futures_signals::cancelable_future;
-use futures_signals::signal::{Signal, SignalExt, Mutable, channel};
-use futures_core::Async;
-use futures_core::future::FutureResult;
-use futures_util::future::poll_fn;
+use futures_signals::signal::{SignalExt, Mutable, channel};
+use futures_core::Poll;
+use futures_util::future::{ready, poll_fn};
 
 mod util;
 
@@ -20,21 +22,21 @@ fn test_mutable() {
     let mut s1 = mutable.signal();
     let mut s2 = mutable.signal_cloned();
 
-    util::with_noop_context(|cx| {
-        assert_eq!(s1.poll_change(cx), Async::Ready(Some(1)));
-        assert_eq!(s1.poll_change(cx), Async::Pending);
-        assert_eq!(s2.poll_change(cx), Async::Ready(Some(1)));
-        assert_eq!(s2.poll_change(cx), Async::Pending);
+    util::with_noop_waker(|waker| {
+        assert_eq!(s1.poll_change_unpin(waker), Poll::Ready(Some(1)));
+        assert_eq!(s1.poll_change_unpin(waker), Poll::Pending);
+        assert_eq!(s2.poll_change_unpin(waker), Poll::Ready(Some(1)));
+        assert_eq!(s2.poll_change_unpin(waker), Poll::Pending);
 
         mutable.set(5);
-        assert_eq!(s1.poll_change(cx), Async::Ready(Some(5)));
-        assert_eq!(s1.poll_change(cx), Async::Pending);
-        assert_eq!(s2.poll_change(cx), Async::Ready(Some(5)));
-        assert_eq!(s2.poll_change(cx), Async::Pending);
+        assert_eq!(s1.poll_change_unpin(waker), Poll::Ready(Some(5)));
+        assert_eq!(s1.poll_change_unpin(waker), Poll::Pending);
+        assert_eq!(s2.poll_change_unpin(waker), Poll::Ready(Some(5)));
+        assert_eq!(s2.poll_change_unpin(waker), Poll::Pending);
 
         drop(mutable);
-        assert_eq!(s1.poll_change(cx), Async::Ready(None));
-        assert_eq!(s2.poll_change(cx), Async::Ready(None));
+        assert_eq!(s1.poll_change_unpin(waker), Poll::Ready(None));
+        assert_eq!(s2.poll_change_unpin(waker), Poll::Ready(None));
     });
 }
 
@@ -46,11 +48,11 @@ fn test_mutable_drop() {
         let mut s2 = mutable.signal_cloned();
         drop(mutable);
 
-        util::with_noop_context(|cx| {
-            assert_eq!(s1.poll_change(cx), Async::Ready(Some(1)));
-            assert_eq!(s1.poll_change(cx), Async::Ready(None));
-            assert_eq!(s2.poll_change(cx), Async::Ready(Some(1)));
-            assert_eq!(s2.poll_change(cx), Async::Ready(None));
+        util::with_noop_waker(|waker| {
+            assert_eq!(s1.poll_change_unpin(waker), Poll::Ready(Some(1)));
+            assert_eq!(s1.poll_change_unpin(waker), Poll::Ready(None));
+            assert_eq!(s2.poll_change_unpin(waker), Poll::Ready(Some(1)));
+            assert_eq!(s2.poll_change_unpin(waker), Poll::Ready(None));
         });
     }
 
@@ -59,19 +61,19 @@ fn test_mutable_drop() {
         let mut s1 = mutable.signal();
         let mut s2 = mutable.signal_cloned();
 
-        util::with_noop_context(|cx| {
-            assert_eq!(s1.poll_change(cx), Async::Ready(Some(1)));
-            assert_eq!(s1.poll_change(cx), Async::Pending);
-            assert_eq!(s2.poll_change(cx), Async::Ready(Some(1)));
-            assert_eq!(s2.poll_change(cx), Async::Pending);
+        util::with_noop_waker(|waker| {
+            assert_eq!(s1.poll_change_unpin(waker), Poll::Ready(Some(1)));
+            assert_eq!(s1.poll_change_unpin(waker), Poll::Pending);
+            assert_eq!(s2.poll_change_unpin(waker), Poll::Ready(Some(1)));
+            assert_eq!(s2.poll_change_unpin(waker), Poll::Pending);
 
             mutable.set(5);
             drop(mutable);
 
-            assert_eq!(s1.poll_change(cx), Async::Ready(Some(5)));
-            assert_eq!(s1.poll_change(cx), Async::Ready(None));
-            assert_eq!(s2.poll_change(cx), Async::Ready(Some(5)));
-            assert_eq!(s2.poll_change(cx), Async::Ready(None));
+            assert_eq!(s1.poll_change_unpin(waker), Poll::Ready(Some(5)));
+            assert_eq!(s1.poll_change_unpin(waker), Poll::Ready(None));
+            assert_eq!(s2.poll_change_unpin(waker), Poll::Ready(Some(5)));
+            assert_eq!(s2.poll_change_unpin(waker), Poll::Ready(None));
         });
     }
 
@@ -80,28 +82,28 @@ fn test_mutable_drop() {
         let mut s1 = mutable.signal();
         let mut s2 = mutable.signal_cloned();
 
-        util::with_noop_context(|cx| {
-            assert_eq!(s1.poll_change(cx), Async::Ready(Some(1)));
-            assert_eq!(s1.poll_change(cx), Async::Pending);
-            assert_eq!(s2.poll_change(cx), Async::Ready(Some(1)));
-            assert_eq!(s2.poll_change(cx), Async::Pending);
+        util::with_noop_waker(|waker| {
+            assert_eq!(s1.poll_change_unpin(waker), Poll::Ready(Some(1)));
+            assert_eq!(s1.poll_change_unpin(waker), Poll::Pending);
+            assert_eq!(s2.poll_change_unpin(waker), Poll::Ready(Some(1)));
+            assert_eq!(s2.poll_change_unpin(waker), Poll::Pending);
 
             mutable.set(5);
-            assert_eq!(s1.poll_change(cx), Async::Ready(Some(5)));
-            assert_eq!(s1.poll_change(cx), Async::Pending);
+            assert_eq!(s1.poll_change_unpin(waker), Poll::Ready(Some(5)));
+            assert_eq!(s1.poll_change_unpin(waker), Poll::Pending);
 
             drop(mutable);
-            assert_eq!(s2.poll_change(cx), Async::Ready(Some(5)));
-            assert_eq!(s2.poll_change(cx), Async::Ready(None));
+            assert_eq!(s2.poll_change_unpin(waker), Poll::Ready(Some(5)));
+            assert_eq!(s2.poll_change_unpin(waker), Poll::Ready(None));
 
-            assert_eq!(s1.poll_change(cx), Async::Ready(None));
+            assert_eq!(s1.poll_change_unpin(waker), Poll::Ready(None));
         });
     }
 }
 
 #[test]
 fn test_send_sync() {
-    let a = cancelable_future(Ok(()), |_: FutureResult<(), ()>| ());
+    let a = cancelable_future(ready(()), || ());
     let _: Box<Send + Sync> = Box::new(a.0);
     let _: Box<Send + Sync> = Box::new(a.1);
 
@@ -129,10 +131,10 @@ fn test_map_future() {
 
             poll_fn(move |_| {
                 if first.get() {
-                    Ok(Async::Pending)
+                    Poll::Pending
 
                 } else {
-                    Ok(Async::Ready(value))
+                    Poll::Ready(value)
                 }
             })
         })
@@ -142,20 +144,20 @@ fn test_map_future() {
         .next({
             let mutable = mutable.clone();
             move |_, change| {
-                assert_eq!(change, Async::Ready(Some(None)));
+                assert_eq!(change, Poll::Ready(Some(None)));
                 mutable.set(2);
             }
         })
         .next({
             let mutable = mutable.clone();
             move |_, change| {
-                assert_eq!(change, Async::Pending);
+                assert_eq!(change, Poll::Pending);
                 first.set(false);
                 mutable.set(3);
             }
         })
         .next(|_, change| {
-            assert_eq!(change, Async::Ready(Some(Some(3))));
+            assert_eq!(change, Poll::Ready(Some(Some(3))));
         })
         .run();
 }

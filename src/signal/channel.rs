@@ -1,11 +1,13 @@
 use super::Signal;
+use std::pin::{Pin, Unpin};
 // TODO use parking_lot ?
 use std::sync::{Arc, Weak, Mutex, MutexGuard};
 // TODO use parking_lot ?
-use futures_core::Async;
-use futures_core::task::{Context, Waker};
+use futures_core::Poll;
+use futures_core::task::{LocalWaker, Waker};
 
 
+#[derive(Debug)]
 struct Inner<A> {
     value: Option<A>,
     waker: Option<Waker>,
@@ -21,6 +23,8 @@ impl<A> Inner<A> {
     }
 }
 
+
+#[derive(Debug)]
 pub struct Sender<A> {
     inner: Weak<Mutex<Inner<A>>>,
 }
@@ -55,28 +59,32 @@ impl<A> Drop for Sender<A> {
 }
 
 
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
 pub struct Receiver<A> {
     inner: Arc<Mutex<Inner<A>>>,
 }
+
+impl<A> Unpin for Receiver<A> {}
 
 impl<A> Signal for Receiver<A> {
     type Item = A;
 
     #[inline]
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
         let mut inner = self.inner.lock().unwrap();
 
         // TODO is this correct ?
         match inner.value.take() {
             None => if inner.dropped {
-                Async::Ready(None)
+                Poll::Ready(None)
 
             } else {
-                inner.waker = Some(cx.waker().clone());
-                Async::Pending
+                inner.waker = Some(waker.clone().into_waker());
+                Poll::Pending
             },
 
-            a => Async::Ready(a),
+            a => Poll::Ready(a),
         }
     }
 }

@@ -1,10 +1,12 @@
 use super::Signal;
+use std::pin::{Pin, Unpin};
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
-use futures_core::Async;
-use futures_core::task::{Context, Waker, Wake};
+use futures_core::Poll;
+use futures_core::task::{LocalWaker, Waker, Wake, local_waker_from_nonlocal};
 
 
+#[derive(Debug)]
 struct BroadcasterStatus {
     is_changed: AtomicBool,
     waker: Mutex<Option<Waker>>,
@@ -23,6 +25,7 @@ impl BroadcasterStatus {
 
 /// This is responsible for propagating a "wake" down to any pending tasks
 /// attached to broadcasted children.
+#[derive(Debug)]
 struct BroadcasterNotifier {
     is_changed: AtomicBool,
     targets: Mutex<Vec<Weak<BroadcasterStatus>>>,
@@ -75,30 +78,32 @@ impl Wake for BroadcasterNotifier {
 
 // ---------------------------------------------------------------------------
 
+#[derive(Debug)]
 struct BroadcasterInnerState<A> where A: Signal {
-    signal: A,
+    // TODO is there a more efficient way to implement this ?
+    signal: Pin<Box<A>>,
     value: Option<A::Item>,
 }
 
 impl<A> BroadcasterInnerState<A> where A: Signal {
     fn new(signal: A) -> Self {
         Self {
-            signal,
+            signal: Box::pinned(signal),
             value: None,
         }
     }
 
     // Poll the underlying signal for changes, giving it a BroadcasterNotifier
     // to wake in the future if it is in Pending state.
-    fn poll_underlying(&mut self, cx: &mut Context, notifier: Arc<BroadcasterNotifier>) {
-        let waker = Waker::from(notifier);
-
-        let mut sub_cx = cx.with_waker(&waker);
+    fn poll_underlying(&mut self, notifier: Arc<BroadcasterNotifier>) {
+        // TODO is this the best way to do this ?
+        let waker = local_waker_from_nonlocal(notifier);
 
         loop {
             // TODO what if it is woken up while polling ?
-            match self.signal.poll_change(&mut sub_cx) {
-                Async::Ready(value) => {
+            // TODO is this safe for pinned types ?
+            match self.signal.as_mut().poll_change(&waker) {
+                Poll::Ready(value) => {
                     let done = value.is_none();
 
                     self.value = value;
@@ -107,13 +112,16 @@ impl<A> BroadcasterInnerState<A> where A: Signal {
                         break;
                     }
                 },
-                Async::Pending => {
+                Poll::Pending => {
                     break;
                 },
             }
         }
     }
 }
+
+// TODO is this correct ?
+impl<A> Unpin for BroadcasterInnerState<A> where A: Signal {}
 
 // ---------------------------------------------------------------------------
 
@@ -131,12 +139,12 @@ impl<A> BroadcasterSharedState<A> where A: Signal {
         }
     }
 
-    fn poll<B, F>(&self, cx: &mut Context, f: F) -> B where F: FnOnce(&Option<A::Item>) -> B {
+    fn poll<B, F>(&self, f: F) -> B where F: FnOnce(&Option<A::Item>) -> B {
         // TODO is this correct ?
         if self.notifier.is_changed.swap(false, Ordering::SeqCst) {
             let mut lock = self.inner.write().unwrap();
 
-            lock.poll_underlying(cx, self.notifier.clone());
+            lock.poll_underlying(self.notifier.clone());
 
             f(&lock.value)
 
@@ -145,6 +153,19 @@ impl<A> BroadcasterSharedState<A> where A: Signal {
 
             f(&lock.value)
         }
+    }
+}
+
+// TODO use derive
+impl<A> ::std::fmt::Debug for BroadcasterSharedState<A>
+    where A: ::std::fmt::Debug + Signal,
+          A::Item: ::std::fmt::Debug {
+
+    fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        fmt.debug_struct("BroadcasterSharedState")
+            .field("inner", &self.inner)
+            .field("notifier", &self.notifier)
+            .finish()
     }
 }
 
@@ -174,18 +195,31 @@ impl<A> BroadcasterState<A> where A: Signal {
         }
     }
 
-    fn poll_change<F>(&self, cx: &mut Context, f: F) -> Async<Option<A::Item>> where F: FnOnce(&Option<A::Item>) -> Option<A::Item> {
+    fn poll_change<F>(&self, waker: &LocalWaker, f: F) -> Poll<Option<A::Item>> where F: FnOnce(&Option<A::Item>) -> Option<A::Item> {
         // If the poll just done (or a previous poll) has generated a new
         // value, we can report it. Use swap so only one thread will pick up
         // the change
         if self.status.is_changed.swap(false, Ordering::SeqCst) {
-            Async::Ready(self.shared_state.poll(cx, f))
+            Poll::Ready(self.shared_state.poll(f))
 
         } else {
             // Nothing new to report, save this task's Waker for later
-            *self.status.waker.lock().unwrap() = Some(cx.waker().clone());
-            Async::Pending
+            *self.status.waker.lock().unwrap() = Some(waker.clone().into_waker());
+            Poll::Pending
         }
+    }
+}
+
+// TODO use derive
+impl<A> ::std::fmt::Debug for BroadcasterState<A>
+    where A: ::std::fmt::Debug + Signal,
+          A::Item: ::std::fmt::Debug {
+
+    fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        fmt.debug_struct("BroadcasterState")
+            .field("status", &self.status)
+            .field("shared_state", &self.shared_state)
+            .finish()
     }
 }
 
@@ -232,8 +266,21 @@ impl<A> Broadcaster<A> where A: Signal, A::Item: Clone {
     }
 }
 
+// TODO use derive
+impl<A> ::std::fmt::Debug for Broadcaster<A>
+    where A: ::std::fmt::Debug + Signal,
+          A::Item: ::std::fmt::Debug {
+
+    fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        fmt.debug_struct("Broadcaster")
+            .field("shared_state", &self.shared_state)
+            .finish()
+    }
+}
+
 // ---------------------------------------------------------------------------
 
+#[must_use = "Signals do nothing unless polled"]
 pub struct BroadcasterSignal<A> where A: Signal {
     state: BroadcasterState<A>,
 }
@@ -245,13 +292,26 @@ impl<A> Signal for BroadcasterSignal<A>
     type Item = A::Item;
 
     #[inline]
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        self.state.poll_change(cx, |value| *value)
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        self.state.poll_change(waker, |value| *value)
+    }
+}
+
+// TODO use derive
+impl<A> ::std::fmt::Debug for BroadcasterSignal<A>
+    where A: ::std::fmt::Debug + Signal,
+          A::Item: ::std::fmt::Debug {
+
+    fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        fmt.debug_struct("BroadcasterSignal")
+            .field("state", &self.state)
+            .finish()
     }
 }
 
 // --------------------------------------------------------------------------
 
+#[must_use = "Signals do nothing unless polled"]
 pub struct BroadcasterSignalCloned<A> where A: Signal {
     state: BroadcasterState<A>,
 }
@@ -263,7 +323,19 @@ impl<A> Signal for BroadcasterSignalCloned<A>
     type Item = A::Item;
 
     #[inline]
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        self.state.poll_change(cx, |value| value.clone())
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        self.state.poll_change(waker, |value| value.clone())
+    }
+}
+
+// TODO use derive
+impl<A> ::std::fmt::Debug for BroadcasterSignalCloned<A>
+    where A: ::std::fmt::Debug + Signal,
+          A::Item: ::std::fmt::Debug {
+
+    fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        fmt.debug_struct("BroadcasterSignalCloned")
+            .field("state", &self.state)
+            .finish()
     }
 }

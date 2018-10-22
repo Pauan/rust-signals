@@ -1,40 +1,39 @@
-use std::marker::PhantomData;
-use futures_core::task::Context;
-use futures_core::{Async, Poll, Never};
-use futures_core::future::{Future, IntoFuture};
+use std::pin::{Pin, Unpin};
+use futures_core::task::LocalWaker;
+use futures_core::Poll;
+use futures_core::future::Future;
 use futures_core::stream::Stream;
 use futures_util::stream;
 use futures_util::stream::StreamExt;
 use signal_vec::{VecDiff, SignalVec};
+use pin_utils::{unsafe_pinned, unsafe_unpinned};
 
 
-pub trait IntoSignal {
-    type Signal: Signal<Item = Self::Item>;
-    type Item;
-
-    fn into_signal(self) -> Self::Signal;
-}
-
-impl<A> IntoSignal for A where A: Signal {
-    type Signal = Self;
-    type Item = A::Item;
-
-    fn into_signal(self) -> Self { self }
-}
-
-
+// TODO impl for AssertUnwindSafe and Pin ?
 pub trait Signal {
     type Item;
 
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>>;
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>>;
 }
 
-impl<F: ?Sized + Signal> Signal for ::std::boxed::Box<F> {
-    type Item = F::Item;
+
+// Copied from Future in the Rust stdlib
+impl<'a, A: ?Sized + Signal + Unpin> Signal for &'a mut A {
+    type Item = A::Item;
 
     #[inline]
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        (**self).poll_change(cx)
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        A::poll_change(Pin::new(&mut **self), waker)
+    }
+}
+
+// Copied from Future in the Rust stdlib
+impl<A: ?Sized + Signal + Unpin> Signal for Box<A> {
+    type Item = A::Item;
+
+    #[inline]
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        A::poll_change(Pin::new(&mut *self), waker)
     }
 }
 
@@ -57,14 +56,14 @@ pub trait SignalExt: Signal {
     /// This is ***extremely*** efficient: it is *guaranteed* constant time, and it does not do
     /// any heap allocation.
     #[inline]
-    fn to_stream(self) -> SignalStream<Self, Never>
+    fn to_stream(self) -> SignalStream<Self>
         where Self: Sized {
         SignalStream {
             signal: self,
-            phantom: PhantomData,
         }
     }
 
+    // TODO maybe remove this ?
     #[inline]
     fn to_future(self) -> SignalFuture<Self>
         where Self: Sized {
@@ -196,7 +195,7 @@ pub trait SignalExt: Signal {
     ///
     /// 1. It calls the closure with the current value of `self`.
     ///
-    /// 2. The closure returns an `IntoFuture`. It waits for that `Future` to finish, and then
+    /// 2. The closure returns a `Future`. It waits for that `Future` to finish, and then
     ///    it puts the return value of the `Future` into the output `Signal`.
     ///
     /// 3. Whenever `self` changes it repeats the above steps.
@@ -220,10 +219,11 @@ pub trait SignalExt: Signal {
     ///
     /// ```rust
     /// # extern crate futures_core;
+    /// # extern crate futures_util;
     /// # extern crate futures_signals;
-    /// # use futures_core::Never;
     /// # use futures_signals::signal::{always, SignalExt};
-    /// # fn call_network_api(value: u32) -> Result<(), Never> { Ok(()) }
+    /// # use futures_util::future::{ready, Ready};
+    /// # fn call_network_api(value: u32) -> Ready<()> { ready(()) }
     /// # fn main() {
     /// # let input = always(1);
     /// #
@@ -238,7 +238,7 @@ pub trait SignalExt: Signal {
     /// Of course the performance will also depend upon the `Future` which is returned from the closure.
     #[inline]
     fn map_future<A, B>(self, callback: B) -> MapFuture<Self, A, B>
-        where A: IntoFuture<Error = Never>,
+        where A: Future,
               B: FnMut(Self::Item) -> A,
               Self: Sized {
         MapFuture {
@@ -334,7 +334,7 @@ pub trait SignalExt: Signal {
     /// any heap allocation.
     #[inline]
     fn flatten(self) -> Flatten<Self>
-        where Self::Item: IntoSignal,
+        where Self::Item: Signal,
               Self: Sized {
         Flatten {
             signal: Some(self),
@@ -344,7 +344,7 @@ pub trait SignalExt: Signal {
 
     #[inline]
     fn switch<A, B>(self, callback: B) -> Switch<Self, A, B>
-        where A: IntoSignal,
+        where A: Signal,
               B: FnMut(Self::Item) -> A,
               Self: Sized {
         Switch {
@@ -355,14 +355,13 @@ pub trait SignalExt: Signal {
     #[inline]
     // TODO file Rust bug about bad error message when `callback` isn't marked as `mut`
     fn for_each<U, F>(self, callback: F) -> ForEach<Self, U, F>
-        where U: IntoFuture<Item = ()>,
+        where U: Future<Output = ()>,
               F: FnMut(Self::Item) -> U,
               Self: Sized {
         // TODO a bit hacky
         ForEach {
             inner: SignalStream {
                 signal: self,
-                phantom: PhantomData,
             }.for_each(callback)
         }
     }
@@ -391,81 +390,107 @@ pub trait SignalExt: Signal {
             signal: Some(self),
         }
     }
+
+    /// A convenience for calling `Signal::poll_change` on `Unpin` types.
+    #[inline]
+    fn poll_change_unpin(&mut self, waker: &LocalWaker) -> Poll<Option<Self::Item>> where Self: Unpin + Sized {
+        Pin::new(self).poll_change(waker)
+    }
 }
 
 // TODO why is this ?Sized
 impl<T: ?Sized> SignalExt for T where T: Signal {}
 
 
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
 pub struct FromFuture<A> {
+    // TODO is this valid with pinned types ?
     future: Option<A>,
     first: bool,
 }
 
-impl<A> Signal for FromFuture<A> where A: Future<Error = Never> {
-    type Item = Option<A::Item>;
+impl<A> FromFuture<A> where A: Future {
+    unsafe_pinned!(future: Option<A>);
+    unsafe_unpinned!(first: bool);
+}
 
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        match self.future.as_mut().map(|future| future.poll(cx)) {
+impl<A> Unpin for FromFuture<A> where A: Unpin {}
+
+impl<A> Signal for FromFuture<A> where A: Future {
+    type Item = Option<A::Output>;
+
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        // TODO is this valid with pinned types ?
+        match self.future().as_pin_mut().map(|future| future.poll(waker)) {
             None => {
-                Async::Ready(None)
+                Poll::Ready(None)
             },
 
-            Some(Ok(Async::Ready(value))) => {
-                self.future = None;
-                Async::Ready(Some(Some(value)))
+            Some(Poll::Ready(value)) => {
+                Pin::set(self.future(), None);
+                Poll::Ready(Some(Some(value)))
             },
 
-            Some(Ok(Async::Pending)) => {
-                if self.first {
-                    self.first = false;
-                    Async::Ready(Some(None))
+            Some(Poll::Pending) => {
+                let first = self.first();
+
+                if *first {
+                    *first = false;
+                    Poll::Ready(Some(None))
 
                 } else {
-                    Async::Pending
+                    Poll::Pending
                 }
             },
-
-            Some(Err(_)) => unreachable!(),
         }
     }
 }
 
 #[inline]
-pub fn from_future<A>(future: A) -> FromFuture<A::Future> where A: IntoFuture {
-    FromFuture { future: Some(future.into_future()), first: true }
+pub fn from_future<A>(future: A) -> FromFuture<A> where A: Future {
+    FromFuture { future: Some(future), first: true }
 }
 
 
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
 pub struct FromStream<A> {
     stream: A,
     first: bool,
 }
 
-impl<A> Signal for FromStream<A> where A: Stream<Error = Never> {
+impl<A> FromStream<A> {
+    unsafe_pinned!(stream: A);
+    unsafe_unpinned!(first: bool);
+}
+
+impl<A> Unpin for FromStream<A> where A: Unpin {}
+
+impl<A> Signal for FromStream<A> where A: Stream {
     type Item = Option<A::Item>;
 
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        match self.stream.poll_next(cx) {
-            Ok(Async::Ready(None)) => {
-                Async::Ready(None)
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        match self.stream().poll_next(waker) {
+            Poll::Ready(None) => {
+                Poll::Ready(None)
             },
 
-            Ok(Async::Ready(Some(value))) => {
-                Async::Ready(Some(Some(value)))
+            Poll::Ready(Some(value)) => {
+                Poll::Ready(Some(Some(value)))
             },
 
-            Ok(Async::Pending) => {
-                if self.first {
-                    self.first = false;
-                    Async::Ready(Some(None))
+            Poll::Pending => {
+                let first = self.first();
+
+                if *first {
+                    *first = false;
+                    Poll::Ready(Some(None))
 
                 } else {
-                    Async::Pending
+                    Poll::Pending
                 }
             },
-
-            Err(_) => unreachable!(),
         }
     }
 }
@@ -476,16 +501,20 @@ pub fn from_stream<A>(stream: A) -> FromStream<A> where A: Stream {
 }
 
 
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
 pub struct Always<A> {
     value: Option<A>,
 }
+
+impl<A> Unpin for Always<A> {}
 
 impl<A> Signal for Always<A> {
     type Item = A;
 
     #[inline]
-    fn poll_change(&mut self, _: &mut Context) -> Async<Option<Self::Item>> {
-        Async::Ready(self.value.take())
+    fn poll_change(mut self: Pin<&mut Self>, _: &LocalWaker) -> Poll<Option<Self::Item>> {
+        Poll::Ready(self.value.take())
     }
 }
 
@@ -497,101 +526,138 @@ pub fn always<A>(value: A) -> Always<A> {
 }
 
 
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
 pub struct First<A> {
     signal: Option<A>,
 }
 
+impl<A> First<A> {
+    unsafe_pinned!(signal: Option<A>);
+}
+
+impl<A> Unpin for First<A> where A: Unpin {}
+
 impl<A> Signal for First<A> where A: Signal {
     type Item = A::Item;
 
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        if let Some(signal) = self.signal.take().map(|signal| signal.poll_change(cx)) {
-            signal
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        // TODO maybe it's safe to replace this with take ?
+        if let Some(poll) = self.signal().as_pin_mut().map(|signal| signal.poll_change(waker)) {
+            Pin::set(self.signal(), None);
+            poll
 
         } else {
-            Async::Ready(None)
+            Poll::Ready(None)
         }
     }
 }
 
 
-pub struct Switch<A, B, C>
-    where A: Signal,
-          B: IntoSignal,
-          C: FnMut(A::Item) -> B {
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct Switch<A, B, C> where A: Signal, C: FnMut(A::Item) -> B {
     inner: Flatten<Map<A, C>>,
 }
 
+impl<A, B, C> Switch<A, B, C> where A: Signal, C: FnMut(A::Item) -> B {
+    unsafe_pinned!(inner: Flatten<Map<A, C>>);
+}
+
+// TODO is this correct ?
+impl<A, B, C> Unpin for Switch<A, B, C> where A: Signal + Unpin, B: Unpin, C: FnMut(A::Item) -> B {}
+
 impl<A, B, C> Signal for Switch<A, B, C>
     where A: Signal,
-          B: IntoSignal,
+          B: Signal,
           C: FnMut(A::Item) -> B {
-    type Item = <B::Signal as Signal>::Item;
+    type Item = B::Item;
 
     #[inline]
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        self.inner.poll_change(cx)
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        self.inner().poll_change(waker)
     }
 }
 
 
-pub struct ForEach<A, B, C> where B: IntoFuture {
-    inner: stream::ForEach<SignalStream<A, B::Error>, B, C>,
+#[derive(Debug)]
+#[must_use = "Futures do nothing unless polled"]
+pub struct ForEach<A, B, C> {
+    inner: stream::ForEach<SignalStream<A>, B, C>,
 }
+
+impl<A, B, C> ForEach<A, B, C> {
+    unsafe_pinned!(inner: stream::ForEach<SignalStream<A>, B, C>);
+}
+
+impl<A, B, C> Unpin for ForEach<A, B, C> where A: Signal + Unpin, B: Future<Output = ()> + Unpin, C: FnMut(A::Item) -> B {}
 
 impl<A, B, C> Future for ForEach<A, B, C>
     where A: Signal,
-          B: IntoFuture<Item = ()>,
+          B: Future<Output = ()>,
           C: FnMut(A::Item) -> B {
-    type Item = ();
-    type Error = B::Error;
+    type Output = ();
 
     #[inline]
-    fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
-        // TODO a teensy bit hacky
-        self.inner.poll(cx).map(|async| async.map(|_| ()))
+    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
+        self.inner().poll(waker)
     }
 }
 
 
-pub struct SignalStream<A, Error> {
+#[derive(Debug)]
+#[must_use = "Streams do nothing unless polled"]
+pub struct SignalStream<A> {
     signal: A,
-    phantom: PhantomData<Error>,
 }
 
-impl<A: Signal, Error> Stream for SignalStream<A, Error> {
+impl<A> SignalStream<A> {
+    unsafe_pinned!(signal: A);
+}
+
+impl<A> Unpin for SignalStream<A> where A: Unpin {}
+
+impl<A: Signal> Stream for SignalStream<A> {
     type Item = A::Item;
-    type Error = Error;
 
     #[inline]
-    fn poll_next(&mut self, cx: &mut Context) -> Poll<Option<Self::Item>, Self::Error> {
-        Ok(self.signal.poll_change(cx))
+    fn poll_next(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        self.signal().poll_change(waker)
     }
 }
 
 
+// TODO maybe remove this ?
+#[derive(Debug)]
+#[must_use = "Futures do nothing unless polled"]
 pub struct SignalFuture<A> where A: Signal {
     signal: A,
     value: Option<A::Item>,
 }
 
-impl<A: Signal> Future for SignalFuture<A> {
-    type Item = A::Item;
-    type Error = Never;
+impl<A> SignalFuture<A> where A: Signal {
+    unsafe_pinned!(signal: A);
+    unsafe_unpinned!(value: Option<A::Item>);
+}
+
+impl<A> Unpin for SignalFuture<A> where A: Unpin + Signal {}
+
+impl<A> Future for SignalFuture<A> where A: Signal {
+    type Output = A::Item;
 
     #[inline]
-    fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
+    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
         loop {
-            return match self.signal.poll_change(cx) {
-                Async::Ready(None) => {
-                    Ok(Async::Ready(self.value.take().unwrap()))
+            return match self.signal().poll_change(waker) {
+                Poll::Ready(None) => {
+                    Poll::Ready(self.value().take().unwrap())
                 },
-                Async::Ready(Some(value)) => {
-                    self.value = Some(value);
+                Poll::Ready(Some(value)) => {
+                    *self.value() = Some(value);
                     continue;
                 },
-                Async::Pending => {
-                    Ok(Async::Pending)
+                Poll::Pending => {
+                    Poll::Pending
                 },
             }
         }
@@ -599,10 +665,19 @@ impl<A: Signal> Future for SignalFuture<A> {
 }
 
 
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
 pub struct Map<A, B> {
     signal: A,
     callback: B,
 }
+
+impl<A, B> Map<A, B> {
+    unsafe_pinned!(signal: A);
+    unsafe_unpinned!(callback: B);
+}
+
+impl<A, B> Unpin for Map<A, B> where A: Unpin {}
 
 impl<A, B, C> Signal for Map<A, B>
     where A: Signal,
@@ -610,74 +685,88 @@ impl<A, B, C> Signal for Map<A, B>
     type Item = C;
 
     #[inline]
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        self.signal.poll_change(cx).map(|opt| opt.map(|value| (self.callback)(value)))
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        self.signal().poll_change(waker).map(|opt| opt.map(|value| self.callback()(value)))
     }
 }
 
 
-pub struct MapFuture<A, B, C> where B: IntoFuture<Error = Never> {
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct MapFuture<A, B, C> {
     signal: Option<A>,
-    future: Option<B::Future>,
+    future: Option<B>,
     callback: C,
     first: bool,
 }
 
+impl<A, B, C> MapFuture<A, B, C> {
+    unsafe_pinned!(signal: Option<A>);
+    unsafe_pinned!(future: Option<B>);
+    unsafe_unpinned!(callback: C);
+    unsafe_unpinned!(first: bool);
+}
+
+impl<A, B, C> Unpin for MapFuture<A, B, C> where A: Unpin, B: Unpin {}
+
 impl<A, B, C> Signal for MapFuture<A, B, C>
     where A: Signal,
-          B: IntoFuture<Error = Never>,
+          B: Future,
           C: FnMut(A::Item) -> B {
-    type Item = Option<B::Item>;
+    type Item = Option<B::Output>;
 
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
         let mut done = false;
 
         loop {
-            match self.signal.as_mut().map(|signal| signal.poll_change(cx)) {
+            match self.signal().as_pin_mut().map(|signal| signal.poll_change(waker)) {
                 None => {
                     done = true;
-                    break;
                 },
-                Some(Async::Ready(None)) => {
-                    self.signal = None;
+                Some(Poll::Ready(None)) => {
+                    Pin::set(self.signal(), None);
                     done = true;
-                    break;
                 },
-                Some(Async::Ready(Some(value))) => {
-                    self.future = Some((self.callback)(value).into_future());
+                Some(Poll::Ready(Some(value))) => {
+                    let value = Some(self.callback()(value));
+                    Pin::set(self.future(), value);
+                    continue;
                 },
-                Some(Async::Pending) => {
-                    break;
-                },
+                Some(Poll::Pending) => {},
             }
+            break;
         }
 
-        match self.future.as_mut().map(|future| future.poll(cx)) {
+        match self.future().as_pin_mut().map(|future| future.poll(waker)) {
             None => {},
-            Some(Ok(Async::Ready(value))) => {
-                self.future = None;
-                return Async::Ready(Some(Some(value)));
+            Some(Poll::Ready(value)) => {
+                Pin::set(self.future(), None);
+                *self.first() = false;
+                return Poll::Ready(Some(Some(value)));
             },
-            Some(Ok(Async::Pending)) => {
+            Some(Poll::Pending) => {
                 done = false;
             },
-            Some(Err(_)) => unreachable!(),
         }
 
-        if self.first {
-            self.first = false;
-            Async::Ready(Some(None))
+        let first = self.first();
+
+        if *first {
+            *first = false;
+            Poll::Ready(Some(None))
 
         } else if done {
-            Async::Ready(None)
+            Poll::Ready(None)
 
         } else {
-            Async::Pending
+            Poll::Pending
         }
     }
 }
 
 
+#[derive(Debug)]
+#[must_use = "Futures do nothing unless polled"]
 pub struct WaitFor<A>
     where A: Signal,
           A::Item: PartialEq {
@@ -685,49 +774,62 @@ pub struct WaitFor<A>
     value: A::Item,
 }
 
+impl<A> WaitFor<A> where A: Signal, A::Item: PartialEq {
+    unsafe_pinned!(signal: A);
+}
+
+impl<A> Unpin for WaitFor<A> where A: Unpin + Signal, A::Item: PartialEq {}
+
 impl<A> Future for WaitFor<A>
     where A: Signal,
           A::Item: PartialEq {
 
-    type Item = Option<A::Item>;
-    type Error = Never;
+    type Output = Option<A::Item>;
 
-    fn poll(&mut self, cx: &mut Context) -> Poll<Self::Item, Self::Error> {
+    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
         loop {
-            let poll = self.signal.poll_change(cx);
+            let poll = self.signal().poll_change(waker);
 
-            if let Async::Ready(Some(ref value)) = poll {
+            if let Poll::Ready(Some(ref value)) = poll {
                 if *value != self.value {
                     continue;
                 }
             }
 
-            return Ok(poll);
+            return poll;
         }
     }
 }
 
 
+#[derive(Debug)]
+#[must_use = "SignalVecs do nothing unless polled"]
 pub struct SignalSignalVec<A> {
     signal: A,
 }
+
+impl<A> SignalSignalVec<A> {
+    unsafe_pinned!(signal: A);
+}
+
+impl<A> Unpin for SignalSignalVec<A> where A: Unpin {}
 
 impl<A, B> SignalVec for SignalSignalVec<A>
     where A: Signal<Item = Vec<B>> {
     type Item = B;
 
     #[inline]
-    fn poll_vec_change(&mut self, cx: &mut Context) -> Async<Option<VecDiff<B>>> {
-        self.signal.poll_change(cx).map(|opt| opt.map(|values| VecDiff::Replace { values }))
+    fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
+        self.signal().poll_change(waker).map(|opt| opt.map(|values| VecDiff::Replace { values }))
     }
 }
 
 
 macro_rules! dedupe {
-    ($signal:expr, $cx:expr, $value:expr, $pat:pat, $name:ident => $output:expr) => {
+    ($signal:expr, $waker:expr, $value:expr, $pat:pat, $name:ident => $output:expr) => {
         loop {
-            return match $signal.poll_change($cx) {
-                Async::Ready(Some($pat)) => {
+            return match $signal.poll_change($waker) {
+                Poll::Ready(Some($pat)) => {
                     let has_changed = match $value {
                         Some(ref old_value) => *old_value != $name,
                         None => true,
@@ -735,26 +837,36 @@ macro_rules! dedupe {
 
                     if has_changed {
                         let output = $output;
-                        $value = Some($name);
-                        Async::Ready(Some(output))
+                        *$value = Some($name);
+                        Poll::Ready(Some(output))
 
                     } else {
                         continue;
                     }
                 },
-                Async::Ready(None) => Async::Ready(None),
-                Async::Pending => Async::Pending,
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
             }
         }
     };
 }
 
 
-pub struct DedupeMap<A: Signal, B> {
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct DedupeMap<A, B> where A: Signal {
     old_value: Option<A::Item>,
     signal: A,
     callback: B,
 }
+
+impl<A, B> DedupeMap<A, B> where A: Signal {
+    unsafe_unpinned!(old_value: Option<A::Item>);
+    unsafe_pinned!(signal: A);
+    unsafe_unpinned!(callback: B);
+}
+
+impl<A, B> Unpin for DedupeMap<A, B> where A: Unpin + Signal {}
 
 impl<A, B, C> Signal for DedupeMap<A, B>
     where A: Signal,
@@ -766,16 +878,25 @@ impl<A, B, C> Signal for DedupeMap<A, B>
     type Item = C;
 
     // TODO should this use #[inline] ?
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        dedupe!(self.signal, cx, self.old_value, mut value, value => (self.callback)(&mut value))
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        dedupe!(self.signal(), waker, self.old_value(), mut value, value => self.callback()(&mut value))
     }
 }
 
 
-pub struct Dedupe<A: Signal> {
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct Dedupe<A> where A: Signal {
     old_value: Option<A::Item>,
     signal: A,
 }
+
+impl<A> Dedupe<A> where A: Signal {
+    unsafe_unpinned!(old_value: Option<A::Item>);
+    unsafe_pinned!(signal: A);
+}
+
+impl<A> Unpin for Dedupe<A> where A: Unpin + Signal {}
 
 impl<A> Signal for Dedupe<A>
     where A: Signal,
@@ -784,16 +905,25 @@ impl<A> Signal for Dedupe<A>
     type Item = A::Item;
 
     // TODO should this use #[inline] ?
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        dedupe!(self.signal, cx, self.old_value, value, value => value)
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        dedupe!(self.signal(), waker, self.old_value(), value, value => value)
     }
 }
 
 
-pub struct DedupeCloned<A: Signal> {
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct DedupeCloned<A> where A: Signal {
     old_value: Option<A::Item>,
     signal: A,
 }
+
+impl<A> DedupeCloned<A> where A: Signal {
+    unsafe_unpinned!(old_value: Option<A::Item>);
+    unsafe_pinned!(signal: A);
+}
+
+impl<A> Unpin for DedupeCloned<A> where A: Unpin + Signal {}
 
 impl<A> Signal for DedupeCloned<A>
     where A: Signal,
@@ -802,17 +932,27 @@ impl<A> Signal for DedupeCloned<A>
     type Item = A::Item;
 
     // TODO should this use #[inline] ?
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        dedupe!(self.signal, cx, self.old_value, value, value => value.clone())
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        dedupe!(self.signal(), waker, self.old_value(), value, value => value.clone())
     }
 }
 
 
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
 pub struct FilterMap<A, B> {
     signal: A,
     callback: B,
     first: bool,
 }
+
+impl<A, B> FilterMap<A, B> {
+    unsafe_pinned!(signal: A);
+    unsafe_unpinned!(callback: B);
+    unsafe_unpinned!(first: bool);
+}
+
+impl<A, B> Unpin for FilterMap<A, B> where A: Unpin {}
 
 impl<A, B, C> Signal for FilterMap<A, B>
     where A: Signal,
@@ -821,35 +961,49 @@ impl<A, B, C> Signal for FilterMap<A, B>
 
     // TODO should this use #[inline] ?
     #[inline]
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
         loop {
-            return match self.signal.poll_change(cx) {
-                Async::Ready(Some(value)) => match (self.callback)(value) {
+            return match self.signal().poll_change(waker) {
+                Poll::Ready(Some(value)) => match self.callback()(value) {
                     Some(value) => {
-                        self.first = false;
-                        Async::Ready(Some(Some(value)))
+                        *self.first() = false;
+                        Poll::Ready(Some(Some(value)))
                     },
 
-                    None => if self.first {
-                        self.first = false;
-                        Async::Ready(Some(None))
+                    None => {
+                        let first = self.first();
 
-                    } else {
-                        continue;
+                        if *first {
+                            *first = false;
+                            Poll::Ready(Some(None))
+
+                        } else {
+                            continue;
+                        }
                     },
                 },
-                Async::Ready(None) => Async::Ready(None),
-                Async::Pending => Async::Pending,
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
             }
         }
     }
 }
 
 
-pub struct Flatten<A: Signal> where A::Item: IntoSignal {
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct Flatten<A> where A: Signal {
     signal: Option<A>,
-    inner: Option<<A::Item as IntoSignal>::Signal>,
+    inner: Option<A::Item>,
 }
+
+impl<A> Flatten<A> where A: Signal {
+    unsafe_pinned!(signal: Option<A>);
+    unsafe_pinned!(inner: Option<A::Item>);
+}
+
+// TODO is this impl correct ?
+impl<A> Unpin for Flatten<A> where A: Unpin + Signal, A::Item: Unpin {}
 
 // Poll parent => Has inner   => Poll inner  => Output
 // --------------------------------------------------------
@@ -866,27 +1020,27 @@ pub struct Flatten<A: Signal> where A::Item: IntoSignal {
 // Pending     => None        =>             => Pending
 impl<A> Signal for Flatten<A>
     where A: Signal,
-          A::Item: IntoSignal {
-    type Item = <<A as Signal>::Item as IntoSignal>::Item;
+          A::Item: Signal {
+    type Item = <A::Item as Signal>::Item;
 
     #[inline]
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        let done = match self.signal.as_mut().map(|signal| signal.poll_change(cx)) {
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        let done = match self.signal().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
-            Some(Async::Ready(None)) => {
-                self.signal = None;
+            Some(Poll::Ready(None)) => {
+                Pin::set(self.signal(), None);
                 true
             },
-            Some(Async::Ready(Some(inner))) => {
-                self.inner = Some(inner.into_signal());
+            Some(Poll::Ready(Some(inner))) => {
+                Pin::set(self.inner(), Some(inner));
                 false
             },
-            Some(Async::Pending) => false,
+            Some(Poll::Pending) => false,
         };
 
-        match self.inner.as_mut().map(|inner| inner.poll_change(cx)) {
-            Some(Async::Ready(None)) => {
-                self.inner = None;
+        match self.inner().as_pin_mut().map(|inner| inner.poll_change(waker)) {
+            Some(Poll::Ready(None)) => {
+                Pin::set(self.inner(), None);
             },
             Some(poll) => {
                 return poll;
@@ -895,10 +1049,10 @@ impl<A> Signal for Flatten<A>
         }
 
         if done {
-            Async::Ready(None)
+            Poll::Ready(None)
 
         } else {
-            Async::Pending
+            Poll::Pending
         }
     }
 }

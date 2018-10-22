@@ -1,5 +1,7 @@
 #![recursion_limit="128"]
+#![feature(pin, futures_api)]
 
+extern crate pin_utils;
 extern crate futures_core;
 extern crate futures_executor;
 extern crate futures_util;
@@ -16,8 +18,8 @@ macro_rules! map_tests {
         #[cfg(test)]
         mod $name {
             use super::util;
-            use futures_core::Async;
-            use futures_signals::signal::{Signal, always};
+            use futures_core::Poll;
+            use futures_signals::signal::{SignalExt, always};
 
             #[test]
             fn send_sync() {
@@ -61,9 +63,9 @@ macro_rules! map_tests {
                     a + 1
                 });
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(2)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(2)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -78,9 +80,9 @@ macro_rules! map_tests {
                     a + b
                 });
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(3)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(3)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -97,9 +99,9 @@ macro_rules! map_tests {
                     a + b + c
                 });
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(6)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(6)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -118,9 +120,9 @@ macro_rules! map_tests {
                     a + b + c + d
                 });
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(10)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(10)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -141,9 +143,9 @@ macro_rules! map_tests {
                     a + b + c + d + e
                 });
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(15)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(15)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -157,9 +159,9 @@ macro_rules! map_tests {
                     a + 1
                 });
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(2)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(2)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -174,9 +176,9 @@ macro_rules! map_tests {
                     a + b
                 });
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(3)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(3)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -193,9 +195,9 @@ macro_rules! map_tests {
                     a + b + c
                 });
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(6)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(6)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -214,9 +216,9 @@ macro_rules! map_tests {
                     a + b + c + d
                 });
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(10)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(10)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -237,9 +239,9 @@ macro_rules! map_tests {
                     a + b + c + d + e
                 });
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(15)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(15)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -253,9 +255,9 @@ macro_rules! map_tests {
                     }
                 };
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(3)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(3)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -272,9 +274,9 @@ macro_rules! map_tests {
                     }
                 };
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(10)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(10)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -294,9 +296,9 @@ macro_rules! map_tests {
                     }
                 };
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(21)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(21)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -319,9 +321,9 @@ macro_rules! map_tests {
                     }
                 };
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(36)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(36)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -347,9 +349,9 @@ macro_rules! map_tests {
                     }
                 };
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(55)));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(55)));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
 
@@ -386,9 +388,9 @@ macro_rules! map_tests {
                     ((c1.clone(), c2.clone()), (c3.clone(), c4.clone()), *l, *r, a.clone(), *b, *c, *d, e.clone(), (c5.clone(), c6.clone()))
                 };
 
-                util::with_noop_context(|cx| {
-                    assert_eq!(s.poll_change(cx), Async::Ready(Some(((Cloner { count: 1 }, Cloner { count: 1 }), (Cloner { count: 1 }, Cloner { count: 1 }), 0, 0, Cloner { count: 1 }, 2, 3, 4, Cloner { count: 1 }, (Cloner { count: 1 }, Cloner { count: 1 })))));
-                    assert_eq!(s.poll_change(cx), Async::Ready(None));
+                util::with_noop_waker(|waker| {
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(Some(((Cloner { count: 1 }, Cloner { count: 1 }), (Cloner { count: 1 }, Cloner { count: 1 }), 0, 0, Cloner { count: 1 }, 2, 3, 4, Cloner { count: 1 }, (Cloner { count: 1 }, Cloner { count: 1 })))));
+                    assert_eq!(s.poll_change_unpin(waker), Poll::Ready(None));
                 });
             }
         }

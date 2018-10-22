@@ -41,45 +41,49 @@
 ///! efficiently notified whenever the `Mutable` changes:
 ///!
 ///! ```rust
+///! # extern crate futures_signals;
+///! # extern crate futures;
 ///! # use futures_signals::signal::Mutable;
 ///! # let my_state = Mutable::new(10);
 ///! #
 ///! use futures_signals::signal::SignalExt;
+///! use futures::future::ready;
 ///!
 ///! let future = my_state.signal().for_each(|value| {
 ///!     // This code is run for the current value of my_state, and also every time my_state changes
 ///!     println!("{}", value);
-///!     Ok(())
+///!     ready(())
 ///! });
 ///! #
 ///! # use futures_signals::signal::ForEach;
-///! # let future: ForEach<_, Result<(), ()>, _> = future;
+///! # use futures::future::Ready;
+///! # let future: ForEach<_, Ready<()>, _> = future;
 ///! ```
 ///!
 ///! This is how the `for_each` method works:
 ///!
-///! 1. The `for_each` method returns a new [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html).
+///! 1. The `for_each` method returns a new [`Future`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/trait.Future.html).
 ///!
-///! 2. When that [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html) is spawned it will *immediately*
+///! 2. When that [`Future`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/trait.Future.html) is spawned it will *immediately*
 ///!    call the `|value| { ... }` closure with the *current value* of `my_state` (which in this case is `10`).
 ///!
 ///! 3. Then whenever `my_state` changes (such as with `my_state.set(...)`) it will call the closure again with the new value.
 ///!
-///! Just like [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html) and [`Stream`](https://docs.rs/futures/0.2.*/futures/trait.Stream.html),
+///! Just like [`Future`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/trait.Future.html) and [`Stream`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/trait.Stream.html),
 ///! when you create a `Signal` it does not actually do anything until it is spawned.
 ///!
 ///! In order to spawn a `Signal` you first use the `for_each` method (as shown above) to convert it into a `Future`, and then you spawn that `Future`.
 ///!
 ///! There are many ways of spawning a `Future`:
 ///!
-///! * [`block_on(future)`](https://docs.rs/futures/0.2.*/futures/executor/fn.block_on.html)
+///! * [`block_on(future)`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/executor/fn.block_on.html)
 ///! * [`tokio::run(future)`](https://docs.rs/tokio/0.1.5/tokio/runtime/fn.run.html)
 ///! * `PromiseFuture::spawn_local(future)`
 ///!
-///! And many more! Since `for_each` returns a normal [`Future`](https://docs.rs/futures/0.2.*/futures/trait.Future.html),
-///! any [`Executor`](https://docs.rs/futures/0.2.*/futures/executor/trait.Executor.html) should work.
+///! And many more! Since `for_each` returns a normal [`Future`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/trait.Future.html),
+///! any [`Executor`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/executor/trait.Executor.html) should work.
 ///!
-///! That also means that you can use all of the [`FutureExt`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) methods on it as well.
+///! That also means that you can use all of the [`FutureExt`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/trait.FutureExt.html) methods on it as well.
 ///!
 ///! ----
 ///!
@@ -93,11 +97,11 @@
 ///! let stream = my_state.signal().to_stream();
 ///! ```
 ///!
-///! This returns a [`Stream`](https://docs.rs/futures/0.2.*/futures/trait.Stream.html) of values (starting with the current value of `my_state`, and
+///! This returns a [`Stream`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/trait.Stream.html) of values (starting with the current value of `my_state`, and
 ///! then followed by the changes to `my_state`).
 ///!
-///! You can then use all of the [`StreamExt`](https://docs.rs/futures/0.2.*/futures/trait.StreamExt.html) methods on it, just like with any other
-///! [`Stream`](https://docs.rs/futures/0.2.*/futures/trait.Stream.html).
+///! You can then use all of the [`StreamExt`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/trait.StreamExt.html) methods on it, just like with any other
+///! [`Stream`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/trait.Stream.html).
 ///!
 ///! ----
 ///!
@@ -167,24 +171,25 @@
 ///! and the same is true with `Mutable` and `Signal`.
 ///!
 ///! If you really *do* need all intermediate values (not just the most recent), then using a
-///! [`Stream`](https://docs.rs/futures/0.2.*/futures/trait.Stream.html) would be a great choice.
+///! [`Stream`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/trait.Stream.html) would be a great choice.
 ///! In that case you will pay a small performance penalty, because it has to hold the values in a queue.
 ///!
 ///! ----
 ///!
 ///! Now that I've fully explained `Mutable`, I can finally explain `Signal`.
 ///!
-///! Just like [`Future`](https://docs.rs/futures/0.2.*/futures/trait.FutureExt.html) and
-///! [`Stream`](https://docs.rs/futures/0.2.*/futures/trait.StreamExt.html), `Signal` has many useful
+///! Just like [`Future`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/trait.FutureExt.html) and
+///! [`Stream`](https://docs.rs/futures-preview/^0.3.0-alpha.9/futures/trait.StreamExt.html), `Signal` has many useful
 ///! methods, and most of them return a `Signal` so they can be chained:
 ///!
 ///! ```rust
 ///! # extern crate futures_core;
+///! # extern crate futures_util;
 ///! # extern crate futures_signals;
-///! # use futures_core::Never;
 ///! # use futures_signals::signal::Mutable;
 ///! # use futures_signals::signal::SignalExt;
-///! # fn do_some_async_calculation(value: u32) -> Result<(), Never> { Ok(()) }
+///! # use futures_util::future::{ready, Ready};
+///! # fn do_some_async_calculation(value: u32) -> Ready<()> { ready(()) }
 ///! # fn main() {
 ///! # let my_state = Mutable::new(3);
 ///! #
@@ -247,10 +252,13 @@
 ///! `for_each` method to be efficiently notified when it changes:
 ///!
 ///! ```rust
+///! # extern crate futures_signals;
+///! # extern crate futures;
 ///! # use futures_signals::signal_vec::MutableVec;
 ///! # let my_vec: MutableVec<u32> = MutableVec::new();
 ///! #
 ///! use futures_signals::signal_vec::{SignalVecExt, VecDiff};
+///! use futures::future::ready;
 ///!
 ///! let future = my_vec.signal_vec().for_each(|change| {
 ///!     match change {
@@ -280,11 +288,12 @@
 ///!         },
 ///!     }
 ///!
-///!     Ok(())
+///!     ready(())
 ///! });
 ///! #
 ///! # use futures_signals::signal_vec::ForEach;
-///! # let future: ForEach<_, Result<(), ()>, _> = future;
+///! # use futures::future::Ready;
+///! # let future: ForEach<_, Ready<()>, _> = future;
 ///! ```
 ///!
 ///! Just like `Signal::for_each`, the `SignalVec::for_each` method returns a `Future`.
@@ -360,9 +369,12 @@
 ///! `SignalVec`:
 ///!
 ///! ```rust
+///! # extern crate futures_signals;
+///! # extern crate futures;
 ///! # use futures_signals::signal_vec::MutableVec;
 ///! # let my_vec: MutableVec<u32> = MutableVec::new();
 ///! # use futures_signals::signal_vec::{SignalVecExt, VecDiff};
+///! # use futures::future::ready;
 ///! #
 ///! let mut copied_vec = vec![];
 ///!
@@ -395,11 +407,12 @@
 ///!         },
 ///!     }
 ///!
-///!     Ok(())
+///!     ready(())
 ///! });
 ///! #
 ///! # use futures_signals::signal_vec::ForEach;
-///! # let future: ForEach<_, Result<(), ()>, _> = future;
+///! # use futures::future::Ready;
+///! # let future: ForEach<_, Ready<()>, _> = future;
 ///! ```
 ///!
 ///! In the above example, `copied_vec` is guaranteed to always have exactly the same values as `my_vec`, in the same order as `my_vec`.

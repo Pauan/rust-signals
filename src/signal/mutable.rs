@@ -1,16 +1,18 @@
 use super::Signal;
 use std;
 use std::fmt;
+use std::pin::{Pin, Unpin};
 use std::ops::{Deref, DerefMut};
 // TODO use parking_lot ?
 use std::sync::{Arc, Weak, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 // TODO use parking_lot ?
 use std::sync::atomic::{AtomicBool, Ordering};
-use futures_core::Async;
-use futures_core::task::{Context, Waker};
+use futures_core::Poll;
+use futures_core::task::{LocalWaker, Waker};
 use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 
+#[derive(Debug)]
 struct MutableState<A> {
     value: A,
     senders: usize,
@@ -43,6 +45,8 @@ impl<A> MutableState<A> {
     }
 }
 
+
+#[derive(Debug)]
 struct MutableSignalState<A> {
     has_changed: AtomicBool,
     waker: Mutex<Option<Waker>>,
@@ -66,26 +70,27 @@ impl<A> MutableSignalState<A> {
         state
     }
 
-    fn poll_change<B, F>(&self, cx: &mut Context, f: F) -> Async<Option<B>> where F: FnOnce(&A) -> B {
+    fn poll_change<B, F>(&self, waker: &LocalWaker, f: F) -> Poll<Option<B>> where F: FnOnce(&A) -> B {
         // TODO is this correct ?
         let lock = self.state.read().unwrap();
 
         // TODO verify that this is correct
         if self.has_changed.swap(false, Ordering::SeqCst) {
-            Async::Ready(Some(f(&lock.value)))
+            Poll::Ready(Some(f(&lock.value)))
 
         } else if lock.senders == 0 {
-            Async::Ready(None)
+            Poll::Ready(None)
 
         } else {
             // TODO is this correct ?
-            *self.waker.lock().unwrap() = Some(cx.waker().clone());
-            Async::Pending
+            *self.waker.lock().unwrap() = Some(waker.clone().into_waker());
+            Poll::Pending
         }
     }
 }
 
 
+#[derive(Debug)]
 pub struct MutableLockMut<'a, A> where A: 'a {
     mutated: bool,
     lock: RwLockWriteGuard<'a, MutableState<A>>,
@@ -118,6 +123,7 @@ impl<'a, A> Drop for MutableLockMut<'a, A> {
 }
 
 
+#[derive(Debug)]
 pub struct MutableLockRef<'a, A> where A: 'a {
     lock: RwLockReadGuard<'a, MutableState<A>>,
 }
@@ -300,40 +306,53 @@ impl<A> Drop for Mutable<A> {
 
 
 // TODO remove it from receivers when it's dropped
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
 pub struct MutableSignal<A>(Arc<MutableSignalState<A>>);
+
+impl<A> Unpin for MutableSignal<A> {}
 
 impl<A: Copy> Signal for MutableSignal<A> {
     type Item = A;
 
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        self.0.poll_change(cx, |value| *value)
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        self.0.poll_change(waker, |value| *value)
     }
 }
 
 
 // TODO remove it from receivers when it's dropped
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
 pub struct MutableSignalRef<A, F>(Arc<MutableSignalState<A>>, F);
+
+impl<A, F> Unpin for MutableSignalRef<A, F> {}
 
 impl<A, B, F> Signal for MutableSignalRef<A, F> where F: FnMut(&A) -> B {
     type Item = B;
 
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        let state = &self.0;
-        let callback = &mut self.1;
-        state.poll_change(cx, callback)
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        let this = &mut *self;
+        let state = &this.0;
+        let callback = &mut this.1;
+        state.poll_change(waker, callback)
     }
 }
 
 
 // TODO it should have a single MutableSignal implementation for both Copy and Clone
 // TODO remove it from receivers when it's dropped
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
 pub struct MutableSignalCloned<A>(Arc<MutableSignalState<A>>);
+
+impl<A> Unpin for MutableSignalCloned<A> {}
 
 impl<A: Clone> Signal for MutableSignalCloned<A> {
     type Item = A;
 
     // TODO code duplication with MutableSignal::poll
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
-        self.0.poll_change(cx, |value| value.clone())
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        self.0.poll_change(waker, |value| value.clone())
     }
 }

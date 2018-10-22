@@ -1,11 +1,14 @@
+#![feature(pin, futures_api)]
+
+extern crate pin_utils;
 extern crate futures_core;
 extern crate futures_util;
 extern crate futures_executor;
 #[macro_use]
 extern crate futures_signals;
 
-use futures_signals::signal::{Signal, Mutable, Broadcaster};
-use futures_core::Async;
+use futures_signals::signal::{SignalExt, Mutable, Broadcaster};
+use futures_core::Poll;
 
 mod util;
 
@@ -17,21 +20,21 @@ fn test_broadcaster() {
     let mut b1 = broadcaster.signal();
     let mut b2 = broadcaster.signal_cloned();
 
-    util::with_noop_context(|cx| {
-        assert_eq!(b1.poll_change(cx), Async::Ready(Some(1)));
-        assert_eq!(b1.poll_change(cx), Async::Pending);
-        assert_eq!(b2.poll_change(cx), Async::Ready(Some(1)));
-        assert_eq!(b2.poll_change(cx), Async::Pending);
+    util::with_noop_waker(|waker| {
+        assert_eq!(b1.poll_change_unpin(waker), Poll::Ready(Some(1)));
+        assert_eq!(b1.poll_change_unpin(waker), Poll::Pending);
+        assert_eq!(b2.poll_change_unpin(waker), Poll::Ready(Some(1)));
+        assert_eq!(b2.poll_change_unpin(waker), Poll::Pending);
 
         mutable.set(5);
-        assert_eq!(b1.poll_change(cx), Async::Ready(Some(5)));
-        assert_eq!(b1.poll_change(cx), Async::Pending);
-        assert_eq!(b2.poll_change(cx), Async::Ready(Some(5)));
-        assert_eq!(b2.poll_change(cx), Async::Pending);
+        assert_eq!(b1.poll_change_unpin(waker), Poll::Ready(Some(5)));
+        assert_eq!(b1.poll_change_unpin(waker), Poll::Pending);
+        assert_eq!(b2.poll_change_unpin(waker), Poll::Ready(Some(5)));
+        assert_eq!(b2.poll_change_unpin(waker), Poll::Pending);
 
         drop(mutable);
-        assert_eq!(b1.poll_change(cx), Async::Ready(None));
-        assert_eq!(b2.poll_change(cx), Async::Ready(None));
+        assert_eq!(b1.poll_change_unpin(waker), Poll::Ready(None));
+        assert_eq!(b2.poll_change_unpin(waker), Poll::Ready(None));
     });
 }
 
@@ -45,12 +48,12 @@ fn test_polls() {
     let mut mutable = Some(mutable);
     let mut broadcaster = Some(broadcaster);
 
-    let polls = util::get_all_polls(map_ref!(signal1, signal2 => (*signal1, *signal2)), 0, |state, cx| {
+    let polls = util::get_all_polls(map_ref!(signal1, signal2 => (*signal1, *signal2)), 0, |state, waker| {
         match *state {
             0 => {},
-            1 => { cx.waker().wake(); },
+            1 => { waker.wake(); },
             2 => { mutable.as_ref().unwrap().set(5); },
-            3 => { cx.waker().wake(); },
+            3 => { waker.wake(); },
             4 => { mutable.take(); },
             5 => { broadcaster.take(); },
             _ => {},
@@ -60,10 +63,10 @@ fn test_polls() {
     });
 
     assert_eq!(polls, vec![
-        Async::Ready(Some((1, 1))),
-        Async::Pending,
-        Async::Ready(Some((5, 5))),
-        Async::Pending,
-        Async::Ready(None),
+        Poll::Ready(Some((1, 1))),
+        Poll::Pending,
+        Poll::Ready(Some((5, 5))),
+        Poll::Pending,
+        Poll::Ready(None),
     ]);
 }

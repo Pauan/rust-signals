@@ -1,8 +1,9 @@
 use super::signal::Signal;
+use std::pin::{Unpin, Pin};
 // TODO use parking_lot ?
 use std::sync::{Arc, RwLock, Mutex, MutexGuard, RwLockReadGuard};
-use futures_core::Async;
-use futures_core::task::Context;
+use futures_core::Poll;
+use futures_core::task::LocalWaker;
 
 
 #[inline]
@@ -30,7 +31,23 @@ pub fn unwrap_ref<A>(x: &Option<A>) -> &A {
 }
 
 
-pub struct Map2<A: Signal, B: Signal, C> {
+// TODO figure out another way of doing this
+macro_rules! unsafe_pin {
+    ($self:expr) => {
+        unsafe { ::std::pin::Pin::new_unchecked(&mut $self) }
+    }
+}
+
+macro_rules! unsafe_unpin {
+    ($self:expr) => {
+        unsafe { ::std::pin::Pin::get_mut_unchecked(::std::pin::Pin::as_mut(&mut $self)) }
+    }
+}
+
+
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct Map2<A, B, C> where A: Signal, B: Signal {
     signal1: Option<A>,
     signal2: Option<B>,
     callback: C,
@@ -53,6 +70,8 @@ impl<A, B, C, D> Map2<A, B, C>
         }
     }
 }
+
+impl<A, B, C> Unpin for Map2<A, B, C> where A: Unpin + Signal, B: Unpin + Signal {}
 
 // Poll left  => Has left   => Poll right  => Has right   => Output
 // -----------------------------------------------------------------------------
@@ -81,67 +100,70 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
     type Item = D;
 
     // TODO inline this ?
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
         let mut changed = false;
 
-        let left_done = match self.signal1.as_mut().map(|signal| signal.poll_change(cx)) {
+        // TODO is this safe ?
+        let this: &mut Self = unsafe_unpin!(self);
+
+        let left_done = match unsafe_pin!(this.signal1).as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
-            Some(Async::Ready(None)) => {
-                self.signal1 = None;
+            Some(Poll::Ready(None)) => {
+                Pin::set(unsafe_pin!(this.signal1), None);
                 true
             },
-            Some(Async::Ready(a)) => {
-                self.left = a;
+            Some(Poll::Ready(a)) => {
+                this.left = a;
                 changed = true;
                 false
             },
-            Some(Async::Pending) => false,
+            Some(Poll::Pending) => false,
         };
 
-        let left = match self.left {
+        let left = match this.left {
             Some(ref mut left) => left,
 
             None => if left_done {
-                return Async::Ready(None);
+                return Poll::Ready(None);
 
             } else {
-                return Async::Pending;
+                return Poll::Pending;
             },
         };
 
-        let right_done = match self.signal2.as_mut().map(|signal| signal.poll_change(cx)) {
+        let right_done = match unsafe_pin!(this.signal2).as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
-            Some(Async::Ready(None)) => {
-                self.signal2 = None;
+            Some(Poll::Ready(None)) => {
+                Pin::set(unsafe_pin!(this.signal2), None);
                 true
             },
-            Some(Async::Ready(a)) => {
-                self.right = a;
+            Some(Poll::Ready(a)) => {
+                this.right = a;
                 changed = true;
                 false
             },
-            Some(Async::Pending) => false,
+            Some(Poll::Pending) => false,
         };
 
-        let right = match self.right {
+        let right = match this.right {
             Some(ref mut right) => right,
 
             None => if right_done {
-                return Async::Ready(None);
+                return Poll::Ready(None);
 
             } else {
-                return Async::Pending;
+                return Poll::Pending;
             },
         };
 
         if changed {
-            Async::Ready(Some((self.callback)(left, right)))
+            Poll::Ready(Some((this.callback)(left, right)))
 
         } else if left_done && right_done {
-            Async::Ready(None)
+            Poll::Ready(None)
 
         } else {
-            Async::Pending
+            Poll::Pending
         }
     }
 }
@@ -151,7 +173,9 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
 // TODO is it possible to use only a single Mutex ?
 pub type PairMut<A, B> = Arc<(Mutex<Option<A>>, Mutex<Option<B>>)>;
 
-pub struct MapPairMut<A: Signal, B: Signal> {
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct MapPairMut<A, B> where A: Signal, B: Signal {
     signal1: Option<A>,
     signal2: Option<B>,
     inner: PairMut<A::Item, B::Item>,
@@ -170,75 +194,80 @@ impl<A, B> MapPairMut<A, B>
     }
 }
 
+impl<A, B> Unpin for MapPairMut<A, B> where A: Unpin + Signal, B: Unpin + Signal {}
+
 impl<A, B> Signal for MapPairMut<A, B>
     where A: Signal,
           B: Signal {
     type Item = PairMut<A::Item, B::Item>;
 
     // TODO inline this ?
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
         let mut changed = false;
 
+        // TODO is this safe ?
+        let this: &mut Self = unsafe_unpin!(self);
+
         // TODO can this deadlock ?
-        let mut borrow_left = self.inner.0.lock().unwrap();
+        let mut borrow_left = this.inner.0.lock().unwrap();
 
         // TODO is it okay to move this to just above right_done ?
-        let mut borrow_right = self.inner.1.lock().unwrap();
+        let mut borrow_right = this.inner.1.lock().unwrap();
 
-        let left_done = match self.signal1.as_mut().map(|signal| signal.poll_change(cx)) {
+        let left_done = match unsafe_pin!(this.signal1).as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
-            Some(Async::Ready(None)) => {
-                self.signal1 = None;
+            Some(Poll::Ready(None)) => {
+                Pin::set(unsafe_pin!(this.signal1), None);
                 true
             },
-            Some(Async::Ready(a)) => {
+            Some(Poll::Ready(a)) => {
                 *borrow_left = a;
                 changed = true;
                 false
             },
-            Some(Async::Pending) => false,
+            Some(Poll::Pending) => false,
         };
 
         if borrow_left.is_none() {
             if left_done {
-                return Async::Ready(None);
+                return Poll::Ready(None);
 
             } else {
-                return Async::Pending;
+                return Poll::Pending;
             }
         }
 
-        let right_done = match self.signal2.as_mut().map(|signal| signal.poll_change(cx)) {
+        let right_done = match unsafe_pin!(this.signal2).as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
-            Some(Async::Ready(None)) => {
-                self.signal2 = None;
+            Some(Poll::Ready(None)) => {
+                Pin::set(unsafe_pin!(this.signal2), None);
                 true
             },
-            Some(Async::Ready(a)) => {
+            Some(Poll::Ready(a)) => {
                 *borrow_right = a;
                 changed = true;
                 false
             },
-            Some(Async::Pending) => false,
+            Some(Poll::Pending) => false,
         };
 
         if borrow_right.is_none() {
             if right_done {
-                return Async::Ready(None);
+                return Poll::Ready(None);
 
             } else {
-                return Async::Pending;
+                return Poll::Pending;
             }
         }
 
         if changed {
-            Async::Ready(Some(self.inner.clone()))
+            Poll::Ready(Some(this.inner.clone()))
 
         } else if left_done && right_done {
-            Async::Ready(None)
+            Poll::Ready(None)
 
         } else {
-            Async::Pending
+            Poll::Pending
         }
     }
 }
@@ -248,7 +277,9 @@ impl<A, B> Signal for MapPairMut<A, B>
 // TODO maybe it's faster to use a Mutex ?
 pub type Pair<A, B> = Arc<RwLock<(Option<A>, Option<B>)>>;
 
-pub struct MapPair<A: Signal, B: Signal> {
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct MapPair<A, B> where A: Signal, B: Signal {
     signal1: Option<A>,
     signal2: Option<B>,
     inner: Pair<A::Item, B::Item>,
@@ -267,71 +298,76 @@ impl<A, B> MapPair<A, B>
     }
 }
 
+impl<A, B> Unpin for MapPair<A, B> where A: Unpin + Signal, B: Unpin + Signal {}
+
 impl<A, B> Signal for MapPair<A, B>
     where A: Signal,
           B: Signal {
     type Item = Pair<A::Item, B::Item>;
 
     // TODO inline this ?
-    fn poll_change(&mut self, cx: &mut Context) -> Async<Option<Self::Item>> {
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
         let mut changed = false;
 
-        let mut borrow = self.inner.write().unwrap();
+        // TODO is this safe ?
+        let this: &mut Self = unsafe_unpin!(self);
 
-        let left_done = match self.signal1.as_mut().map(|signal| signal.poll_change(cx)) {
+        let mut borrow = this.inner.write().unwrap();
+
+        let left_done = match unsafe_pin!(this.signal1).as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
-            Some(Async::Ready(None)) => {
-                self.signal1 = None;
+            Some(Poll::Ready(None)) => {
+                Pin::set(unsafe_pin!(this.signal1), None);
                 true
             },
-            Some(Async::Ready(a)) => {
+            Some(Poll::Ready(a)) => {
                 borrow.0 = a;
                 changed = true;
                 false
             },
-            Some(Async::Pending) => false,
+            Some(Poll::Pending) => false,
         };
 
         if borrow.0.is_none() {
             if left_done {
-                return Async::Ready(None);
+                return Poll::Ready(None);
 
             } else {
-                return Async::Pending;
+                return Poll::Pending;
             }
         }
 
-        let right_done = match self.signal2.as_mut().map(|signal| signal.poll_change(cx)) {
+        let right_done = match unsafe_pin!(this.signal2).as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
-            Some(Async::Ready(None)) => {
-                self.signal2 = None;
+            Some(Poll::Ready(None)) => {
+                Pin::set(unsafe_pin!(this.signal2), None);
                 true
             },
-            Some(Async::Ready(a)) => {
+            Some(Poll::Ready(a)) => {
                 borrow.1 = a;
                 changed = true;
                 false
             },
-            Some(Async::Pending) => false,
+            Some(Poll::Pending) => false,
         };
 
         if borrow.1.is_none() {
             if right_done {
-                return Async::Ready(None);
+                return Poll::Ready(None);
 
             } else {
-                return Async::Pending;
+                return Poll::Pending;
             }
         }
 
         if changed {
-            Async::Ready(Some(self.inner.clone()))
+            Poll::Ready(Some(this.inner.clone()))
 
         } else if left_done && right_done {
-            Async::Ready(None)
+            Poll::Ready(None)
 
         } else {
-            Async::Pending
+            Poll::Pending
         }
     }
 }
