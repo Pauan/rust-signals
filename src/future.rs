@@ -43,12 +43,12 @@ impl Discard for CancelableFutureHandle {
 #[must_use = "Futures do nothing unless polled"]
 pub struct CancelableFuture<A, B> {
     state: Arc<CancelableFutureState>,
-    future: A,
+    future: Option<A>,
     when_cancelled: Option<B>,
 }
 
 impl<A, B> CancelableFuture<A, B> {
-    unsafe_pinned!(future: A);
+    unsafe_pinned!(future: Option<A>);
     unsafe_unpinned!(when_cancelled: Option<B>);
 }
 
@@ -65,12 +65,14 @@ impl<A, B> Future for CancelableFuture<A, B>
     fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
         // TODO is this correct ?
         if self.state.is_cancelled.load(Ordering::SeqCst) {
+            // This is necessary in order to prevent the future from calling `waker.wake()` later
+            Pin::set(self.future(), None);
             let callback = self.when_cancelled().take().unwrap();
             // TODO figure out how to call the callback immediately when discard is called, e.g. using two Arc<Mutex<>>
             Poll::Ready(callback())
 
         } else {
-            match self.future().poll(waker) {
+            match self.future().as_pin_mut().unwrap().poll(waker) {
                 Poll::Pending => {
                     // TODO is this correct ?
                     *self.state.waker.lock().unwrap() = Some(waker.clone().into_waker());
@@ -100,7 +102,7 @@ pub fn cancelable_future<A, B>(future: A, when_cancelled: B) -> (DiscardOnDrop<C
 
     let cancel_future = CancelableFuture {
         state,
-        future,
+        future: Some(future),
         when_cancelled: Some(when_cancelled),
     };
 
