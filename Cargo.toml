@@ -1,6 +1,6 @@
 [package]
 name = "futures-signals"
-version = "0.1.0"
+version = "0.2.0"
 authors = ["Pauan <pcxunlimited@gmail.com>"]
 description = "Zero cost FRP signals using the futures crate"
 repository = "https://github.com/Pauan/rust-signals"
