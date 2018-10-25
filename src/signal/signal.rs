@@ -1,3 +1,4 @@
+use internal::Map2;
 use std::pin::{Pin, Unpin};
 use futures_core::task::LocalWaker;
 use futures_core::Poll;
@@ -400,6 +401,32 @@ pub trait SignalExt: Signal {
 
 // TODO why is this ?Sized
 impl<T: ?Sized> SignalExt for T where T: Signal {}
+
+
+// TODO make this into a method later
+#[inline]
+pub fn not<A>(signal: A) -> impl Signal<Item = bool>
+    where A: Signal<Item = bool> {
+    signal.map(|x| !x)
+}
+
+// TODO make this into a method later
+// TODO use short-circuiting if the left signal returns false ?
+#[inline]
+pub fn and<A, B>(left: A, right: B) -> impl Signal<Item = bool>
+    where A: Signal<Item = bool>,
+          B: Signal<Item = bool> {
+    Map2::new(left, right, |a, b| *a && *b)
+}
+
+// TODO make this into a method later
+// TODO use short-circuiting if the left signal returns true ?
+#[inline]
+pub fn or<A, B>(left: A, right: B) -> impl Signal<Item = bool>
+    where A: Signal<Item = bool>,
+          B: Signal<Item = bool> {
+    Map2::new(left, right, |a, b| *a || *b)
+}
 
 
 #[derive(Debug)]

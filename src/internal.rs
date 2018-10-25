@@ -120,17 +120,6 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
             Some(Poll::Pending) => false,
         };
 
-        let left = match this.left {
-            Some(ref mut left) => left,
-
-            None => if left_done {
-                return Poll::Ready(None);
-
-            } else {
-                return Poll::Pending;
-            },
-        };
-
         let right_done = match unsafe_pin!(this.signal2).as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
@@ -145,18 +134,9 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
             Some(Poll::Pending) => false,
         };
 
-        let right = match this.right {
-            Some(ref mut right) => right,
-
-            None => if right_done {
-                return Poll::Ready(None);
-
-            } else {
-                return Poll::Pending;
-            },
-        };
-
         if changed {
+            let left = this.left.as_mut().unwrap();
+            let right = this.right.as_mut().unwrap();
             Poll::Ready(Some((this.callback)(left, right)))
 
         } else if left_done && right_done {
@@ -228,15 +208,6 @@ impl<A, B> Signal for MapPairMut<A, B>
             Some(Poll::Pending) => false,
         };
 
-        if borrow_left.is_none() {
-            if left_done {
-                return Poll::Ready(None);
-
-            } else {
-                return Poll::Pending;
-            }
-        }
-
         let right_done = match unsafe_pin!(this.signal2).as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
@@ -250,15 +221,6 @@ impl<A, B> Signal for MapPairMut<A, B>
             },
             Some(Poll::Pending) => false,
         };
-
-        if borrow_right.is_none() {
-            if right_done {
-                return Poll::Ready(None);
-
-            } else {
-                return Poll::Pending;
-            }
-        }
 
         if changed {
             Poll::Ready(Some(this.inner.clone()))
@@ -328,15 +290,6 @@ impl<A, B> Signal for MapPair<A, B>
             Some(Poll::Pending) => false,
         };
 
-        if borrow.0.is_none() {
-            if left_done {
-                return Poll::Ready(None);
-
-            } else {
-                return Poll::Pending;
-            }
-        }
-
         let right_done = match unsafe_pin!(this.signal2).as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
@@ -350,15 +303,6 @@ impl<A, B> Signal for MapPair<A, B>
             },
             Some(Poll::Pending) => false,
         };
-
-        if borrow.1.is_none() {
-            if right_done {
-                return Poll::Ready(None);
-
-            } else {
-                return Poll::Pending;
-            }
-        }
 
         if changed {
             Poll::Ready(Some(this.inner.clone()))
