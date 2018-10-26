@@ -138,6 +138,16 @@ pub trait SignalExt: Signal {
         }
     }
 
+    #[inline]
+    fn inspect<A, B>(self, callback: B) -> Inspect<Self, B>
+        where B: FnMut(&Self::Item),
+              Self: Sized {
+        Inspect {
+            signal: self,
+            callback,
+        }
+    }
+
     /// Creates a `Signal` which uses a closure to transform the value.
     ///
     /// This is exactly the same as `map`, except:
@@ -714,6 +724,38 @@ impl<A, B, C> Signal for Map<A, B>
     #[inline]
     fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
         self.signal().poll_change(waker).map(|opt| opt.map(|value| self.callback()(value)))
+    }
+}
+
+
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct Inspect<A, B> {
+    signal: A,
+    callback: B,
+}
+
+impl<A, B> Inspect<A, B> {
+    unsafe_pinned!(signal: A);
+    unsafe_unpinned!(callback: B);
+}
+
+impl<A, B> Unpin for Inspect<A, B> where A: Unpin {}
+
+impl<A, B> Signal for Inspect<A, B>
+    where A: Signal,
+          B: FnMut(&A::Item) {
+    type Item = A::Item;
+
+    #[inline]
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        let poll = self.signal().poll_change(waker);
+
+        if let Poll::Ready(Some(ref value)) = poll {
+            self.callback()(value);
+        }
+
+        poll
     }
 }
 
