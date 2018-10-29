@@ -139,8 +139,8 @@ pub trait SignalExt: Signal {
     }
 
     #[inline]
-    fn inspect<A, B>(self, callback: B) -> Inspect<Self, B>
-        where B: FnMut(&Self::Item),
+    fn inspect<A>(self, callback: A) -> Inspect<Self, A>
+        where A: FnMut(&Self::Item),
               Self: Sized {
         Inspect {
             signal: self,
