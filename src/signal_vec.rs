@@ -939,16 +939,16 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
                 Some(state) => {
                     loop {
                         match state.signal.as_mut().map(|s| s.as_mut().poll_change(waker)) {
-                            Some(Poll::Ready(Some(value))) => {
-                                if state.exists == value {
+                            Some(Poll::Ready(Some(exists))) => {
+                                if state.exists == exists {
                                     continue;
 
                                 } else {
-                                    state.exists = value;
+                                    state.exists = exists;
 
                                     // TODO test these
                                     // TODO use Push and Pop when the index is at the end
-                                    if value {
+                                    if exists {
                                         return Poll::Ready(Some(VecDiff::InsertAt { index: real_index, value: state.value.clone() }));
 
                                     } else {
