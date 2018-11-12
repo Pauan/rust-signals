@@ -1287,7 +1287,7 @@ impl<A, F> SignalVec for Filter<A, F>
 #[derive(Debug)]
 #[must_use = "SignalVecs do nothing unless polled"]
 pub struct SortByCloned<A, B> where A: SignalVec {
-    pending: Option<Poll<Option<VecDiff<A::Item>>>>,
+    pending: Option<VecDiff<A::Item>>,
     values: Vec<A::Item>,
     indexes: Vec<usize>,
     signal: A,
@@ -1298,7 +1298,7 @@ impl<A, F> SortByCloned<A, F>
     where A: SignalVec,
           F: FnMut(&A::Item, &A::Item) -> Ordering {
 
-    unsafe_unpinned!(pending: Option<Poll<Option<VecDiff<A::Item>>>>);
+    unsafe_unpinned!(pending: Option<VecDiff<A::Item>>);
     unsafe_unpinned!(values: Vec<A::Item>);
     unsafe_unpinned!(indexes: Vec<usize>);
     unsafe_pinned!(signal: A);
@@ -1351,21 +1351,21 @@ impl<A, F> SortByCloned<A, F>
         }
     }
 
-    fn insert_at(self: &mut Pin<&mut Self>, sorted_index: usize, index: usize, value: A::Item) -> Poll<Option<VecDiff<A::Item>>> {
+    fn insert_at(self: &mut Pin<&mut Self>, sorted_index: usize, index: usize, value: A::Item) -> VecDiff<A::Item> {
         if sorted_index == self.indexes.len() {
             self.indexes().push(index);
 
-            Poll::Ready(Some(VecDiff::Push {
+            VecDiff::Push {
                 value,
-            }))
+            }
 
         } else {
             self.indexes().insert(sorted_index, index);
 
-            Poll::Ready(Some(VecDiff::InsertAt {
+            VecDiff::InsertAt {
                 index: sorted_index,
                 value,
-            }))
+            }
         }
     }
 
@@ -1397,7 +1397,7 @@ impl<A, F> SignalVec for SortByCloned<A, F>
     // TODO figure out a faster implementation of this
     fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
         match self.pending().take() {
-            Some(value) => value,
+            Some(value) => Poll::Ready(Some(value)),
             None => loop {
                 return match self.signal().poll_vec_change(waker) {
                     Poll::Pending => Poll::Pending,
@@ -1430,7 +1430,7 @@ impl<A, F> SignalVec for SortByCloned<A, F>
 
                             let sorted_index = self.binary_search_insert(index);
 
-                            self.insert_at(sorted_index, index, new_value)
+                            Poll::Ready(Some(self.insert_at(sorted_index, index, new_value)))
                         },
 
                         VecDiff::Push { value } => {
@@ -1442,7 +1442,7 @@ impl<A, F> SignalVec for SortByCloned<A, F>
 
                             let sorted_index = self.binary_search_insert(index);
 
-                            self.insert_at(sorted_index, index, new_value)
+                            Poll::Ready(Some(self.insert_at(sorted_index, index, new_value)))
                         },
 
                         VecDiff::UpdateAt { index, value } => {
