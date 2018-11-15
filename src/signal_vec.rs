@@ -7,7 +7,7 @@ use futures_core::{Future, Stream, Poll};
 use futures_util::stream;
 use futures_util::stream::StreamExt;
 use pin_utils::{unsafe_pinned, unsafe_unpinned};
-use signal::{Signal, Mutable, MutableSignal};
+use signal::{Signal, Mutable, ReadOnlyMutable};
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -476,55 +476,34 @@ impl<A, B, F> SignalVec for Map<A, F>
 }
 
 
-#[derive(Debug, Clone)]
-pub struct MutableIndex(Mutable<Option<usize>>);
-
-impl MutableIndex {
-    fn new(value: usize) -> Self {
-        MutableIndex(Mutable::new(Some(value)))
-    }
-
-    #[inline]
-    pub fn get(&self) -> Option<usize> {
-        self.0.get()
-    }
-
-    // TODO use custom type for this ?
-    #[inline]
-    pub fn signal(&self) -> MutableSignal<Option<usize>> {
-        self.0.signal()
-    }
-}
-
-
 #[derive(Debug)]
 #[must_use = "SignalVecs do nothing unless polled"]
 pub struct Enumerate<A> {
     signal: A,
-    mutables: Vec<MutableIndex>,
+    mutables: Vec<Mutable<Option<usize>>>,
 }
 
 impl<A> Enumerate<A> {
     unsafe_pinned!(signal: A);
-    unsafe_unpinned!(mutables: Vec<MutableIndex>);
+    unsafe_unpinned!(mutables: Vec<Mutable<Option<usize>>>);
 }
 
 impl<A> Unpin for Enumerate<A> where A: Unpin {}
 
 impl<A> SignalVec for Enumerate<A> where A: SignalVec {
-    type Item = (MutableIndex, A::Item);
+    type Item = (ReadOnlyMutable<Option<usize>>, A::Item);
 
     #[inline]
     fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
-        fn increment_indexes(range: &[MutableIndex]) {
+        fn increment_indexes(range: &[Mutable<Option<usize>>]) {
             for mutable in range {
-                mutable.0.replace_with(|value| value.map(|value| value + 1));
+                mutable.replace_with(|value| value.map(|value| value + 1));
             }
         }
 
-        fn decrement_indexes(range: &[MutableIndex]) {
+        fn decrement_indexes(range: &[Mutable<Option<usize>>]) {
             for mutable in range {
-                mutable.0.replace_with(|value| value.map(|value| value - 1));
+                mutable.replace_with(|value| value.map(|value| value - 1));
             }
         }
 
@@ -536,42 +515,45 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
 
                     for mutable in mutables.drain(..) {
                         // TODO use set_neq ?
-                        mutable.0.set(None);
+                        mutable.set(None);
                     }
 
                     *mutables = Vec::with_capacity(values.len());
 
                     VecDiff::Replace {
                         values: values.into_iter().enumerate().map(|(index, value)| {
-                            let mutable = MutableIndex::new(index);
-                            mutables.push(mutable.clone());
-                            (mutable, value)
+                            let mutable = Mutable::new(Some(index));
+                            let read_only = mutable.read_only();
+                            mutables.push(mutable);
+                            (read_only, value)
                         }).collect()
                     }
                 },
 
                 VecDiff::InsertAt { index, value } => {
                     let mutables = self.mutables();
-                    let mutable = MutableIndex::new(index);
+                    let mutable = Mutable::new(Some(index));
+                    let read_only = mutable.read_only();
 
-                    mutables.insert(index, mutable.clone());
+                    mutables.insert(index, mutable);
 
                     increment_indexes(&mutables[(index + 1)..]);
 
-                    VecDiff::InsertAt { index, value: (mutable, value) }
+                    VecDiff::InsertAt { index, value: (read_only, value) }
                 },
 
                 VecDiff::UpdateAt { index, value } => {
-                    VecDiff::UpdateAt { index, value: (self.mutables[index].clone(), value) }
+                    VecDiff::UpdateAt { index, value: (self.mutables[index].read_only(), value) }
                 },
 
                 VecDiff::Push { value } => {
                     let mutables = self.mutables();
-                    let mutable = MutableIndex::new(mutables.len());
+                    let mutable = Mutable::new(Some(mutables.len()));
+                    let read_only = mutable.read_only();
 
-                    mutables.push(mutable.clone());
+                    mutables.push(mutable);
 
-                    VecDiff::Push { value: (mutable, value) }
+                    VecDiff::Push { value: (read_only, value) }
                 },
 
                 VecDiff::Move { old_index, new_index } => {
@@ -591,7 +573,7 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
                     }
 
                     // TODO use set_neq ?
-                    mutable.0.set(Some(new_index));
+                    mutable.set(Some(new_index));
 
                     VecDiff::Move { old_index, new_index }
                 },
@@ -604,7 +586,7 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
                     decrement_indexes(&mutables[index..]);
 
                     // TODO use set_neq ?
-                    mutable.0.set(None);
+                    mutable.set(None);
 
                     VecDiff::RemoveAt { index }
                 },
@@ -613,7 +595,7 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
                     let mutable = self.mutables().pop().unwrap();
 
                     // TODO use set_neq ?
-                    mutable.0.set(None);
+                    mutable.set(None);
 
                     VecDiff::Pop {}
                 },
@@ -621,7 +603,7 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
                 VecDiff::Clear {} => {
                     for mutable in self.mutables().drain(..) {
                         // TODO use set_neq ?
-                        mutable.0.set(None);
+                        mutable.set(None);
                     }
 
                     VecDiff::Clear {}

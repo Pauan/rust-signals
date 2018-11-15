@@ -64,7 +64,10 @@ impl<A> MutableSignalState<A> {
 
         {
             let mut lock = mutable_state.write().unwrap();
-            lock.receivers.push(Arc::downgrade(&state));
+
+            if lock.senders != 0 {
+                lock.receivers.push(Arc::downgrade(&state));
+            }
         }
 
         state
@@ -138,95 +141,24 @@ impl<'a, A> Deref for MutableLockRef<'a, A> {
 }
 
 
-pub struct Mutable<A>(Arc<RwLock<MutableState<A>>>);
+pub struct ReadOnlyMutable<A>(Arc<RwLock<MutableState<A>>>);
 
-impl<A> Mutable<A> {
-    pub fn new(value: A) -> Self {
-        Mutable(Arc::new(RwLock::new(MutableState {
-            value,
-            senders: 1,
-            receivers: vec![],
-        })))
-    }
-
-    pub fn replace(&self, value: A) -> A {
-        let mut state = self.0.write().unwrap();
-
-        let value = std::mem::replace(&mut state.value, value);
-
-        state.notify(true);
-
-        value
-    }
-
-    pub fn replace_with<F>(&self, f: F) -> A where F: FnOnce(&mut A) -> A {
-        let mut state = self.0.write().unwrap();
-
-        let new_value = f(&mut state.value);
-        let value = std::mem::replace(&mut state.value, new_value);
-
-        state.notify(true);
-
-        value
-    }
-
-    pub fn swap(&self, other: &Mutable<A>) {
-        // TODO can this dead lock ?
-        let mut state1 = self.0.write().unwrap();
-        let mut state2 = other.0.write().unwrap();
-
-        std::mem::swap(&mut state1.value, &mut state2.value);
-
-        state1.notify(true);
-        state2.notify(true);
-    }
-
-    pub fn set(&self, value: A) {
-        let mut state = self.0.write().unwrap();
-
-        state.value = value;
-
-        state.notify(true);
-    }
-
-    pub fn set_if<F>(&self, value: A, f: F) where F: FnOnce(&A, &A) -> bool {
-        let mut state = self.0.write().unwrap();
-
-        if f(&state.value, &value) {
-            state.value = value;
-            state.notify(true);
-        }
-    }
-
+impl<A> ReadOnlyMutable<A> {
     // TODO return Result ?
+    #[inline]
     pub fn lock_ref(&self) -> MutableLockRef<A> {
         MutableLockRef {
             lock: self.0.read().unwrap(),
         }
     }
 
-    // TODO lots of unit tests to verify that it only notifies when the object is mutated
-    // TODO return Result ?
-    pub fn lock_mut(&self) -> MutableLockMut<A> {
-        MutableLockMut {
-            mutated: false,
-            lock: self.0.write().unwrap(),
-        }
-    }
-
+    #[inline]
     pub fn signal_ref<B, F>(&self, f: F) -> MutableSignalRef<A, F> where F: FnMut(&A) -> B {
         MutableSignalRef(MutableSignalState::new(&self.0), f)
     }
 }
 
-impl<A: PartialEq> Mutable<A> {
-    #[inline]
-    pub fn set_neq(&self, value: A) {
-        self.set_if(value, PartialEq::ne);
-    }
-}
-
-impl<A: Copy> Mutable<A> {
+impl<A: Copy> ReadOnlyMutable<A> {
     #[inline]
     pub fn get(&self) -> A {
         self.0.read().unwrap().value
@@ -238,7 +170,7 @@ impl<A: Copy> Mutable<A> {
     }
 }
 
-impl<A: Clone> Mutable<A> {
+impl<A: Clone> ReadOnlyMutable<A> {
     #[inline]
     pub fn get_cloned(&self) -> A {
         self.0.read().unwrap().value.clone()
@@ -250,9 +182,125 @@ impl<A: Clone> Mutable<A> {
     }
 }
 
-impl<A> fmt::Debug for Mutable<A> where A: fmt::Debug {
+impl<A> Clone for ReadOnlyMutable<A> {
+    #[inline]
+    fn clone(&self) -> Self {
+        ReadOnlyMutable(self.0.clone())
+    }
+}
+
+impl<A> fmt::Debug for ReadOnlyMutable<A> where A: fmt::Debug {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
         let state = self.0.read().unwrap();
+
+        fmt.debug_tuple("ReadOnlyMutable")
+            .field(&state.value)
+            .finish()
+    }
+}
+
+
+pub struct Mutable<A>(ReadOnlyMutable<A>);
+
+impl<A> Mutable<A> {
+    // TODO should this inline ?
+    pub fn new(value: A) -> Self {
+        Mutable(ReadOnlyMutable(Arc::new(RwLock::new(MutableState {
+            value,
+            senders: 1,
+            receivers: vec![],
+        }))))
+    }
+
+    #[inline]
+    fn state(&self) -> &Arc<RwLock<MutableState<A>>> {
+        &(self.0).0
+    }
+
+    #[inline]
+    pub fn read_only(&self) -> ReadOnlyMutable<A> {
+        self.0.clone()
+    }
+
+    pub fn replace(&self, value: A) -> A {
+        let mut state = self.state().write().unwrap();
+
+        let value = std::mem::replace(&mut state.value, value);
+
+        state.notify(true);
+
+        value
+    }
+
+    pub fn replace_with<F>(&self, f: F) -> A where F: FnOnce(&mut A) -> A {
+        let mut state = self.state().write().unwrap();
+
+        let new_value = f(&mut state.value);
+        let value = std::mem::replace(&mut state.value, new_value);
+
+        state.notify(true);
+
+        value
+    }
+
+    pub fn swap(&self, other: &Mutable<A>) {
+        // TODO can this dead lock ?
+        let mut state1 = self.state().write().unwrap();
+        let mut state2 = other.state().write().unwrap();
+
+        std::mem::swap(&mut state1.value, &mut state2.value);
+
+        state1.notify(true);
+        state2.notify(true);
+    }
+
+    pub fn set(&self, value: A) {
+        let mut state = self.state().write().unwrap();
+
+        state.value = value;
+
+        state.notify(true);
+    }
+
+    pub fn set_if<F>(&self, value: A, f: F) where F: FnOnce(&A, &A) -> bool {
+        let mut state = self.state().write().unwrap();
+
+        if f(&state.value, &value) {
+            state.value = value;
+            state.notify(true);
+        }
+    }
+
+    // TODO lots of unit tests to verify that it only notifies when the object is mutated
+    // TODO return Result ?
+    // TODO should this inline ?
+    pub fn lock_mut(&self) -> MutableLockMut<A> {
+        MutableLockMut {
+            mutated: false,
+            lock: self.state().write().unwrap(),
+        }
+    }
+}
+
+impl<A> ::std::ops::Deref for Mutable<A> {
+    type Target = ReadOnlyMutable<A>;
+
+    #[inline]
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+
+impl<A: PartialEq> Mutable<A> {
+    #[inline]
+    pub fn set_neq(&self, value: A) {
+        self.set_if(value, PartialEq::ne);
+    }
+}
+
+impl<A> fmt::Debug for Mutable<A> where A: fmt::Debug {
+    fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+        let state = self.state().read().unwrap();
 
         fmt.debug_tuple("Mutable")
             .field(&state.value)
@@ -263,7 +311,7 @@ impl<A> fmt::Debug for Mutable<A> where A: fmt::Debug {
 impl<T> Serialize for Mutable<T> where T: Serialize {
     #[inline]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-        self.0.read().unwrap().value.serialize(serializer)
+        self.state().read().unwrap().value.serialize(serializer)
     }
 }
 
@@ -285,7 +333,7 @@ impl<T: Default> Default for Mutable<T> {
 impl<A> Clone for Mutable<A> {
     #[inline]
     fn clone(&self) -> Self {
-        self.0.write().unwrap().senders += 1;
+        self.state().write().unwrap().senders += 1;
         Mutable(self.0.clone())
     }
 }
@@ -293,12 +341,13 @@ impl<A> Clone for Mutable<A> {
 impl<A> Drop for Mutable<A> {
     #[inline]
     fn drop(&mut self) {
-        let mut state = self.0.write().unwrap();
+        let mut state = self.state().write().unwrap();
 
         state.senders -= 1;
 
         if state.senders == 0 && state.receivers.len() > 0 {
             state.notify(false);
+            // TODO is this necessary ?
             state.receivers = vec![];
         }
     }
