@@ -10,7 +10,7 @@ use signal_vec::{VecDiff, SignalVec};
 use pin_utils::{unsafe_pinned, unsafe_unpinned};
 
 
-// TODO impl for AssertUnwindSafe and Pin ?
+// TODO impl for AssertUnwindSafe ?
 pub trait Signal {
     type Item;
 
@@ -19,7 +19,7 @@ pub trait Signal {
 
 
 // Copied from Future in the Rust stdlib
-impl<'a, A: ?Sized + Signal + Unpin> Signal for &'a mut A {
+impl<'a, A> Signal for &'a mut A where A: ?Sized + Signal + Unpin {
     type Item = A::Item;
 
     #[inline]
@@ -29,12 +29,24 @@ impl<'a, A: ?Sized + Signal + Unpin> Signal for &'a mut A {
 }
 
 // Copied from Future in the Rust stdlib
-impl<A: ?Sized + Signal + Unpin> Signal for Box<A> {
+impl<A> Signal for Box<A> where A: ?Sized + Signal + Unpin {
     type Item = A::Item;
 
     #[inline]
     fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
         A::poll_change(Pin::new(&mut *self), waker)
+    }
+}
+
+// Copied from Future in the Rust stdlib
+impl<A> Signal for Pin<A>
+    where A: ::std::ops::DerefMut,
+          A::Target: Signal {
+    type Item = <<A as ::std::ops::Deref>::Target as Signal>::Item;
+
+    #[inline]
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        Pin::get_mut(self).as_mut().poll_change(waker)
     }
 }
 
@@ -470,7 +482,7 @@ impl<A> Signal for FromFuture<A> where A: Future {
             },
 
             Some(Poll::Pending) => {
-                let first = self.first();
+                let first = FromFuture::first(&mut self);
 
                 if *first {
                     *first = false;
@@ -518,7 +530,7 @@ impl<A> Signal for FromStream<A> where A: Stream {
             },
 
             Poll::Pending => {
-                let first = self.first();
+                let first = FromStream::first(&mut self);
 
                 if *first {
                     *first = false;
@@ -810,7 +822,7 @@ impl<A, B, C> Signal for MapFuture<A, B, C>
             None => {},
             Some(Poll::Ready(value)) => {
                 Pin::set(self.future(), None);
-                *self.first() = false;
+                *MapFuture::first(&mut self) = false;
                 return Poll::Ready(Some(Some(value)));
             },
             Some(Poll::Pending) => {
@@ -818,7 +830,7 @@ impl<A, B, C> Signal for MapFuture<A, B, C>
             },
         }
 
-        let first = self.first();
+        let first = MapFuture::first(&mut self);
 
         if *first {
             *first = false;
@@ -1035,12 +1047,12 @@ impl<A, B, C> Signal for FilterMap<A, B>
             return match self.signal().poll_change(waker) {
                 Poll::Ready(Some(value)) => match self.callback()(value) {
                     Some(value) => {
-                        *self.first() = false;
+                        *FilterMap::first(&mut self) = false;
                         Poll::Ready(Some(Some(value)))
                     },
 
                     None => {
-                        let first = self.first();
+                        let first = FilterMap::first(&mut self);
 
                         if *first {
                             *first = false;

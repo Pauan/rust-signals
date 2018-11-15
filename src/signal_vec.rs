@@ -73,7 +73,7 @@ impl<A> VecDiff<A> {
 }
 
 
-// TODO impl for AssertUnwindSafe and Pin ?
+// TODO impl for AssertUnwindSafe ?
 pub trait SignalVec {
     type Item;
 
@@ -82,7 +82,7 @@ pub trait SignalVec {
 
 
 // Copied from Future in the Rust stdlib
-impl<'a, A: ?Sized + SignalVec + Unpin> SignalVec for &'a mut A {
+impl<'a, A> SignalVec for &'a mut A where A: ?Sized + SignalVec + Unpin {
     type Item = A::Item;
 
     #[inline]
@@ -92,12 +92,24 @@ impl<'a, A: ?Sized + SignalVec + Unpin> SignalVec for &'a mut A {
 }
 
 // Copied from Future in the Rust stdlib
-impl<A: ?Sized + SignalVec + Unpin> SignalVec for Box<A> {
+impl<A> SignalVec for Box<A> where A: ?Sized + SignalVec + Unpin {
     type Item = A::Item;
 
     #[inline]
     fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
         A::poll_vec_change(Pin::new(&mut *self), waker)
+    }
+}
+
+// Copied from Future in the Rust stdlib
+impl<A> SignalVec for Pin<A>
+    where A: ::std::ops::DerefMut,
+          A::Target: SignalVec {
+    type Item = <<A as ::std::ops::Deref>::Target as SignalVec>::Item;
+
+    #[inline]
+    fn poll_vec_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
+        Pin::get_mut(self).as_mut().poll_vec_change(waker)
     }
 }
 
@@ -1175,11 +1187,6 @@ impl<A, B> Filter<A, B> {
 
     fn find_index(&self, index: usize) -> usize {
         self.indexes[0..index].into_iter().filter(|x| **x).count()
-    }
-
-    #[cfg(test)]
-    fn len(&self) -> usize {
-        self.indexes.iter().filter(|x| **x).count()
     }
 }
 
@@ -2323,182 +2330,3 @@ mod mutable_vec {
 }
 
 pub use self::mutable_vec::*;
-
-
-#[cfg(test)]
-mod tests {
-    use futures_core::{Future, Poll};
-    use futures_executor::block_on;
-    use std::pin::Pin;
-    use super::*;
-    use super::mutable_vec::MutableVec;
-
-
-    #[must_use = "SignalVecs do nothing unless polled"]
-    struct Tester<A> {
-        changes: Vec<Poll<VecDiff<A>>>,
-    }
-
-    impl<A> Tester<A> {
-        #[inline]
-        fn new(changes: Vec<Poll<VecDiff<A>>>) -> Self {
-            Self { changes }
-        }
-    }
-
-    impl<A> Unpin for Tester<A> {}
-
-    impl<A> SignalVec for Tester<A> {
-        type Item = A;
-
-        #[inline]
-        fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
-            if self.changes.len() > 0 {
-                match self.changes.remove(0) {
-                    Poll::Pending => {
-                        waker.wake();
-                        Poll::Pending
-                    },
-                    Poll::Ready(change) => Poll::Ready(Some(change)),
-                }
-
-            } else {
-                Poll::Ready(None)
-            }
-        }
-    }
-
-
-    #[must_use = "Futures do nothing unless polled"]
-    struct TesterFuture<A, B> {
-        signal: A,
-        callback: B,
-    }
-
-    impl<A, B> TesterFuture<A, B> where A: SignalVec, B: FnMut(&A, VecDiff<A::Item>) {
-        unsafe_pinned!(signal: A);
-
-        #[inline]
-        fn new(signal: A, callback: B) -> Self {
-            Self { signal, callback }
-        }
-    }
-
-    impl<A, B> Unpin for TesterFuture<A, B> where A: Unpin {}
-
-    impl<A, B> Future for TesterFuture<A, B>
-        where A: SignalVec,
-              B: FnMut(&A, VecDiff<A::Item>) {
-
-        type Output = ();
-
-        #[inline]
-        fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
-            loop {
-                return match self.signal().poll_vec_change(waker) {
-                    Poll::Ready(Some(change)) => {
-                        // TODO gross
-                        let this = unsafe { &mut Pin::get_mut_unchecked(Pin::as_mut(&mut self)) };
-                        let signal = &this.signal;
-                        (this.callback)(signal, change);
-                        continue;
-                    },
-                    Poll::Ready(None) => Poll::Ready(()),
-                    Poll::Pending => Poll::Pending,
-                }
-            }
-        }
-    }
-
-    fn run<A, B, C>(signal: A, mut callback: C) -> Vec<B> where A: SignalVec, C: FnMut(&A, VecDiff<A::Item>) -> B {
-        let mut changes = vec![];
-
-        block_on(TesterFuture::new(signal, |signal, change| {
-            changes.push(callback(signal, change));
-        }));
-
-        changes
-    }
-
-
-    #[test]
-    fn send_sync() {
-        let _: Box<Send + Sync> = Box::new(MutableVec::<()>::new());
-        let _: Box<Send + Sync> = Box::new(MutableVec::<()>::new().signal_vec());
-        let _: Box<Send + Sync> = Box::new(MutableVec::<()>::new().signal_vec_cloned());
-
-        let _: Box<Send + Sync> = Box::new(MutableVec::<()>::new_with_values(vec![]));
-        let _: Box<Send + Sync> = Box::new(MutableVec::<()>::new_with_values(vec![]).signal_vec());
-        let _: Box<Send + Sync> = Box::new(MutableVec::<()>::new_with_values(vec![]).signal_vec_cloned());
-    }
-
-    #[test]
-    fn filter() {
-        #[derive(Debug, PartialEq, Eq)]
-        struct Change {
-            length: usize,
-            indexes: Vec<bool>,
-            change: VecDiff<u32>,
-        }
-
-        let input = Tester::new(vec![
-            Poll::Ready(VecDiff::Replace { values: vec![0, 1, 2, 3, 4, 5] }),
-            Poll::Pending,
-            Poll::Ready(VecDiff::InsertAt { index: 0, value: 6 }),
-            Poll::Ready(VecDiff::InsertAt { index: 2, value: 7 }),
-            Poll::Pending,
-            Poll::Pending,
-            Poll::Pending,
-            Poll::Ready(VecDiff::InsertAt { index: 5, value: 8 }),
-            Poll::Ready(VecDiff::InsertAt { index: 7, value: 9 }),
-            Poll::Ready(VecDiff::InsertAt { index: 9, value: 10 }),
-            Poll::Pending,
-            Poll::Ready(VecDiff::InsertAt { index: 11, value: 11 }),
-            Poll::Pending,
-            Poll::Ready(VecDiff::InsertAt { index: 0, value: 0 }),
-            Poll::Pending,
-            Poll::Pending,
-            Poll::Ready(VecDiff::InsertAt { index: 1, value: 0 }),
-            Poll::Ready(VecDiff::InsertAt { index: 5, value: 0 }),
-            Poll::Pending,
-            Poll::Ready(VecDiff::InsertAt { index: 5, value: 12 }),
-            Poll::Pending,
-            Poll::Ready(VecDiff::RemoveAt { index: 0 }),
-            Poll::Ready(VecDiff::RemoveAt { index: 0 }),
-            Poll::Pending,
-            Poll::Ready(VecDiff::RemoveAt { index: 0 }),
-            Poll::Ready(VecDiff::RemoveAt { index: 1 }),
-            Poll::Pending,
-            Poll::Ready(VecDiff::RemoveAt { index: 0 }),
-            Poll::Pending,
-            Poll::Ready(VecDiff::RemoveAt { index: 0 }),
-        ]);
-
-        let output = input.filter(|&x| x == 3 || x == 4 || x > 5);
-
-        assert_eq!(Filter::len(&output), 0);
-        assert_eq!(output.indexes, vec![]);
-
-        let changes = run(output, |output, change| {
-            Change {
-                change: change,
-                length: Filter::len(&output),
-                indexes: output.indexes.clone(),
-            }
-        });
-
-        assert_eq!(changes, vec![
-            Change { length: 2, indexes: vec![false, false, false, true, true, false], change: VecDiff::Replace { values: vec![3, 4] } },
-            Change { length: 3, indexes: vec![true, false, false, false, true, true, false], change: VecDiff::InsertAt { index: 0, value: 6 } },
-            Change { length: 4, indexes: vec![true, false, true, false, false, true, true, false], change: VecDiff::InsertAt { index: 1, value: 7 } },
-            Change { length: 5, indexes: vec![true, false, true, false, false, true, true, true, false], change: VecDiff::InsertAt { index: 2, value: 8 } },
-            Change { length: 6, indexes: vec![true, false, true, false, false, true, true, true, true, false], change: VecDiff::InsertAt { index: 4, value: 9 } },
-            Change { length: 7, indexes: vec![true, false, true, false, false, true, true, true, true, true, false], change: VecDiff::InsertAt { index: 6, value: 10 } },
-            Change { length: 8, indexes: vec![true, false, true, false, false, true, true, true, true, true, false, true], change: VecDiff::InsertAt { index: 7, value: 11 } },
-            Change { length: 9, indexes: vec![false, false, true, false, true, true, false, false, false, true, true, true, true, true, false, true], change: VecDiff::InsertAt { index: 2, value: 12 } },
-            Change { length: 8, indexes: vec![false, true, true, false, false, false, true, true, true, true, true, false, true], change: VecDiff::RemoveAt { index: 0 } },
-            Change { length: 7, indexes: vec![false, true, false, false, false, true, true, true, true, true, false, true], change: VecDiff::RemoveAt { index: 0 } },
-            Change { length: 6, indexes: vec![false, false, false, true, true, true, true, true, false, true], change: VecDiff::RemoveAt { index: 0 } },
-        ]);
-    }
-}

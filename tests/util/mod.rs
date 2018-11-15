@@ -5,6 +5,7 @@ use futures_core::Poll;
 use futures_core::task::{LocalWaker, Wake, local_waker_from_nonlocal};
 use futures_util::future::poll_fn;
 use futures_executor::block_on;
+use pin_utils::pin_mut;
 use std::sync::Arc;
 use std::pin::Pin;
 
@@ -83,15 +84,18 @@ pub fn with_noop_waker<U, F: FnOnce(&LocalWaker) -> U>(f: F) -> U {
 
 
 #[allow(dead_code)]
-pub fn get_all_polls<A, B, F>(mut signal: A, mut initial: B, mut f: F) -> Vec<Poll<Option<A::Item>>> where A: Signal, F: FnMut(&B, &LocalWaker) -> B {
+pub fn get_all_polls<A, B, F>(signal: A, mut initial: B, mut f: F) -> Vec<Poll<Option<A::Item>>> where A: Signal, F: FnMut(&B, &LocalWaker) -> B {
     let mut output = vec![];
+
+    // TODO is this correct ?
+    pin_mut!(signal);
 
     block_on(poll_fn(|waker| {
         loop {
             initial = f(&initial, waker);
 
-            // TODO is this safe ?
-            let x = unsafe { Pin::new_unchecked(&mut signal) }.poll_change(waker);
+            // TODO is this correct ?
+            let x = Pin::as_mut(&mut signal).poll_change(waker);
 
             let x: Poll<()> = match x {
                 Poll::Ready(Some(_)) => {
@@ -113,6 +117,39 @@ pub fn get_all_polls<A, B, F>(mut signal: A, mut initial: B, mut f: F) -> Vec<Po
     }));
 
     output
+}
+
+
+#[allow(dead_code)]
+pub fn map_poll_vec<A, B, C>(signal: A, mut callback: C) -> Vec<B> where A: SignalVec, C: FnMut(&A, Poll<Option<VecDiff<A::Item>>>) -> B {
+    let mut changes = vec![];
+
+    // TODO is this correct ?
+    pin_mut!(signal);
+
+    block_on(poll_fn(|waker| {
+        loop {
+            // TODO is this correct ?
+            let x = Pin::as_mut(&mut signal).poll_vec_change(waker);
+
+            return match x {
+                Poll::Ready(Some(_)) => {
+                    changes.push(callback(&signal, x));
+                    continue;
+                },
+                Poll::Ready(None) => {
+                    changes.push(callback(&signal, x));
+                    Poll::Ready(())
+                },
+                Poll::Pending => {
+                    changes.push(callback(&signal, x));
+                    Poll::Pending
+                },
+            };
+        }
+    }));
+
+    changes
 }
 
 
