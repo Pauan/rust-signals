@@ -1,3 +1,5 @@
+use std::pin::Unpin;
+use futures_signals::signal_vec::{VecDiff, SignalVec};
 use futures_signals::signal::Signal;
 use futures_core::Poll;
 use futures_core::task::{LocalWaker, Wake, local_waker_from_nonlocal};
@@ -111,4 +113,67 @@ pub fn get_all_polls<A, B, F>(mut signal: A, mut initial: B, mut f: F) -> Vec<Po
     }));
 
     output
+}
+
+
+#[allow(dead_code)]
+pub fn assert_signal_eq<A, S>(signal: S, expected: Vec<Poll<Option<A>>>)
+    where A: std::fmt::Debug + PartialEq,
+          S: Signal<Item = A> {
+
+    assert_eq!(
+        expected,
+        // TODO a little gross
+        get_all_polls(signal, (), |_, _| {})
+    );
+}
+
+
+#[allow(dead_code)]
+#[must_use = "Source does nothing unless polled"]
+pub struct Source<A> {
+    changes: Vec<Poll<A>>,
+}
+
+impl<A> Unpin for Source<A> {}
+
+impl<A> Source<A> {
+    #[allow(dead_code)]
+    #[inline]
+    pub fn new(changes: Vec<Poll<A>>) -> Self {
+        Self { changes }
+    }
+
+    fn poll(&mut self, waker: &LocalWaker) -> Poll<Option<A>> {
+        if self.changes.len() > 0 {
+            match self.changes.remove(0) {
+                Poll::Pending => {
+                    waker.wake();
+                    Poll::Pending
+                },
+                Poll::Ready(change) => Poll::Ready(Some(change)),
+            }
+
+        } else {
+            Poll::Ready(None)
+        }
+    }
+}
+
+impl<A> Signal for Source<A> {
+    type Item = A;
+
+    #[inline]
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        self.poll(waker)
+    }
+}
+
+impl<A> SignalVec for Source<VecDiff<A>> {
+    type Item = A;
+
+    #[inline]
+    fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
+        self.poll(waker)
+    }
 }

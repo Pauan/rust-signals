@@ -1,3 +1,4 @@
+use std::iter::Sum;
 use std::collections::VecDeque;
 use std::pin::{Pin, Unpin};
 use std::cmp::Ordering;
@@ -225,6 +226,17 @@ pub trait SignalVecExt: SignalVec {
             signals: vec![],
             pending: VecDeque::new(),
             callback,
+        }
+    }
+
+    #[inline]
+    fn sum(self) -> SumSignal<Self>
+        where Self::Item: for<'a> Sum<&'a Self::Item>,
+              Self: Sized {
+        SumSignal {
+            signal: Some(self),
+            first: true,
+            values: vec![],
         }
     }
 
@@ -1279,6 +1291,101 @@ impl<A, F> SignalVec for Filter<A, F>
                     },
                 },
             }
+        }
+    }
+}
+
+
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct SumSignal<A> where A: SignalVec {
+    signal: Option<A>,
+    first: bool,
+    values: Vec<A::Item>,
+}
+
+impl<A> SumSignal<A> where A: SignalVec {
+    unsafe_pinned!(signal: Option<A>);
+    unsafe_unpinned!(first: bool);
+    unsafe_unpinned!(values: Vec<A::Item>);
+}
+
+impl<A> Unpin for SumSignal<A> where A: Unpin + SignalVec {}
+
+impl<A> Signal for SumSignal<A>
+    where A: SignalVec,
+          A::Item: for<'a> Sum<&'a A::Item> {
+    type Item = A::Item;
+
+    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        let mut changed = false;
+
+        let done = loop {
+            break match self.signal().as_pin_mut().map(|signal| signal.poll_vec_change(waker)) {
+                None => {
+                    true
+                },
+                Some(Poll::Ready(None)) => {
+                    Pin::set(self.signal(), None);
+                    true
+                },
+                Some(Poll::Ready(Some(change))) => {
+                    match change {
+                        VecDiff::Replace { values } => {
+                            *self.values() = values;
+                        },
+
+                        VecDiff::InsertAt { index, value } => {
+                            self.values().insert(index, value);
+                        },
+
+                        VecDiff::Push { value } => {
+                            self.values().push(value);
+                        },
+
+                        VecDiff::UpdateAt { index, value } => {
+                            self.values()[index] = value;
+                        },
+
+                        VecDiff::Move { old_index, new_index } => {
+                            let value = self.values().remove(old_index);
+                            self.values().insert(new_index, value);
+                            // Moving shouldn't recalculate the sum
+                            continue;
+                        },
+
+                        VecDiff::RemoveAt { index } => {
+                            self.values().remove(index);
+                        },
+
+                        VecDiff::Pop {} => {
+                            self.values().pop().unwrap();
+                        },
+
+                        VecDiff::Clear {} => {
+                            self.values().clear();
+                        },
+                    }
+
+                    changed = true;
+                    continue;
+                },
+                Some(Poll::Pending) => {
+                    false
+                },
+            };
+        };
+
+        if changed || *self.first() {
+            *self.first() = false;
+
+            Poll::Ready(Some(Sum::sum(self.values().iter())))
+
+        } else if done {
+            Poll::Ready(None)
+
+        } else {
+            Poll::Pending
         }
     }
 }
