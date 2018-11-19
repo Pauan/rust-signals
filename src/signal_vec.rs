@@ -1679,9 +1679,7 @@ impl<S, A, F> DelayRemove<S, A, F>
         }
     }
 
-    fn should_remove(self: &mut Pin<&mut Self>, waker: &LocalWaker, index: usize) -> bool {
-        let state = &mut self.futures()[index];
-
+    fn should_remove(state: &mut DelayRemoveState<A>, waker: &LocalWaker) -> bool {
         assert!(!state.is_removing);
 
         if state.future.as_mut().poll(waker).is_ready() {
@@ -1714,6 +1712,23 @@ impl<S, A, F> DelayRemove<S, A, F>
     fn find_last_index(&self) -> Option<usize> {
         self.futures.iter().rposition(|state| !state.is_removing)
     }
+
+    fn remove_existing_futures(self: &mut Pin<&mut Self>, pending: &mut PendingBuilder<VecDiff<S::Item>>, waker: &LocalWaker) {
+        let mut indexes = vec![];
+
+        for (index, future) in self.futures().iter_mut().enumerate() {
+            if !future.is_removing {
+                if Self::should_remove(future, waker) {
+                    indexes.push(index);
+                }
+            }
+        }
+
+        // This uses rev so that way it will return VecDiff::Pop in more situations
+        for index in indexes.into_iter().rev() {
+            pending.push(self.remove_index(index));
+        }
+    }
 }
 
 impl<A, B, F> Unpin for DelayRemove<A, B, F> where A: Unpin + SignalVec {}
@@ -1741,24 +1756,37 @@ impl<S, A, F> SignalVec for DelayRemove<S, A, F>
                     true
                 },
                 Some(Poll::Ready(Some(change))) => {
-                    pending.push(match change {
+                    match change {
                         VecDiff::Replace { values } => {
-                            // TODO handle old futures
-                            *self.futures() = values.iter().map(|value| DelayRemoveState::new(self.callback()(value))).collect();
-                            VecDiff::Replace { values }
+                            // TODO what if it has futures but the futures are all done ?
+                            if self.futures().len() == 0 {
+                                *self.futures() = values.iter().map(|value| DelayRemoveState::new(self.callback()(value))).collect();
+                                pending.push(VecDiff::Replace { values });
+
+                            // TODO resize the capacity of `self.futures` somehow ?
+                            } else {
+                                self.remove_existing_futures(&mut pending, waker);
+
+                                // TODO can this be made more efficient (e.g. using extend) ?
+                                for value in values {
+                                    let state = DelayRemoveState::new(self.callback()(&value));
+                                    self.futures().push(state);
+                                    pending.push(VecDiff::Push { value });
+                                }
+                            }
                         },
 
                         VecDiff::InsertAt { index, value } => {
                             let index = self.find_index(index).unwrap_or_else(|| self.futures.len());
                             let state = DelayRemoveState::new(self.callback()(&value));
                             self.futures().insert(index, state);
-                            VecDiff::InsertAt { index, value }
+                            pending.push(VecDiff::InsertAt { index, value });
                         },
 
                         VecDiff::Push { value } => {
                             let state = DelayRemoveState::new(self.callback()(&value));
                             self.futures().push(state);
-                            VecDiff::Push { value }
+                            pending.push(VecDiff::Push { value });
                         },
 
                         VecDiff::UpdateAt { index, value } => {
@@ -1766,7 +1794,7 @@ impl<S, A, F> SignalVec for DelayRemove<S, A, F>
                             let index = self.find_index(index).expect("Could not find value");
                             let state = DelayRemoveState::new(self.callback()(&value));
                             self.futures()[index] = state;
-                            VecDiff::UpdateAt { index, value }
+                            pending.push(VecDiff::UpdateAt { index, value });
                         },
 
                         // TODO test this
@@ -1780,37 +1808,29 @@ impl<S, A, F> SignalVec for DelayRemove<S, A, F>
 
                             self.futures().insert(new_index, state);
 
-                            VecDiff::Move { old_index, new_index }
+                            pending.push(VecDiff::Move { old_index, new_index });
                         },
 
                         VecDiff::RemoveAt { index } => {
                             let index = self.find_index(index).expect("Could not find value");
 
-                            if self.should_remove(waker, index) {
-                                self.remove_index(index)
-
-                            } else {
-                                continue;
+                            if Self::should_remove(&mut self.futures()[index], waker) {
+                                pending.push(self.remove_index(index));
                             }
                         },
 
                         VecDiff::Pop {} => {
                             let index = self.find_last_index().expect("Cannot pop from empty vec");
 
-                            if self.should_remove(waker, index) {
-                                self.remove_index(index)
-
-                            } else {
-                                continue;
+                            if Self::should_remove(&mut self.futures()[index], waker) {
+                                pending.push(self.remove_index(index));
                             }
                         },
 
-                        // TODO maybe it should play remove animation for this ?
                         VecDiff::Clear {} => {
-                            self.futures().clear();
-                            VecDiff::Clear {}
+                            self.remove_existing_futures(&mut pending, waker);
                         },
-                    });
+                    }
 
                     continue;
                 },
