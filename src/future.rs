@@ -1,4 +1,5 @@
-use std::pin::{Pin, Unpin};
+use std::pin::Pin;
+use std::marker::Unpin;
 // TODO use parking_lot ?
 use std::sync::{Arc, Weak, Mutex};
 // TODO use parking_lot ?
@@ -6,7 +7,6 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use futures_core::task::{LocalWaker, Waker};
 use futures_core::Poll;
 use futures_core::future::Future;
-use pin_utils::{unsafe_pinned, unsafe_unpinned};
 use discard::{Discard, DiscardOnDrop};
 
 
@@ -47,11 +47,6 @@ pub struct CancelableFuture<A, B> {
     when_cancelled: Option<B>,
 }
 
-impl<A, B> CancelableFuture<A, B> {
-    unsafe_pinned!(future: Option<A>);
-    unsafe_unpinned!(when_cancelled: Option<B>);
-}
-
 impl<A, B> Unpin for CancelableFuture<A, B> where A: Unpin {}
 
 impl<A, B> Future for CancelableFuture<A, B>
@@ -61,21 +56,26 @@ impl<A, B> Future for CancelableFuture<A, B>
     type Output = A::Output;
 
     // TODO should this inline ?
-    #[inline]
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
+        unsafe_project!(self => {
+            mut state,
+            pin future,
+            mut when_cancelled,
+        });
+
         // TODO is this correct ?
-        if self.state.is_cancelled.load(Ordering::SeqCst) {
+        if state.is_cancelled.load(Ordering::SeqCst) {
             // This is necessary in order to prevent the future from calling `waker.wake()` later
-            Pin::set(self.future(), None);
-            let callback = self.when_cancelled().take().unwrap();
+            Pin::set(future, None);
+            let callback = when_cancelled.take().unwrap();
             // TODO figure out how to call the callback immediately when discard is called, e.g. using two Arc<Mutex<>>
             Poll::Ready(callback())
 
         } else {
-            match self.future().as_pin_mut().unwrap().poll(waker) {
+            match future.as_pin_mut().unwrap().poll(waker) {
                 Poll::Pending => {
                     // TODO is this correct ?
-                    *self.state.waker.lock().unwrap() = Some(waker.clone().into_waker());
+                    *state.waker.lock().unwrap() = Some(waker.clone().into_waker());
                     Poll::Pending
                 },
                 a => a,

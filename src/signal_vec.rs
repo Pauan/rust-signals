@@ -1,12 +1,12 @@
 use std::iter::Sum;
 use std::collections::VecDeque;
-use std::pin::{Pin, Unpin};
+use std::pin::Pin;
+use std::marker::Unpin;
 use std::cmp::Ordering;
 use futures_core::task::LocalWaker;
 use futures_core::{Future, Stream, Poll};
 use futures_util::stream;
 use futures_util::stream::StreamExt;
-use pin_utils::{unsafe_pinned, unsafe_unpinned};
 use signal::{Signal, Mutable, ReadOnlyMutable};
 
 
@@ -103,7 +103,7 @@ impl<A> SignalVec for Box<A> where A: ?Sized + SignalVec + Unpin {
 
 // Copied from Future in the Rust stdlib
 impl<A> SignalVec for Pin<A>
-    where A: ::std::ops::DerefMut,
+    where A: Unpin + ::std::ops::DerefMut,
           A::Target: SignalVec {
     type Item = <<A as ::std::ops::Deref>::Target as SignalVec>::Item;
 
@@ -430,10 +430,6 @@ pub struct ForEach<A, B, C> {
     inner: stream::ForEach<SignalVecStream<A>, B, C>,
 }
 
-impl<A, B, C> ForEach<A, B, C> {
-    unsafe_pinned!(inner: stream::ForEach<SignalVecStream<A>, B, C>);
-}
-
 impl<A, B, C> Unpin for ForEach<A, B, C> where A: Unpin, B: Unpin {}
 
 impl<A, B, C> Future for ForEach<A, B, C>
@@ -443,8 +439,12 @@ impl<A, B, C> Future for ForEach<A, B, C>
     type Output = ();
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
-        self.inner().poll(waker)
+    fn poll(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
+        unsafe_project!(self => {
+            pin inner,
+        });
+
+        inner.poll(waker)
     }
 }
 
@@ -456,11 +456,6 @@ pub struct Map<A, B> {
     callback: B,
 }
 
-impl<A, B> Map<A, B> {
-    unsafe_pinned!(signal: A);
-    unsafe_unpinned!(callback: B);
-}
-
 impl<A, B> Unpin for Map<A, B> where A: Unpin {}
 
 impl<A, B, F> SignalVec for Map<A, F>
@@ -470,8 +465,13 @@ impl<A, B, F> SignalVec for Map<A, F>
 
     // TODO should this inline ?
     #[inline]
-    fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
-        self.signal().poll_vec_change(waker).map(|some| some.map(|change| change.map(|value| self.callback()(value))))
+    fn poll_vec_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
+        unsafe_project!(self => {
+            pin signal,
+            mut callback,
+        });
+
+        signal.poll_vec_change(waker).map(|some| some.map(|change| change.map(|value| callback(value))))
     }
 }
 
@@ -483,18 +483,13 @@ pub struct Enumerate<A> {
     mutables: Vec<Mutable<Option<usize>>>,
 }
 
-impl<A> Enumerate<A> {
-    unsafe_pinned!(signal: A);
-    unsafe_unpinned!(mutables: Vec<Mutable<Option<usize>>>);
-}
-
 impl<A> Unpin for Enumerate<A> where A: Unpin {}
 
 impl<A> SignalVec for Enumerate<A> where A: SignalVec {
     type Item = (ReadOnlyMutable<Option<usize>>, A::Item);
 
     #[inline]
-    fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
+    fn poll_vec_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
         fn increment_indexes(range: &[Mutable<Option<usize>>]) {
             for mutable in range {
                 mutable.replace_with(|value| value.map(|value| value + 1));
@@ -507,12 +502,15 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
             }
         }
 
+        unsafe_project!(self => {
+            pin signal,
+            mut mutables,
+        });
+
         // TODO use map ?
-        match self.signal().poll_vec_change(waker) {
+        match signal.poll_vec_change(waker) {
             Poll::Ready(Some(change)) => Poll::Ready(Some(match change {
                 VecDiff::Replace { values } => {
-                    let mutables = self.mutables();
-
                     for mutable in mutables.drain(..) {
                         // TODO use set_neq ?
                         mutable.set(None);
@@ -531,7 +529,6 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
                 },
 
                 VecDiff::InsertAt { index, value } => {
-                    let mutables = self.mutables();
                     let mutable = Mutable::new(Some(index));
                     let read_only = mutable.read_only();
 
@@ -543,11 +540,10 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
                 },
 
                 VecDiff::UpdateAt { index, value } => {
-                    VecDiff::UpdateAt { index, value: (self.mutables[index].read_only(), value) }
+                    VecDiff::UpdateAt { index, value: (mutables[index].read_only(), value) }
                 },
 
                 VecDiff::Push { value } => {
-                    let mutables = self.mutables();
                     let mutable = Mutable::new(Some(mutables.len()));
                     let read_only = mutable.read_only();
 
@@ -557,8 +553,6 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
                 },
 
                 VecDiff::Move { old_index, new_index } => {
-                    let mutables = self.mutables();
-
                     let mutable = mutables.remove(old_index);
 
                     // TODO figure out a way to avoid this clone ?
@@ -579,8 +573,6 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
                 },
 
                 VecDiff::RemoveAt { index } => {
-                    let mutables = self.mutables();
-
                     let mutable = mutables.remove(index);
 
                     decrement_indexes(&mutables[index..]);
@@ -592,7 +584,7 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
                 },
 
                 VecDiff::Pop {} => {
-                    let mutable = self.mutables().pop().unwrap();
+                    let mutable = mutables.pop().unwrap();
 
                     // TODO use set_neq ?
                     mutable.set(None);
@@ -601,7 +593,7 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
                 },
 
                 VecDiff::Clear {} => {
-                    for mutable in self.mutables().drain(..) {
+                    for mutable in mutables.drain(..) {
                         // TODO use set_neq ?
                         mutable.set(None);
                     }
@@ -659,13 +651,6 @@ pub struct MapSignal<A, B, F> where B: Signal {
     callback: F,
 }
 
-impl<A, B, F> MapSignal<A, B, F> where B: Signal {
-    unsafe_pinned!(signal: Option<A>);
-    unsafe_unpinned!(signals: Vec<Option<Pin<Box<B>>>>);
-    unsafe_unpinned!(pending: VecDeque<VecDiff<B::Item>>);
-    unsafe_unpinned!(callback: F);
-}
-
 impl<A, B, F> Unpin for MapSignal<A, B, F> where A: Unpin, B: Signal {}
 
 impl<A, B, F> SignalVec for MapSignal<A, B, F>
@@ -674,77 +659,83 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
           F: FnMut(A::Item) -> B {
     type Item = B::Item;
 
-    fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
-        if let Some(diff) = self.pending().pop_front() {
+    fn poll_vec_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
+        unsafe_project!(self => {
+            pin signal,
+            mut signals,
+            mut pending,
+            mut callback,
+        });
+
+        if let Some(diff) = pending.pop_front() {
             return Poll::Ready(Some(diff));
         }
 
-        let mut pending = PendingBuilder::new();
+        let mut new_pending = PendingBuilder::new();
 
         let done = loop {
-            break match self.signal().as_pin_mut().map(|signal| signal.poll_vec_change(waker)) {
+            break match signal.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(waker)) {
                 None => {
                     true
                 },
                 Some(Poll::Ready(None)) => {
-                    Pin::set(self.signal(), None);
+                    Pin::set(signal, None);
                     true
                 },
                 Some(Poll::Ready(Some(change))) => {
-                    pending.push(match change {
+                    new_pending.push(match change {
                         VecDiff::Replace { values } => {
-                            *self.signals() = Vec::with_capacity(values.len());
+                            *signals = Vec::with_capacity(values.len());
 
                             VecDiff::Replace {
                                 values: values.into_iter().map(|value| {
-                                    let mut signal = Box::pinned(self.callback()(value));
+                                    let mut signal = Box::pin(callback(value));
                                     let poll = unwrap(signal.as_mut().poll_change(waker));
-                                    self.signals().push(Some(signal));
+                                    signals.push(Some(signal));
                                     poll
                                 }).collect()
                             }
                         },
 
                         VecDiff::InsertAt { index, value } => {
-                            let mut signal = Box::pinned(self.callback()(value));
+                            let mut signal = Box::pin(callback(value));
                             let poll = unwrap(signal.as_mut().poll_change(waker));
-                            self.signals().insert(index, Some(signal));
+                            signals.insert(index, Some(signal));
                             VecDiff::InsertAt { index, value: poll }
                         },
 
                         VecDiff::UpdateAt { index, value } => {
-                            let mut signal = Box::pinned(self.callback()(value));
+                            let mut signal = Box::pin(callback(value));
                             let poll = unwrap(signal.as_mut().poll_change(waker));
-                            self.signals()[index] = Some(signal);
+                            signals[index] = Some(signal);
                             VecDiff::UpdateAt { index, value: poll }
                         },
 
                         VecDiff::Push { value } => {
-                            let mut signal = Box::pinned(self.callback()(value));
+                            let mut signal = Box::pin(callback(value));
                             let poll = unwrap(signal.as_mut().poll_change(waker));
-                            self.signals().push(Some(signal));
+                            signals.push(Some(signal));
                             VecDiff::Push { value: poll }
                         },
 
                         VecDiff::Move { old_index, new_index } => {
-                            let signals = self.signals();
                             let value = signals.remove(old_index);
                             signals.insert(new_index, value);
                             VecDiff::Move { old_index, new_index }
                         },
 
                         VecDiff::RemoveAt { index } => {
-                            self.signals().remove(index);
+                            signals.remove(index);
                             VecDiff::RemoveAt { index }
                         },
 
                         VecDiff::Pop {} => {
-                            self.signals().pop().unwrap();
+                            signals.pop().unwrap();
                             VecDiff::Pop {}
                         },
 
                         VecDiff::Clear {} => {
-                            self.signals().clear();
+                            signals.clear();
                             VecDiff::Clear {}
                         },
                     });
@@ -759,11 +750,11 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
 
         // TODO ensure that this is as efficient as possible
         // TODO make this more efficient (e.g. using a similar strategy as FuturesUnordered)
-        for (index, signal) in self.signals().as_mut_slice().into_iter().enumerate() {
+        for (index, signal) in signals.as_mut_slice().into_iter().enumerate() {
             // TODO use a loop until the value stops changing ?
             match signal.as_mut().map(|s| s.as_mut().poll_change(waker)) {
                 Some(Poll::Ready(Some(value))) => {
-                    pending.push(VecDiff::UpdateAt { index, value });
+                    new_pending.push(VecDiff::UpdateAt { index, value });
                 },
                 Some(Poll::Ready(None)) => {
                     *signal = None;
@@ -775,8 +766,8 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
             }
         }
 
-        if let Some(first) = pending.first {
-            *self.pending() = pending.rest;
+        if let Some(first) = new_pending.first {
+            *pending = new_pending.rest;
             Poll::Ready(Some(first))
 
         } else if done && !has_pending {
@@ -807,13 +798,8 @@ pub struct FilterSignalCloned<A, B, F> where A: SignalVec {
 }
 
 impl<A, B, F> FilterSignalCloned<A, B, F> where A: SignalVec {
-    unsafe_pinned!(signal: Option<A>);
-    unsafe_unpinned!(signals: Vec<FilterSignalClonedState<A::Item, B>>);
-    unsafe_unpinned!(pending: VecDeque<VecDiff<A::Item>>);
-    unsafe_unpinned!(callback: F);
-
-    fn find_index(&self, index: usize) -> usize {
-        self.signals[0..index].into_iter().filter(|x| x.exists).count()
+    fn find_index(signals: &[FilterSignalClonedState<A::Item, B>], index: usize) -> usize {
+        signals[0..index].into_iter().filter(|x| x.exists).count()
     }
 }
 
@@ -826,32 +812,39 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
           F: FnMut(&A::Item) -> B {
     type Item = A::Item;
 
-    fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
-        if let Some(diff) = self.pending().pop_front() {
+    fn poll_vec_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
+        unsafe_project!(self => {
+            pin signal,
+            mut signals,
+            mut pending,
+            mut callback,
+        });
+
+        if let Some(diff) = pending.pop_front() {
             return Poll::Ready(Some(diff));
         }
 
-        let mut pending = PendingBuilder::new();
+        let mut new_pending = PendingBuilder::new();
 
         // TODO maybe it should check the filter signals first, before checking the signalvec ?
         let done = loop {
-            break match self.signal().as_pin_mut().map(|signal| signal.poll_vec_change(waker)) {
+            break match signal.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(waker)) {
                 None => true,
                 Some(Poll::Ready(None)) => {
-                    Pin::set(self.signal(), None);
+                    Pin::set(signal, None);
                     true
                 },
                 Some(Poll::Ready(Some(change))) => {
-                    pending.push(match change {
+                    new_pending.push(match change {
                         VecDiff::Replace { values } => {
-                            *self.signals() = Vec::with_capacity(values.len());
+                            *signals = Vec::with_capacity(values.len());
 
                             VecDiff::Replace {
                                 values: values.into_iter().filter(|value| {
-                                    let mut signal = Box::pinned(self.callback()(value));
+                                    let mut signal = Box::pin(callback(value));
                                     let poll = unwrap(signal.as_mut().poll_change(waker));
 
-                                    self.signals().push(FilterSignalClonedState {
+                                    signals.push(FilterSignalClonedState {
                                         signal: Some(signal),
                                         value: value.clone(),
                                         exists: poll,
@@ -863,17 +856,17 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
                         },
 
                         VecDiff::InsertAt { index, value } => {
-                            let mut signal = Box::pinned(self.callback()(&value));
+                            let mut signal = Box::pin(callback(&value));
                             let poll = unwrap(signal.as_mut().poll_change(waker));
 
-                            self.signals().insert(index, FilterSignalClonedState {
+                            signals.insert(index, FilterSignalClonedState {
                                 signal: Some(signal),
                                 value: value.clone(),
                                 exists: poll,
                             });
 
                             if poll {
-                                VecDiff::InsertAt { index: self.find_index(index), value }
+                                VecDiff::InsertAt { index: Self::find_index(signals, index), value }
 
                             } else {
                                 continue;
@@ -881,11 +874,11 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
                         },
 
                         VecDiff::UpdateAt { index, value } => {
-                            let mut signal = Box::pinned(self.callback()(&value));
+                            let mut signal = Box::pin(callback(&value));
                             let new_poll = unwrap(signal.as_mut().poll_change(waker));
 
                             let old_poll = {
-                                let state = &mut self.signals()[index];
+                                let state = &mut signals[index];
 
                                 let exists = state.exists;
 
@@ -898,15 +891,15 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
 
                             if new_poll {
                                 if old_poll {
-                                    VecDiff::UpdateAt { index: self.find_index(index), value }
+                                    VecDiff::UpdateAt { index: Self::find_index(signals, index), value }
 
                                 } else {
-                                    VecDiff::InsertAt { index: self.find_index(index), value }
+                                    VecDiff::InsertAt { index: Self::find_index(signals, index), value }
                                 }
 
                             } else {
                                 if old_poll {
-                                    VecDiff::RemoveAt { index: self.find_index(index) }
+                                    VecDiff::RemoveAt { index: Self::find_index(signals, index) }
 
                                 } else {
                                     continue;
@@ -915,10 +908,10 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
                         },
 
                         VecDiff::Push { value } => {
-                            let mut signal = Box::pinned(self.callback()(&value));
+                            let mut signal = Box::pin(callback(&value));
                             let poll = unwrap(signal.as_mut().poll_change(waker));
 
-                            self.signals().push(FilterSignalClonedState {
+                            signals.push(FilterSignalClonedState {
                                 signal: Some(signal),
                                 value: value.clone(),
                                 exists: poll,
@@ -934,15 +927,15 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
 
                         // TODO unit tests for this
                         VecDiff::Move { old_index, new_index } => {
-                            let state = self.signals().remove(old_index);
+                            let state = signals.remove(old_index);
                             let exists = state.exists;
 
-                            self.signals().insert(new_index, state);
+                            signals.insert(new_index, state);
 
                             if exists {
                                 VecDiff::Move {
-                                    old_index: self.find_index(old_index),
-                                    new_index: self.find_index(new_index),
+                                    old_index: Self::find_index(signals, old_index),
+                                    new_index: Self::find_index(signals, new_index),
                                 }
 
                             } else {
@@ -951,10 +944,10 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
                         },
 
                         VecDiff::RemoveAt { index } => {
-                            let state = self.signals().remove(index);
+                            let state = signals.remove(index);
 
                             if state.exists {
-                                VecDiff::RemoveAt { index: self.find_index(index) }
+                                VecDiff::RemoveAt { index: Self::find_index(signals, index) }
 
                             } else {
                                 continue;
@@ -962,7 +955,7 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
                         },
 
                         VecDiff::Pop {} => {
-                            let state = self.signals().pop().expect("Cannot pop from empty vec");
+                            let state = signals.pop().expect("Cannot pop from empty vec");
 
                             if state.exists {
                                 VecDiff::Pop {}
@@ -973,7 +966,7 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
                         },
 
                         VecDiff::Clear {} => {
-                            self.signals().clear();
+                            signals.clear();
                             VecDiff::Clear {}
                         },
                     });
@@ -992,7 +985,7 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
         // TODO make this more efficient (e.g. using a similar strategy as FuturesUnordered)
         // TODO replace this with find_map ?
         // TODO use rev so that way it can use VecDiff::Pop ?
-        for state in self.signals().as_mut_slice().into_iter() {
+        for state in signals.as_mut_slice().into_iter() {
             let old = state.exists;
 
             // TODO is this loop a good idea ?
@@ -1017,10 +1010,10 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
                 // TODO test these
                 // TODO use Push and Pop when the index is at the end
                 if state.exists {
-                    pending.push(VecDiff::InsertAt { index: real_index, value: state.value.clone() });
+                    new_pending.push(VecDiff::InsertAt { index: real_index, value: state.value.clone() });
 
                 } else {
-                    pending.push(VecDiff::RemoveAt { index: real_index });
+                    new_pending.push(VecDiff::RemoveAt { index: real_index });
                 }
             }
 
@@ -1029,8 +1022,8 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
             }
         }
 
-        if let Some(first) = pending.first {
-            *self.pending() = pending.rest;
+        if let Some(first) = new_pending.first {
+            *pending = new_pending.rest;
             Poll::Ready(Some(first))
 
         } else if done && !has_pending {
@@ -1051,33 +1044,32 @@ pub struct Len<A> {
     len: usize,
 }
 
-impl<A> Len<A> {
-    unsafe_pinned!(signal: Option<A>);
-    unsafe_unpinned!(first: bool);
-    unsafe_unpinned!(len: usize);
-}
-
 impl<A> Unpin for Len<A> where A: Unpin {}
 
 impl<A> Signal for Len<A> where A: SignalVec {
     type Item = usize;
 
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal,
+            mut first,
+            mut len,
+        });
+
         let mut changed = false;
 
         let done = loop {
-            break match self.signal().as_pin_mut().map(|signal| signal.poll_vec_change(waker)) {
+            break match signal.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(waker)) {
                 None => {
                     true
                 },
                 Some(Poll::Ready(None)) => {
-                    Pin::set(self.signal(), None);
+                    Pin::set(signal, None);
                     true
                 },
                 Some(Poll::Ready(Some(change))) => {
                     match change {
                         VecDiff::Replace { values } => {
-                            let len = self.len();
                             let new_len = values.len();
 
                             if *len != new_len {
@@ -1087,20 +1079,18 @@ impl<A> Signal for Len<A> where A: SignalVec {
                         },
 
                         VecDiff::InsertAt { .. } | VecDiff::Push { .. } => {
-                            *self.len() += 1;
+                            *len += 1;
                             changed = true;
                         },
 
                         VecDiff::UpdateAt { .. } | VecDiff::Move { .. } => {},
 
                         VecDiff::RemoveAt { .. } | VecDiff::Pop {} => {
-                            *self.len() -= 1;
+                            *len -= 1;
                             changed = true;
                         },
 
                         VecDiff::Clear {} => {
-                            let len = self.len();
-
                             if *len != 0 {
                                 *len = 0;
                                 changed = true;
@@ -1116,10 +1106,10 @@ impl<A> Signal for Len<A> where A: SignalVec {
             };
         };
 
-        if changed || *self.first() {
-            *self.first() = false;
+        if changed || *first {
+            *first = false;
             // TODO is this correct ?
-            Poll::Ready(Some(self.len))
+            Poll::Ready(Some(*len))
 
         } else if done {
             Poll::Ready(None)
@@ -1137,18 +1127,18 @@ pub struct SignalVecStream<A> {
     signal: A,
 }
 
-impl<A> SignalVecStream<A> {
-    unsafe_pinned!(signal: A);
-}
-
 impl<A> Unpin for SignalVecStream<A> where A: Unpin {}
 
 impl<A: SignalVec> Stream for SignalVecStream<A> {
     type Item = VecDiff<A::Item>;
 
     #[inline]
-    fn poll_next(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
-        self.signal().poll_vec_change(waker)
+    fn poll_next(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal,
+        });
+
+        signal.poll_vec_change(waker)
     }
 }
 
@@ -1163,12 +1153,8 @@ pub struct Filter<A, B> {
 }
 
 impl<A, B> Filter<A, B> {
-    unsafe_unpinned!(indexes: Vec<bool>);
-    unsafe_pinned!(signal: A);
-    unsafe_unpinned!(callback: B);
-
-    fn find_index(&self, index: usize) -> usize {
-        self.indexes[0..index].into_iter().filter(|x| **x).count()
+    fn find_index(indexes: &[bool], index: usize) -> usize {
+        indexes[0..index].into_iter().filter(|x| **x).count()
     }
 }
 
@@ -1179,49 +1165,55 @@ impl<A, F> SignalVec for Filter<A, F>
           F: FnMut(&A::Item) -> bool {
     type Item = A::Item;
 
-    fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
+    fn poll_vec_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
+        unsafe_project!(self => {
+            mut indexes,
+            pin signal,
+            mut callback,
+        });
+
         loop {
-            return match self.signal().poll_vec_change(waker) {
+            return match signal.as_mut().poll_vec_change(waker) {
                 Poll::Pending => Poll::Pending,
                 Poll::Ready(None) => Poll::Ready(None),
                 Poll::Ready(Some(change)) => match change {
                     VecDiff::Replace { values } => {
-                        *self.indexes() = Vec::with_capacity(values.len());
+                        *indexes = Vec::with_capacity(values.len());
 
                         Poll::Ready(Some(VecDiff::Replace {
                             values: values.into_iter().filter(|value| {
-                                let keep = self.callback()(value);
-                                self.indexes().push(keep);
+                                let keep = callback(value);
+                                indexes.push(keep);
                                 keep
                             }).collect()
                         }))
                     },
 
                     VecDiff::InsertAt { index, value } => {
-                        if self.callback()(&value) {
-                            self.indexes().insert(index, true);
-                            Poll::Ready(Some(VecDiff::InsertAt { index: self.find_index(index), value }))
+                        if callback(&value) {
+                            indexes.insert(index, true);
+                            Poll::Ready(Some(VecDiff::InsertAt { index: Self::find_index(indexes, index), value }))
 
                         } else {
-                            self.indexes().insert(index, false);
+                            indexes.insert(index, false);
                             continue;
                         }
                     },
 
                     VecDiff::UpdateAt { index, value } => {
-                        if self.callback()(&value) {
-                            if self.indexes[index] {
-                                Poll::Ready(Some(VecDiff::UpdateAt { index: self.find_index(index), value }))
+                        if callback(&value) {
+                            if indexes[index] {
+                                Poll::Ready(Some(VecDiff::UpdateAt { index: Self::find_index(indexes, index), value }))
 
                             } else {
-                                self.indexes()[index] = true;
-                                Poll::Ready(Some(VecDiff::InsertAt { index: self.find_index(index), value }))
+                                indexes[index] = true;
+                                Poll::Ready(Some(VecDiff::InsertAt { index: Self::find_index(indexes, index), value }))
                             }
 
                         } else {
-                            if self.indexes[index] {
-                                self.indexes()[index] = false;
-                                Poll::Ready(Some(VecDiff::RemoveAt { index: self.find_index(index) }))
+                            if indexes[index] {
+                                indexes[index] = false;
+                                Poll::Ready(Some(VecDiff::RemoveAt { index: Self::find_index(indexes, index) }))
 
                             } else {
                                 continue;
@@ -1231,23 +1223,23 @@ impl<A, F> SignalVec for Filter<A, F>
 
                     // TODO unit tests for this
                     VecDiff::Move { old_index, new_index } => {
-                        if self.indexes().remove(old_index) {
-                            self.indexes().insert(new_index, true);
+                        if indexes.remove(old_index) {
+                            indexes.insert(new_index, true);
 
                             Poll::Ready(Some(VecDiff::Move {
-                                old_index: self.find_index(old_index),
-                                new_index: self.find_index(new_index),
+                                old_index: Self::find_index(indexes, old_index),
+                                new_index: Self::find_index(indexes, new_index),
                             }))
 
                         } else {
-                            self.indexes().insert(new_index, false);
+                            indexes.insert(new_index, false);
                             continue;
                         }
                     },
 
                     VecDiff::RemoveAt { index } => {
-                        if self.indexes().remove(index) {
-                            Poll::Ready(Some(VecDiff::RemoveAt { index: self.find_index(index) }))
+                        if indexes.remove(index) {
+                            Poll::Ready(Some(VecDiff::RemoveAt { index: Self::find_index(indexes, index) }))
 
                         } else {
                             continue;
@@ -1255,18 +1247,18 @@ impl<A, F> SignalVec for Filter<A, F>
                     },
 
                     VecDiff::Push { value } => {
-                        if self.callback()(&value) {
-                            self.indexes().push(true);
+                        if callback(&value) {
+                            indexes.push(true);
                             Poll::Ready(Some(VecDiff::Push { value }))
 
                         } else {
-                            self.indexes().push(false);
+                            indexes.push(false);
                             continue;
                         }
                     },
 
                     VecDiff::Pop {} => {
-                        if self.indexes().pop().expect("Cannot pop from empty vec") {
+                        if indexes.pop().expect("Cannot pop from empty vec") {
                             Poll::Ready(Some(VecDiff::Pop {}))
 
                         } else {
@@ -1275,7 +1267,7 @@ impl<A, F> SignalVec for Filter<A, F>
                     },
 
                     VecDiff::Clear {} => {
-                        self.indexes().clear();
+                        indexes.clear();
                         Poll::Ready(Some(VecDiff::Clear {}))
                     },
                 },
@@ -1293,12 +1285,6 @@ pub struct SumSignal<A> where A: SignalVec {
     values: Vec<A::Item>,
 }
 
-impl<A> SumSignal<A> where A: SignalVec {
-    unsafe_pinned!(signal: Option<A>);
-    unsafe_unpinned!(first: bool);
-    unsafe_unpinned!(values: Vec<A::Item>);
-}
-
 impl<A> Unpin for SumSignal<A> where A: Unpin + SignalVec {}
 
 impl<A> Signal for SumSignal<A>
@@ -1306,53 +1292,59 @@ impl<A> Signal for SumSignal<A>
           A::Item: for<'a> Sum<&'a A::Item> {
     type Item = A::Item;
 
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal,
+            mut first,
+            mut values,
+        });
+
         let mut changed = false;
 
         let done = loop {
-            break match self.signal().as_pin_mut().map(|signal| signal.poll_vec_change(waker)) {
+            break match signal.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(waker)) {
                 None => {
                     true
                 },
                 Some(Poll::Ready(None)) => {
-                    Pin::set(self.signal(), None);
+                    Pin::set(signal, None);
                     true
                 },
                 Some(Poll::Ready(Some(change))) => {
                     match change {
-                        VecDiff::Replace { values } => {
-                            *self.values() = values;
+                        VecDiff::Replace { values: new_values } => {
+                            *values = new_values;
                         },
 
                         VecDiff::InsertAt { index, value } => {
-                            self.values().insert(index, value);
+                            values.insert(index, value);
                         },
 
                         VecDiff::Push { value } => {
-                            self.values().push(value);
+                            values.push(value);
                         },
 
                         VecDiff::UpdateAt { index, value } => {
-                            self.values()[index] = value;
+                            values[index] = value;
                         },
 
                         VecDiff::Move { old_index, new_index } => {
-                            let value = self.values().remove(old_index);
-                            self.values().insert(new_index, value);
+                            let value = values.remove(old_index);
+                            values.insert(new_index, value);
                             // Moving shouldn't recalculate the sum
                             continue;
                         },
 
                         VecDiff::RemoveAt { index } => {
-                            self.values().remove(index);
+                            values.remove(index);
                         },
 
                         VecDiff::Pop {} => {
-                            self.values().pop().unwrap();
+                            values.pop().unwrap();
                         },
 
                         VecDiff::Clear {} => {
-                            self.values().clear();
+                            values.clear();
                         },
                     }
 
@@ -1365,10 +1357,10 @@ impl<A> Signal for SumSignal<A>
             };
         };
 
-        if changed || *self.first() {
-            *self.first() = false;
+        if changed || *first {
+            *first = false;
 
-            Poll::Ready(Some(Sum::sum(self.values().iter())))
+            Poll::Ready(Some(Sum::sum(values.iter())))
 
         } else if done {
             Poll::Ready(None)
@@ -1394,41 +1386,27 @@ impl<A, F> SortByCloned<A, F>
     where A: SignalVec,
           F: FnMut(&A::Item, &A::Item) -> Ordering {
 
-    unsafe_unpinned!(pending: Option<VecDiff<A::Item>>);
-    unsafe_unpinned!(values: Vec<A::Item>);
-    unsafe_unpinned!(indexes: Vec<usize>);
-    unsafe_pinned!(signal: A);
-    unsafe_unpinned!(compare: F);
-
     // TODO should this inline ?
-    fn binary_search(self: &mut Pin<&mut Self>, index: usize) -> Result<usize, usize> {
-        // This is needed for get_mut_unchecked
-        // It is safe because it never accesses the `signal` field
-        // TODO verify safety
-        unsafe {
-            let this = Pin::get_mut_unchecked(self.as_mut());
-            let compare = &mut this.compare;
-            let values = &this.values;
-            let value = &values[index];
+    fn binary_search(values: &[A::Item], indexes: &[usize], compare: &mut F, index: usize) -> Result<usize, usize> {
+        let value = &values[index];
 
-            // TODO use get_unchecked ?
-            this.indexes.binary_search_by(|i| compare(&values[*i], value).then_with(|| i.cmp(&index)))
-        }
+        // TODO use get_unchecked ?
+        indexes.binary_search_by(|i| compare(&values[*i], value).then_with(|| i.cmp(&index)))
     }
 
-    fn binary_search_insert(self: &mut Pin<&mut Self>, index: usize) -> usize {
-        match self.binary_search(index) {
+    fn binary_search_insert(values: &[A::Item], indexes: &[usize], compare: &mut F, index: usize) -> usize {
+        match Self::binary_search(values, indexes, compare, index) {
             Ok(_) => panic!("Value already exists"),
             Err(new_index) => new_index,
         }
     }
 
-    fn binary_search_remove(self: &mut Pin<&mut Self>, index: usize) -> usize {
-        self.binary_search(index).expect("Could not find value")
+    fn binary_search_remove(values: &[A::Item], indexes: &[usize], compare: &mut F, index: usize) -> usize {
+        Self::binary_search(values, indexes, compare, index).expect("Could not find value")
     }
 
-    fn increment_indexes(self: &mut Pin<&mut Self>, start: usize) {
-        for index in self.indexes() {
+    fn increment_indexes(indexes: &mut Vec<usize>, start: usize) {
+        for index in indexes {
             let i = *index;
 
             if i >= start {
@@ -1437,8 +1415,8 @@ impl<A, F> SortByCloned<A, F>
         }
     }
 
-    fn decrement_indexes(self: &mut Pin<&mut Self>, start: usize) {
-        for index in self.indexes() {
+    fn decrement_indexes(indexes: &mut Vec<usize>, start: usize) {
+        for index in indexes {
             let i = *index;
 
             if i > start {
@@ -1447,16 +1425,16 @@ impl<A, F> SortByCloned<A, F>
         }
     }
 
-    fn insert_at(self: &mut Pin<&mut Self>, sorted_index: usize, index: usize, value: A::Item) -> VecDiff<A::Item> {
-        if sorted_index == self.indexes.len() {
-            self.indexes().push(index);
+    fn insert_at(indexes: &mut Vec<usize>, sorted_index: usize, index: usize, value: A::Item) -> VecDiff<A::Item> {
+        if sorted_index == indexes.len() {
+            indexes.push(index);
 
             VecDiff::Push {
                 value,
             }
 
         } else {
-            self.indexes().insert(sorted_index, index);
+            indexes.insert(sorted_index, index);
 
             VecDiff::InsertAt {
                 index: sorted_index,
@@ -1465,14 +1443,14 @@ impl<A, F> SortByCloned<A, F>
         }
     }
 
-    fn remove_at(self: &mut Pin<&mut Self>, sorted_index: usize) -> Poll<Option<VecDiff<A::Item>>> {
-        if sorted_index == (self.indexes.len() - 1) {
-            self.indexes().pop();
+    fn remove_at(indexes: &mut Vec<usize>, sorted_index: usize) -> Poll<Option<VecDiff<A::Item>>> {
+        if sorted_index == (indexes.len() - 1) {
+            indexes.pop();
 
             Poll::Ready(Some(VecDiff::Pop {}))
 
         } else {
-            self.indexes().remove(sorted_index);
+            indexes.remove(sorted_index);
 
             Poll::Ready(Some(VecDiff::RemoveAt {
                 index: sorted_index,
@@ -1491,28 +1469,36 @@ impl<A, F> SignalVec for SortByCloned<A, F>
     type Item = A::Item;
 
     // TODO figure out a faster implementation of this
-    fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
-        match self.pending().take() {
+    fn poll_vec_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
+        unsafe_project!(self => {
+            mut pending,
+            mut values,
+            mut indexes,
+            pin signal,
+            mut compare,
+        });
+
+        match pending.take() {
             Some(value) => Poll::Ready(Some(value)),
             None => loop {
-                return match self.signal().poll_vec_change(waker) {
+                return match signal.as_mut().poll_vec_change(waker) {
                     Poll::Pending => Poll::Pending,
                     Poll::Ready(None) => Poll::Ready(None),
                     Poll::Ready(Some(change)) => match change {
-                        VecDiff::Replace { mut values } => {
+                        VecDiff::Replace { values: mut new_values } => {
                             // TODO can this be made faster ?
-                            let mut indexes: Vec<usize> = (0..values.len()).collect();
+                            let mut new_indexes: Vec<usize> = (0..new_values.len()).collect();
 
                             // TODO use get_unchecked ?
-                            indexes.sort_unstable_by(|a, b| self.compare()(&values[*a], &values[*b]).then_with(|| a.cmp(b)));
+                            new_indexes.sort_unstable_by(|a, b| compare(&new_values[*a], &new_values[*b]).then_with(|| a.cmp(b)));
 
                             let output = Poll::Ready(Some(VecDiff::Replace {
                                 // TODO use get_unchecked ?
-                                values: indexes.iter().map(|i| values[*i].clone()).collect()
+                                values: new_indexes.iter().map(|i| new_values[*i].clone()).collect()
                             }));
 
-                            *self.values() = values;
-                            *self.indexes() = indexes;
+                            *values = new_values;
+                            *indexes = new_indexes;
 
                             output
                         },
@@ -1520,40 +1506,40 @@ impl<A, F> SignalVec for SortByCloned<A, F>
                         VecDiff::InsertAt { index, value } => {
                             let new_value = value.clone();
 
-                            self.values().insert(index, value);
+                            values.insert(index, value);
 
-                            self.increment_indexes(index);
+                            Self::increment_indexes(indexes, index);
 
-                            let sorted_index = self.binary_search_insert(index);
+                            let sorted_index = Self::binary_search_insert(values, indexes, compare, index);
 
-                            Poll::Ready(Some(self.insert_at(sorted_index, index, new_value)))
+                            Poll::Ready(Some(Self::insert_at(indexes, sorted_index, index, new_value)))
                         },
 
                         VecDiff::Push { value } => {
                             let new_value = value.clone();
 
-                            let index = self.values.len();
+                            let index = values.len();
 
-                            self.values().push(value);
+                            values.push(value);
 
-                            let sorted_index = self.binary_search_insert(index);
+                            let sorted_index = Self::binary_search_insert(values, indexes, compare, index);
 
-                            Poll::Ready(Some(self.insert_at(sorted_index, index, new_value)))
+                            Poll::Ready(Some(Self::insert_at(indexes, sorted_index, index, new_value)))
                         },
 
                         VecDiff::UpdateAt { index, value } => {
-                            let old_index = self.binary_search_remove(index);
+                            let old_index = Self::binary_search_remove(values, indexes, compare, index);
 
-                            let old_output = self.remove_at(old_index);
+                            let old_output = Self::remove_at(indexes, old_index);
 
                             let new_value = value.clone();
 
-                            self.values()[index] = value;
+                            values[index] = value;
 
-                            let new_index = self.binary_search_insert(index);
+                            let new_index = Self::binary_search_insert(values, indexes, compare, index);
 
                             if old_index == new_index {
-                                self.indexes().insert(new_index, index);
+                                indexes.insert(new_index, index);
 
                                 Poll::Ready(Some(VecDiff::UpdateAt {
                                     index: new_index,
@@ -1561,40 +1547,40 @@ impl<A, F> SignalVec for SortByCloned<A, F>
                                 }))
 
                             } else {
-                                let new_output = self.insert_at(new_index, index, new_value);
-                                *self.pending() = Some(new_output);
+                                let new_output = Self::insert_at(indexes, new_index, index, new_value);
+                                *pending = Some(new_output);
 
                                 old_output
                             }
                         },
 
                         VecDiff::RemoveAt { index } => {
-                            let sorted_index = self.binary_search_remove(index);
+                            let sorted_index = Self::binary_search_remove(values, indexes, compare, index);
 
-                            self.values().remove(index);
+                            values.remove(index);
 
-                            self.decrement_indexes(index);
+                            Self::decrement_indexes(indexes, index);
 
-                            self.remove_at(sorted_index)
+                            Self::remove_at(indexes, sorted_index)
                         },
 
                         // TODO can this be made more efficient ?
                         VecDiff::Move { old_index, new_index } => {
-                            let old_sorted_index = self.binary_search_remove(old_index);
+                            let old_sorted_index = Self::binary_search_remove(values, indexes, compare, old_index);
 
-                            let value = self.values().remove(old_index);
+                            let value = values.remove(old_index);
 
-                            self.decrement_indexes(old_index);
+                            Self::decrement_indexes(indexes, old_index);
 
-                            self.indexes().remove(old_sorted_index);
+                            indexes.remove(old_sorted_index);
 
-                            self.values().insert(new_index, value);
+                            values.insert(new_index, value);
 
-                            self.increment_indexes(new_index);
+                            Self::increment_indexes(indexes, new_index);
 
-                            let new_sorted_index = self.binary_search_insert(new_index);
+                            let new_sorted_index = Self::binary_search_insert(values, indexes, compare, new_index);
 
-                            self.indexes().insert(new_sorted_index, new_index);
+                            indexes.insert(new_sorted_index, new_index);
 
                             if old_sorted_index == new_sorted_index {
                                 continue;
@@ -1608,18 +1594,18 @@ impl<A, F> SignalVec for SortByCloned<A, F>
                         },
 
                         VecDiff::Pop {} => {
-                            let index = self.values.len() - 1;
+                            let index = values.len() - 1;
 
-                            let sorted_index = self.binary_search_remove(index);
+                            let sorted_index = Self::binary_search_remove(values, indexes, compare, index);
 
-                            self.values().pop();
+                            values.pop();
 
-                            self.remove_at(sorted_index)
+                            Self::remove_at(indexes, sorted_index)
                         },
 
                         VecDiff::Clear {} => {
-                            self.values().clear();
-                            self.indexes().clear();
+                            values.clear();
+                            indexes.clear();
                             Poll::Ready(Some(VecDiff::Clear {}))
                         },
                     },
@@ -1641,7 +1627,7 @@ impl<A> DelayRemoveState<A> {
     #[inline]
     fn new(future: A) -> Self {
         Self {
-            future: Box::pinned(future),
+            future: Box::pin(future),
             is_removing: false,
         }
     }
@@ -1656,25 +1642,18 @@ pub struct DelayRemove<A, B, F> where A: SignalVec {
     callback: F,
 }
 
-impl<A, B, F> DelayRemove<A, B, F> where A: SignalVec {
-    unsafe_pinned!(signal: Option<A>);
-    unsafe_unpinned!(futures: Vec<DelayRemoveState<B>>);
-    unsafe_unpinned!(pending: VecDeque<VecDiff<A::Item>>);
-    unsafe_unpinned!(callback: F);
-}
-
 impl<S, A, F> DelayRemove<S, A, F>
     where S: SignalVec,
           A: Future<Output = ()>,
           F: FnMut(&S::Item) -> A {
 
-    fn remove_index(self: &mut Pin<&mut Self>, index: usize) -> VecDiff<S::Item> {
-        if index == (self.futures.len() - 1) {
-            self.futures().pop();
+    fn remove_index(futures: &mut Vec<DelayRemoveState<A>>, index: usize) -> VecDiff<S::Item> {
+        if index == (futures.len() - 1) {
+            futures.pop();
             VecDiff::Pop {}
 
         } else {
-            self.futures().remove(index);
+            futures.remove(index);
             VecDiff::RemoveAt { index }
         }
     }
@@ -1691,11 +1670,11 @@ impl<S, A, F> DelayRemove<S, A, F>
         }
     }
 
-    fn find_index(&self, parent_index: usize) -> Option<usize> {
+    fn find_index(futures: &[DelayRemoveState<A>], parent_index: usize) -> Option<usize> {
         let mut seen = 0;
 
         // TODO is there a combinator that can simplify this ?
-        self.futures.iter().position(|state| {
+        futures.into_iter().position(|state| {
             if state.is_removing {
                 false
 
@@ -1709,14 +1688,14 @@ impl<S, A, F> DelayRemove<S, A, F>
         })
     }
 
-    fn find_last_index(&self) -> Option<usize> {
-        self.futures.iter().rposition(|state| !state.is_removing)
+    fn find_last_index(futures: &[DelayRemoveState<A>]) -> Option<usize> {
+        futures.into_iter().rposition(|state| !state.is_removing)
     }
 
-    fn remove_existing_futures(self: &mut Pin<&mut Self>, pending: &mut PendingBuilder<VecDiff<S::Item>>, waker: &LocalWaker) {
+    fn remove_existing_futures(futures: &mut Vec<DelayRemoveState<A>>, pending: &mut PendingBuilder<VecDiff<S::Item>>, waker: &LocalWaker) {
         let mut indexes = vec![];
 
-        for (index, future) in self.futures().iter_mut().enumerate() {
+        for (index, future) in futures.iter_mut().enumerate() {
             if !future.is_removing {
                 if Self::should_remove(future, waker) {
                     indexes.push(index);
@@ -1726,7 +1705,7 @@ impl<S, A, F> DelayRemove<S, A, F>
 
         // This uses rev so that way it will return VecDiff::Pop in more situations
         for index in indexes.into_iter().rev() {
-            pending.push(self.remove_index(index));
+            pending.push(Self::remove_index(futures, index));
         }
     }
 }
@@ -1740,95 +1719,102 @@ impl<S, A, F> SignalVec for DelayRemove<S, A, F>
     type Item = S::Item;
 
     // TODO this can probably be implemented more efficiently
-    fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
-        if let Some(diff) = self.pending().pop_front() {
+    fn poll_vec_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
+        unsafe_project!(self => {
+            pin signal,
+            mut futures,
+            mut pending,
+            mut callback,
+        });
+
+        if let Some(diff) = pending.pop_front() {
             return Poll::Ready(Some(diff));
         }
 
-        let mut pending = PendingBuilder::new();
+        let mut new_pending = PendingBuilder::new();
 
         // TODO maybe it should check the futures first, before checking the signalvec ?
         let done = loop {
-            break match self.signal().as_pin_mut().map(|signal| signal.poll_vec_change(waker)) {
+            break match signal.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(waker)) {
                 None => true,
                 Some(Poll::Ready(None)) => {
-                    Pin::set(self.signal(), None);
+                    Pin::set(signal, None);
                     true
                 },
                 Some(Poll::Ready(Some(change))) => {
                     match change {
                         VecDiff::Replace { values } => {
                             // TODO what if it has futures but the futures are all done ?
-                            if self.futures().len() == 0 {
-                                *self.futures() = values.iter().map(|value| DelayRemoveState::new(self.callback()(value))).collect();
-                                pending.push(VecDiff::Replace { values });
+                            if futures.len() == 0 {
+                                *futures = values.iter().map(|value| DelayRemoveState::new(callback(value))).collect();
+                                new_pending.push(VecDiff::Replace { values });
 
                             // TODO resize the capacity of `self.futures` somehow ?
                             } else {
-                                self.remove_existing_futures(&mut pending, waker);
+                                Self::remove_existing_futures(futures, &mut new_pending, waker);
 
                                 // TODO can this be made more efficient (e.g. using extend) ?
                                 for value in values {
-                                    let state = DelayRemoveState::new(self.callback()(&value));
-                                    self.futures().push(state);
-                                    pending.push(VecDiff::Push { value });
+                                    let state = DelayRemoveState::new(callback(&value));
+                                    futures.push(state);
+                                    new_pending.push(VecDiff::Push { value });
                                 }
                             }
                         },
 
                         VecDiff::InsertAt { index, value } => {
-                            let index = self.find_index(index).unwrap_or_else(|| self.futures.len());
-                            let state = DelayRemoveState::new(self.callback()(&value));
-                            self.futures().insert(index, state);
-                            pending.push(VecDiff::InsertAt { index, value });
+                            let index = Self::find_index(futures, index).unwrap_or_else(|| futures.len());
+                            let state = DelayRemoveState::new(callback(&value));
+                            futures.insert(index, state);
+                            new_pending.push(VecDiff::InsertAt { index, value });
                         },
 
                         VecDiff::Push { value } => {
-                            let state = DelayRemoveState::new(self.callback()(&value));
-                            self.futures().push(state);
-                            pending.push(VecDiff::Push { value });
+                            let state = DelayRemoveState::new(callback(&value));
+                            futures.push(state);
+                            new_pending.push(VecDiff::Push { value });
                         },
 
                         VecDiff::UpdateAt { index, value } => {
                             // TODO what about removing the old future ?
-                            let index = self.find_index(index).expect("Could not find value");
-                            let state = DelayRemoveState::new(self.callback()(&value));
-                            self.futures()[index] = state;
-                            pending.push(VecDiff::UpdateAt { index, value });
+                            let index = Self::find_index(futures, index).expect("Could not find value");
+                            let state = DelayRemoveState::new(callback(&value));
+                            futures[index] = state;
+                            new_pending.push(VecDiff::UpdateAt { index, value });
                         },
 
                         // TODO test this
                         // TODO should this be treated as a removal + insertion ?
                         VecDiff::Move { old_index, new_index } => {
-                            let old_index = self.find_index(old_index).expect("Could not find value");
+                            let old_index = Self::find_index(futures, old_index).expect("Could not find value");
 
-                            let state = self.futures().remove(old_index);
+                            let state = futures.remove(old_index);
 
-                            let new_index = self.find_index(new_index).unwrap_or_else(|| self.futures.len());
+                            let new_index = Self::find_index(futures, new_index).unwrap_or_else(|| futures.len());
 
-                            self.futures().insert(new_index, state);
+                            futures.insert(new_index, state);
 
-                            pending.push(VecDiff::Move { old_index, new_index });
+                            new_pending.push(VecDiff::Move { old_index, new_index });
                         },
 
                         VecDiff::RemoveAt { index } => {
-                            let index = self.find_index(index).expect("Could not find value");
+                            let index = Self::find_index(futures, index).expect("Could not find value");
 
-                            if Self::should_remove(&mut self.futures()[index], waker) {
-                                pending.push(self.remove_index(index));
+                            if Self::should_remove(&mut futures[index], waker) {
+                                new_pending.push(Self::remove_index(futures, index));
                             }
                         },
 
                         VecDiff::Pop {} => {
-                            let index = self.find_last_index().expect("Cannot pop from empty vec");
+                            let index = Self::find_last_index(futures).expect("Cannot pop from empty vec");
 
-                            if Self::should_remove(&mut self.futures()[index], waker) {
-                                pending.push(self.remove_index(index));
+                            if Self::should_remove(&mut futures[index], waker) {
+                                new_pending.push(Self::remove_index(futures, index));
                             }
                         },
 
                         VecDiff::Clear {} => {
-                            self.remove_existing_futures(&mut pending, waker);
+                            Self::remove_existing_futures(futures, &mut new_pending, waker);
                         },
                     }
 
@@ -1845,7 +1831,7 @@ impl<S, A, F> SignalVec for DelayRemove<S, A, F>
         let mut indexes = vec![];
 
         // TODO make this more efficient (e.g. using a similar strategy as FuturesUnordered)
-        for (index, state) in self.futures().iter_mut().enumerate() {
+        for (index, state) in futures.iter_mut().enumerate() {
             if state.is_removing {
                 if state.future.as_mut().poll(waker).is_ready() {
                     indexes.push(index);
@@ -1858,11 +1844,11 @@ impl<S, A, F> SignalVec for DelayRemove<S, A, F>
 
         // This uses rev so that way it will return VecDiff::Pop in more situations
         for index in indexes.into_iter().rev() {
-            pending.push(self.remove_index(index));
+            new_pending.push(Self::remove_index(futures, index));
         }
 
-        if let Some(first) = pending.first {
-            *self.pending() = pending.rest;
+        if let Some(first) = new_pending.first {
+            *pending = new_pending.rest;
             Poll::Ready(Some(first))
 
         } else if done && !pending_removals {
@@ -1878,14 +1864,15 @@ impl<S, A, F> SignalVec for DelayRemove<S, A, F>
 // TODO verify that this is correct
 mod mutable_vec {
     use super::{SignalVec, VecDiff};
-    use std::pin::{Pin, Unpin};
+    use std::pin::Pin;
+    use std::marker::Unpin;
     use std::fmt;
     use std::ops::Deref;
     use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
     use futures_channel::mpsc;
-    use futures_core::{Poll, Stream};
+    use futures_core::Poll;
     use futures_core::task::LocalWaker;
-    use pin_utils::unsafe_pinned;
+    use futures_util::stream::StreamExt;
     use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 
@@ -2314,11 +2301,6 @@ mod mutable_vec {
         receiver: mpsc::UnboundedReceiver<VecDiff<A>>,
     }
 
-    impl<A> MutableSignalVec<A> {
-        // TODO is this needed ?
-        unsafe_pinned!(receiver: mpsc::UnboundedReceiver<VecDiff<A>>);
-    }
-
     impl<A> Unpin for MutableSignalVec<A> {}
 
     impl<A> SignalVec for MutableSignalVec<A> {
@@ -2326,7 +2308,7 @@ mod mutable_vec {
 
         #[inline]
         fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
-            self.receiver().poll_next(waker)
+            self.receiver.poll_next_unpin(waker)
         }
     }
 }

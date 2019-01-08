@@ -1,5 +1,6 @@
 use super::Signal;
-use std::pin::{Pin, Unpin};
+use std::pin::Pin;
+use std::marker::Unpin;
 // TODO use parking_lot ?
 use std::sync::{Arc, Weak, Mutex, MutexGuard};
 // TODO use parking_lot ?

@@ -1,5 +1,6 @@
 use internal::Map2;
-use std::pin::{Pin, Unpin};
+use std::pin::Pin;
+use std::marker::Unpin;
 use futures_core::task::LocalWaker;
 use futures_core::Poll;
 use futures_core::future::Future;
@@ -7,7 +8,6 @@ use futures_core::stream::Stream;
 use futures_util::stream;
 use futures_util::stream::StreamExt;
 use signal_vec::{VecDiff, SignalVec};
-use pin_utils::{unsafe_pinned, unsafe_unpinned};
 
 
 // TODO impl for AssertUnwindSafe ?
@@ -40,7 +40,7 @@ impl<A> Signal for Box<A> where A: ?Sized + Signal + Unpin {
 
 // Copied from Future in the Rust stdlib
 impl<A> Signal for Pin<A>
-    where A: ::std::ops::DerefMut,
+    where A: Unpin + ::std::ops::DerefMut,
           A::Target: Signal {
     type Item = <<A as ::std::ops::Deref>::Target as Signal>::Item;
 
@@ -459,31 +459,29 @@ pub struct FromFuture<A> {
     first: bool,
 }
 
-impl<A> FromFuture<A> where A: Future {
-    unsafe_pinned!(future: Option<A>);
-    unsafe_unpinned!(first: bool);
-}
-
 impl<A> Unpin for FromFuture<A> where A: Unpin {}
 
 impl<A> Signal for FromFuture<A> where A: Future {
     type Item = Option<A::Output>;
 
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin future,
+            mut first,
+        });
+
         // TODO is this valid with pinned types ?
-        match self.future().as_pin_mut().map(|future| future.poll(waker)) {
+        match future.as_mut().as_pin_mut().map(|future| future.poll(waker)) {
             None => {
                 Poll::Ready(None)
             },
 
             Some(Poll::Ready(value)) => {
-                Pin::set(self.future(), None);
+                Pin::set(future, None);
                 Poll::Ready(Some(Some(value)))
             },
 
             Some(Poll::Pending) => {
-                let first = FromFuture::first(&mut self);
-
                 if *first {
                     *first = false;
                     Poll::Ready(Some(None))
@@ -509,18 +507,18 @@ pub struct FromStream<A> {
     first: bool,
 }
 
-impl<A> FromStream<A> {
-    unsafe_pinned!(stream: A);
-    unsafe_unpinned!(first: bool);
-}
-
 impl<A> Unpin for FromStream<A> where A: Unpin {}
 
 impl<A> Signal for FromStream<A> where A: Stream {
     type Item = Option<A::Item>;
 
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
-        match self.stream().poll_next(waker) {
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin stream,
+            mut first,
+        });
+
+        match stream.poll_next(waker) {
             Poll::Ready(None) => {
                 Poll::Ready(None)
             },
@@ -530,8 +528,6 @@ impl<A> Signal for FromStream<A> where A: Stream {
             },
 
             Poll::Pending => {
-                let first = FromStream::first(&mut self);
-
                 if *first {
                     *first = false;
                     Poll::Ready(Some(None))
@@ -581,19 +577,19 @@ pub struct First<A> {
     signal: Option<A>,
 }
 
-impl<A> First<A> {
-    unsafe_pinned!(signal: Option<A>);
-}
-
 impl<A> Unpin for First<A> where A: Unpin {}
 
 impl<A> Signal for First<A> where A: Signal {
     type Item = A::Item;
 
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal,
+        });
+
         // TODO maybe it's safe to replace this with take ?
-        if let Some(poll) = self.signal().as_pin_mut().map(|signal| signal.poll_change(waker)) {
-            Pin::set(self.signal(), None);
+        if let Some(poll) = signal.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
+            Pin::set(signal, None);
             poll
 
         } else {
@@ -609,10 +605,6 @@ pub struct Switch<A, B, C> where A: Signal, C: FnMut(A::Item) -> B {
     inner: Flatten<Map<A, C>>,
 }
 
-impl<A, B, C> Switch<A, B, C> where A: Signal, C: FnMut(A::Item) -> B {
-    unsafe_pinned!(inner: Flatten<Map<A, C>>);
-}
-
 // TODO is this correct ?
 impl<A, B, C> Unpin for Switch<A, B, C> where A: Signal + Unpin, B: Unpin, C: FnMut(A::Item) -> B {}
 
@@ -623,8 +615,12 @@ impl<A, B, C> Signal for Switch<A, B, C>
     type Item = B::Item;
 
     #[inline]
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
-        self.inner().poll_change(waker)
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin inner,
+        });
+
+        inner.poll_change(waker)
     }
 }
 
@@ -633,10 +629,6 @@ impl<A, B, C> Signal for Switch<A, B, C>
 #[must_use = "Futures do nothing unless polled"]
 pub struct ForEach<A, B, C> {
     inner: stream::ForEach<SignalStream<A>, B, C>,
-}
-
-impl<A, B, C> ForEach<A, B, C> {
-    unsafe_pinned!(inner: stream::ForEach<SignalStream<A>, B, C>);
 }
 
 impl<A, B, C> Unpin for ForEach<A, B, C> where A: Signal + Unpin, B: Future<Output = ()> + Unpin, C: FnMut(A::Item) -> B {}
@@ -648,8 +640,12 @@ impl<A, B, C> Future for ForEach<A, B, C>
     type Output = ();
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
-        self.inner().poll(waker)
+    fn poll(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
+        unsafe_project!(self => {
+            pin inner,
+        });
+
+        inner.poll(waker)
     }
 }
 
@@ -660,18 +656,18 @@ pub struct SignalStream<A> {
     signal: A,
 }
 
-impl<A> SignalStream<A> {
-    unsafe_pinned!(signal: A);
-}
-
 impl<A> Unpin for SignalStream<A> where A: Unpin {}
 
 impl<A: Signal> Stream for SignalStream<A> {
     type Item = A::Item;
 
     #[inline]
-    fn poll_next(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
-        self.signal().poll_change(waker)
+    fn poll_next(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal,
+        });
+
+        signal.poll_change(waker)
     }
 }
 
@@ -684,25 +680,25 @@ pub struct SignalFuture<A> where A: Signal {
     value: Option<A::Item>,
 }
 
-impl<A> SignalFuture<A> where A: Signal {
-    unsafe_pinned!(signal: A);
-    unsafe_unpinned!(value: Option<A::Item>);
-}
-
 impl<A> Unpin for SignalFuture<A> where A: Unpin + Signal {}
 
 impl<A> Future for SignalFuture<A> where A: Signal {
     type Output = A::Item;
 
     #[inline]
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
+        unsafe_project!(self => {
+            pin signal,
+            mut value,
+        });
+
         loop {
-            return match self.signal().poll_change(waker) {
+            return match signal.as_mut().poll_change(waker) {
                 Poll::Ready(None) => {
-                    Poll::Ready(self.value().take().unwrap())
+                    Poll::Ready(value.take().unwrap())
                 },
-                Poll::Ready(Some(value)) => {
-                    *self.value() = Some(value);
+                Poll::Ready(Some(new_value)) => {
+                    *value = Some(new_value);
                     continue;
                 },
                 Poll::Pending => {
@@ -721,11 +717,6 @@ pub struct Map<A, B> {
     callback: B,
 }
 
-impl<A, B> Map<A, B> {
-    unsafe_pinned!(signal: A);
-    unsafe_unpinned!(callback: B);
-}
-
 impl<A, B> Unpin for Map<A, B> where A: Unpin {}
 
 impl<A, B, C> Signal for Map<A, B>
@@ -734,8 +725,13 @@ impl<A, B, C> Signal for Map<A, B>
     type Item = C;
 
     #[inline]
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
-        self.signal().poll_change(waker).map(|opt| opt.map(|value| self.callback()(value)))
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal,
+            mut callback,
+        });
+
+        signal.poll_change(waker).map(|opt| opt.map(|value| callback(value)))
     }
 }
 
@@ -747,11 +743,6 @@ pub struct Inspect<A, B> {
     callback: B,
 }
 
-impl<A, B> Inspect<A, B> {
-    unsafe_pinned!(signal: A);
-    unsafe_unpinned!(callback: B);
-}
-
 impl<A, B> Unpin for Inspect<A, B> where A: Unpin {}
 
 impl<A, B> Signal for Inspect<A, B>
@@ -760,11 +751,16 @@ impl<A, B> Signal for Inspect<A, B>
     type Item = A::Item;
 
     #[inline]
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
-        let poll = self.signal().poll_change(waker);
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal,
+            mut callback,
+        });
+
+        let poll = signal.poll_change(waker);
 
         if let Poll::Ready(Some(ref value)) = poll {
-            self.callback()(value);
+            callback(value);
         }
 
         poll
@@ -781,13 +777,6 @@ pub struct MapFuture<A, B, C> {
     first: bool,
 }
 
-impl<A, B, C> MapFuture<A, B, C> {
-    unsafe_pinned!(signal: Option<A>);
-    unsafe_pinned!(future: Option<B>);
-    unsafe_unpinned!(callback: C);
-    unsafe_unpinned!(first: bool);
-}
-
 impl<A, B, C> Unpin for MapFuture<A, B, C> where A: Unpin, B: Unpin {}
 
 impl<A, B, C> Signal for MapFuture<A, B, C>
@@ -796,21 +785,28 @@ impl<A, B, C> Signal for MapFuture<A, B, C>
           C: FnMut(A::Item) -> B {
     type Item = Option<B::Output>;
 
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal,
+            pin future,
+            mut callback,
+            mut first,
+        });
+
         let mut done = false;
 
         loop {
-            match self.signal().as_pin_mut().map(|signal| signal.poll_change(waker)) {
+            match signal.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
                 None => {
                     done = true;
                 },
                 Some(Poll::Ready(None)) => {
-                    Pin::set(self.signal(), None);
+                    Pin::set(signal, None);
                     done = true;
                 },
                 Some(Poll::Ready(Some(value))) => {
-                    let value = Some(self.callback()(value));
-                    Pin::set(self.future(), value);
+                    let value = Some(callback(value));
+                    Pin::set(future.as_mut(), value);
                     continue;
                 },
                 Some(Poll::Pending) => {},
@@ -818,19 +814,17 @@ impl<A, B, C> Signal for MapFuture<A, B, C>
             break;
         }
 
-        match self.future().as_pin_mut().map(|future| future.poll(waker)) {
+        match future.as_mut().as_pin_mut().map(|future| future.poll(waker)) {
             None => {},
             Some(Poll::Ready(value)) => {
-                Pin::set(self.future(), None);
-                *MapFuture::first(&mut self) = false;
+                Pin::set(future, None);
+                *first = false;
                 return Poll::Ready(Some(Some(value)));
             },
             Some(Poll::Pending) => {
                 done = false;
             },
         }
-
-        let first = MapFuture::first(&mut self);
 
         if *first {
             *first = false;
@@ -855,10 +849,6 @@ pub struct WaitFor<A>
     value: A::Item,
 }
 
-impl<A> WaitFor<A> where A: Signal, A::Item: PartialEq {
-    unsafe_pinned!(signal: A);
-}
-
 impl<A> Unpin for WaitFor<A> where A: Unpin + Signal, A::Item: PartialEq {}
 
 impl<A> Future for WaitFor<A>
@@ -867,12 +857,17 @@ impl<A> Future for WaitFor<A>
 
     type Output = Option<A::Item>;
 
-    fn poll(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
-        loop {
-            let poll = self.signal().poll_change(waker);
+    fn poll(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Self::Output> {
+        unsafe_project!(self => {
+            pin signal,
+            mut value,
+        });
 
-            if let Poll::Ready(Some(ref value)) = poll {
-                if *value != self.value {
+        loop {
+            let poll = signal.as_mut().poll_change(waker);
+
+            if let Poll::Ready(Some(ref new_value)) = poll {
+                if new_value != value {
                     continue;
                 }
             }
@@ -889,10 +884,6 @@ pub struct SignalSignalVec<A> {
     signal: A,
 }
 
-impl<A> SignalSignalVec<A> {
-    unsafe_pinned!(signal: A);
-}
-
 impl<A> Unpin for SignalSignalVec<A> where A: Unpin {}
 
 impl<A, B> SignalVec for SignalSignalVec<A>
@@ -900,8 +891,12 @@ impl<A, B> SignalVec for SignalSignalVec<A>
     type Item = B;
 
     #[inline]
-    fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
-        self.signal().poll_change(waker).map(|opt| opt.map(|values| VecDiff::Replace { values }))
+    fn poll_vec_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
+        unsafe_project!(self => {
+            pin signal,
+        });
+
+        signal.poll_change(waker).map(|opt| opt.map(|values| VecDiff::Replace { values }))
     }
 }
 
@@ -909,7 +904,7 @@ impl<A, B> SignalVec for SignalSignalVec<A>
 macro_rules! dedupe {
     ($signal:expr, $waker:expr, $value:expr, $pat:pat, $name:ident => $output:expr) => {
         loop {
-            return match $signal.poll_change($waker) {
+            return match $signal.as_mut().poll_change($waker) {
                 Poll::Ready(Some($pat)) => {
                     let has_changed = match $value {
                         Some(ref old_value) => *old_value != $name,
@@ -941,12 +936,6 @@ pub struct DedupeMap<A, B> where A: Signal {
     callback: B,
 }
 
-impl<A, B> DedupeMap<A, B> where A: Signal {
-    unsafe_unpinned!(old_value: Option<A::Item>);
-    unsafe_pinned!(signal: A);
-    unsafe_unpinned!(callback: B);
-}
-
 impl<A, B> Unpin for DedupeMap<A, B> where A: Unpin + Signal {}
 
 impl<A, B, C> Signal for DedupeMap<A, B>
@@ -959,8 +948,14 @@ impl<A, B, C> Signal for DedupeMap<A, B>
     type Item = C;
 
     // TODO should this use #[inline] ?
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
-        dedupe!(self.signal(), waker, self.old_value(), mut value, value => self.callback()(&mut value))
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            mut old_value,
+            pin signal,
+            mut callback,
+        });
+
+        dedupe!(signal, waker, old_value, mut value, value => callback(&mut value))
     }
 }
 
@@ -972,11 +967,6 @@ pub struct Dedupe<A> where A: Signal {
     signal: A,
 }
 
-impl<A> Dedupe<A> where A: Signal {
-    unsafe_unpinned!(old_value: Option<A::Item>);
-    unsafe_pinned!(signal: A);
-}
-
 impl<A> Unpin for Dedupe<A> where A: Unpin + Signal {}
 
 impl<A> Signal for Dedupe<A>
@@ -986,8 +976,13 @@ impl<A> Signal for Dedupe<A>
     type Item = A::Item;
 
     // TODO should this use #[inline] ?
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
-        dedupe!(self.signal(), waker, self.old_value(), value, value => value)
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            mut old_value,
+            pin signal,
+        });
+
+        dedupe!(signal, waker, old_value, value, value => value)
     }
 }
 
@@ -999,11 +994,6 @@ pub struct DedupeCloned<A> where A: Signal {
     signal: A,
 }
 
-impl<A> DedupeCloned<A> where A: Signal {
-    unsafe_unpinned!(old_value: Option<A::Item>);
-    unsafe_pinned!(signal: A);
-}
-
 impl<A> Unpin for DedupeCloned<A> where A: Unpin + Signal {}
 
 impl<A> Signal for DedupeCloned<A>
@@ -1013,8 +1003,13 @@ impl<A> Signal for DedupeCloned<A>
     type Item = A::Item;
 
     // TODO should this use #[inline] ?
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
-        dedupe!(self.signal(), waker, self.old_value(), value, value => value.clone())
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            mut old_value,
+            pin signal,
+        });
+
+        dedupe!(signal, waker, old_value, value, value => value.clone())
     }
 }
 
@@ -1027,12 +1022,6 @@ pub struct FilterMap<A, B> {
     first: bool,
 }
 
-impl<A, B> FilterMap<A, B> {
-    unsafe_pinned!(signal: A);
-    unsafe_unpinned!(callback: B);
-    unsafe_unpinned!(first: bool);
-}
-
 impl<A, B> Unpin for FilterMap<A, B> where A: Unpin {}
 
 impl<A, B, C> Signal for FilterMap<A, B>
@@ -1041,19 +1030,22 @@ impl<A, B, C> Signal for FilterMap<A, B>
     type Item = Option<C>;
 
     // TODO should this use #[inline] ?
-    #[inline]
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal,
+            mut callback,
+            mut first,
+        });
+
         loop {
-            return match self.signal().poll_change(waker) {
-                Poll::Ready(Some(value)) => match self.callback()(value) {
+            return match signal.as_mut().poll_change(waker) {
+                Poll::Ready(Some(value)) => match callback(value) {
                     Some(value) => {
-                        *FilterMap::first(&mut self) = false;
+                        *first = false;
                         Poll::Ready(Some(Some(value)))
                     },
 
                     None => {
-                        let first = FilterMap::first(&mut self);
-
                         if *first {
                             *first = false;
                             Poll::Ready(Some(None))
@@ -1078,11 +1070,6 @@ pub struct Flatten<A> where A: Signal {
     inner: Option<A::Item>,
 }
 
-impl<A> Flatten<A> where A: Signal {
-    unsafe_pinned!(signal: Option<A>);
-    unsafe_pinned!(inner: Option<A::Item>);
-}
-
 // TODO is this impl correct ?
 impl<A> Unpin for Flatten<A> where A: Unpin + Signal, A::Item: Unpin {}
 
@@ -1105,23 +1092,28 @@ impl<A> Signal for Flatten<A>
     type Item = <A::Item as Signal>::Item;
 
     #[inline]
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
-        let done = match self.signal().as_pin_mut().map(|signal| signal.poll_change(waker)) {
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal,
+            pin inner,
+        });
+
+        let done = match signal.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(self.signal(), None);
+                Pin::set(signal, None);
                 true
             },
-            Some(Poll::Ready(Some(inner))) => {
-                Pin::set(self.inner(), Some(inner));
+            Some(Poll::Ready(Some(new_inner))) => {
+                Pin::set(inner.as_mut(), Some(new_inner));
                 false
             },
             Some(Poll::Pending) => false,
         };
 
-        match self.inner().as_pin_mut().map(|inner| inner.poll_change(waker)) {
+        match inner.as_mut().as_pin_mut().map(|inner| inner.poll_change(waker)) {
             Some(Poll::Ready(None)) => {
-                Pin::set(self.inner(), None);
+                Pin::set(inner, None);
             },
             Some(poll) => {
                 return poll;

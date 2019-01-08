@@ -1,5 +1,6 @@
 use super::Signal;
-use std::pin::{Pin, Unpin};
+use std::pin::Pin;
+use std::marker::Unpin;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use futures_core::Poll;
@@ -88,7 +89,7 @@ struct BroadcasterInnerState<A> where A: Signal {
 impl<A> BroadcasterInnerState<A> where A: Signal {
     fn new(signal: A) -> Self {
         Self {
-            signal: Box::pinned(signal),
+            signal: Box::pin(signal),
             value: None,
         }
     }

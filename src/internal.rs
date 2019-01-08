@@ -1,5 +1,6 @@
 use super::signal::Signal;
-use std::pin::{Unpin, Pin};
+use std::pin::Pin;
+use std::marker::Unpin;
 // TODO use parking_lot ?
 use std::sync::{Arc, RwLock, Mutex, MutexGuard, RwLockReadGuard};
 use futures_core::Poll;
@@ -31,17 +32,25 @@ pub fn unwrap_ref<A>(x: &Option<A>) -> &A {
 }
 
 
-// TODO figure out another way of doing this
-macro_rules! unsafe_pin {
-    ($self:expr) => {
-        unsafe { ::std::pin::Pin::new_unchecked(&mut $self) }
-    }
-}
+#[doc(hidden)]
+#[macro_export]
+macro_rules! unsafe_project {
+    (@parse $value:expr,) => {};
+    (@parse $value:expr, pin $name:ident, $($rest:tt)*) => {
+        #[allow(unused_mut)]
+        let mut $name = unsafe { ::std::pin::Pin::new_unchecked(&mut $value.$name) };
+        $crate::unsafe_project! { @parse $value, $($rest)* }
+    };
+    (@parse $value:expr, mut $name:ident, $($rest:tt)*) => {
+        #[allow(unused_mut)]
+        let mut $name = &mut $value.$name;
+        $crate::unsafe_project! { @parse $value, $($rest)* }
+    };
 
-macro_rules! unsafe_unpin {
-    ($self:expr) => {
-        unsafe { ::std::pin::Pin::get_mut_unchecked(::std::pin::Pin::as_mut(&mut $self)) }
-    }
+    ($value:expr => { $($bindings:tt)+ }) => {
+        let value = unsafe { ::std::pin::Pin::get_unchecked_mut($value) };
+        $crate::unsafe_project! { @parse value, $($bindings)+ }
+    };
 }
 
 
@@ -100,34 +109,39 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
     type Item = D;
 
     // TODO inline this ?
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal1,
+            pin signal2,
+            mut left,
+            mut right,
+            mut callback,
+        });
+
         let mut changed = false;
 
-        // TODO is this safe ?
-        let this: &mut Self = unsafe_unpin!(self);
-
-        let left_done = match unsafe_pin!(this.signal1).as_pin_mut().map(|signal| signal.poll_change(waker)) {
+        let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(unsafe_pin!(this.signal1), None);
+                Pin::set(signal1, None);
                 true
             },
             Some(Poll::Ready(a)) => {
-                this.left = a;
+                *left = a;
                 changed = true;
                 false
             },
             Some(Poll::Pending) => false,
         };
 
-        let right_done = match unsafe_pin!(this.signal2).as_pin_mut().map(|signal| signal.poll_change(waker)) {
+        let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(unsafe_pin!(this.signal2), None);
+                Pin::set(signal2, None);
                 true
             },
             Some(Poll::Ready(a)) => {
-                this.right = a;
+                *right = a;
                 changed = true;
                 false
             },
@@ -135,9 +149,10 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
         };
 
         if changed {
-            let left = this.left.as_mut().unwrap();
-            let right = this.right.as_mut().unwrap();
-            Poll::Ready(Some((this.callback)(left, right)))
+            Poll::Ready(Some(callback(
+                left.as_mut().unwrap(),
+                right.as_mut().unwrap(),
+            )))
 
         } else if left_done && right_done {
             Poll::Ready(None)
@@ -182,22 +197,25 @@ impl<A, B> Signal for MapPairMut<A, B>
     type Item = PairMut<A::Item, B::Item>;
 
     // TODO inline this ?
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal1,
+            pin signal2,
+            mut inner,
+        });
+
         let mut changed = false;
 
-        // TODO is this safe ?
-        let this: &mut Self = unsafe_unpin!(self);
-
         // TODO can this deadlock ?
-        let mut borrow_left = this.inner.0.lock().unwrap();
+        let mut borrow_left = inner.0.lock().unwrap();
 
         // TODO is it okay to move this to just above right_done ?
-        let mut borrow_right = this.inner.1.lock().unwrap();
+        let mut borrow_right = inner.1.lock().unwrap();
 
-        let left_done = match unsafe_pin!(this.signal1).as_pin_mut().map(|signal| signal.poll_change(waker)) {
+        let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(unsafe_pin!(this.signal1), None);
+                Pin::set(signal1, None);
                 true
             },
             Some(Poll::Ready(a)) => {
@@ -208,10 +226,10 @@ impl<A, B> Signal for MapPairMut<A, B>
             Some(Poll::Pending) => false,
         };
 
-        let right_done = match unsafe_pin!(this.signal2).as_pin_mut().map(|signal| signal.poll_change(waker)) {
+        let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(unsafe_pin!(this.signal2), None);
+                Pin::set(signal2, None);
                 true
             },
             Some(Poll::Ready(a)) => {
@@ -223,7 +241,7 @@ impl<A, B> Signal for MapPairMut<A, B>
         };
 
         if changed {
-            Poll::Ready(Some(this.inner.clone()))
+            Poll::Ready(Some(inner.clone()))
 
         } else if left_done && right_done {
             Poll::Ready(None)
@@ -268,18 +286,21 @@ impl<A, B> Signal for MapPair<A, B>
     type Item = Pair<A::Item, B::Item>;
 
     // TODO inline this ?
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal1,
+            pin signal2,
+            mut inner,
+        });
+
         let mut changed = false;
 
-        // TODO is this safe ?
-        let this: &mut Self = unsafe_unpin!(self);
+        let mut borrow = inner.write().unwrap();
 
-        let mut borrow = this.inner.write().unwrap();
-
-        let left_done = match unsafe_pin!(this.signal1).as_pin_mut().map(|signal| signal.poll_change(waker)) {
+        let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(unsafe_pin!(this.signal1), None);
+                Pin::set(signal1, None);
                 true
             },
             Some(Poll::Ready(a)) => {
@@ -290,10 +311,10 @@ impl<A, B> Signal for MapPair<A, B>
             Some(Poll::Pending) => false,
         };
 
-        let right_done = match unsafe_pin!(this.signal2).as_pin_mut().map(|signal| signal.poll_change(waker)) {
+        let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(unsafe_pin!(this.signal2), None);
+                Pin::set(signal2, None);
                 true
             },
             Some(Poll::Ready(a)) => {
@@ -305,7 +326,7 @@ impl<A, B> Signal for MapPair<A, B>
         };
 
         if changed {
-            Poll::Ready(Some(this.inner.clone()))
+            Poll::Ready(Some(inner.clone()))
 
         } else if left_done && right_done {
             Poll::Ready(None)

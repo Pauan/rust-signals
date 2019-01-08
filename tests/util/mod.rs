@@ -1,4 +1,4 @@
-use std::pin::Unpin;
+use std::marker::Unpin;
 use futures_signals::signal_vec::{VecDiff, SignalVec};
 use futures_signals::signal::Signal;
 use futures_core::Poll;

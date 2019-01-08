@@ -1,7 +1,8 @@
 use super::Signal;
 use std;
 use std::fmt;
-use std::pin::{Pin, Unpin};
+use std::pin::Pin;
+use std::marker::Unpin;
 use std::ops::{Deref, DerefMut};
 // TODO use parking_lot ?
 use std::sync::{Arc, Weak, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};

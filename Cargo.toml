@@ -14,7 +14,6 @@ categories = ["asynchronous"]
 futures-core-preview = "0.3.0-alpha.7"
 futures-channel-preview = "0.3.0-alpha.7"
 futures-util-preview = "0.3.0-alpha.7"
-pin-utils = "0.1.0-alpha.3"
 discard = "1.0.3"
 # TODO make this optional
 serde = "1.0.27"
@@ -22,3 +21,4 @@ serde = "1.0.27"
 [dev-dependencies]
 futures-preview = "0.3.0-alpha.7"
 futures-executor-preview = "0.3.0-alpha.7"
+pin-utils = "0.1.0-alpha.3"
