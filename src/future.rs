@@ -66,7 +66,7 @@ impl<A, B> Future for CancelableFuture<A, B>
         // TODO is this correct ?
         if state.is_cancelled.load(Ordering::SeqCst) {
             // This is necessary in order to prevent the future from calling `waker.wake()` later
-            Pin::set(future, None);
+            future.set(None);
             let callback = when_cancelled.take().unwrap();
             // TODO figure out how to call the callback immediately when discard is called, e.g. using two Arc<Mutex<>>
             Poll::Ready(callback())

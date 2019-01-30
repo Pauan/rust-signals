@@ -477,7 +477,7 @@ impl<A> Signal for FromFuture<A> where A: Future {
             },
 
             Some(Poll::Ready(value)) => {
-                Pin::set(future, None);
+                future.set(None);
                 Poll::Ready(Some(Some(value)))
             },
 
@@ -589,7 +589,7 @@ impl<A> Signal for First<A> where A: Signal {
 
         // TODO maybe it's safe to replace this with take ?
         if let Some(poll) = signal.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
-            Pin::set(signal, None);
+            signal.set(None);
             poll
 
         } else {
@@ -801,12 +801,12 @@ impl<A, B, C> Signal for MapFuture<A, B, C>
                     done = true;
                 },
                 Some(Poll::Ready(None)) => {
-                    Pin::set(signal, None);
+                    signal.set(None);
                     done = true;
                 },
                 Some(Poll::Ready(Some(value))) => {
                     let value = Some(callback(value));
-                    Pin::set(future.as_mut(), value);
+                    future.set(value);
                     continue;
                 },
                 Some(Poll::Pending) => {},
@@ -817,7 +817,7 @@ impl<A, B, C> Signal for MapFuture<A, B, C>
         match future.as_mut().as_pin_mut().map(|future| future.poll(waker)) {
             None => {},
             Some(Poll::Ready(value)) => {
-                Pin::set(future, None);
+                future.set(None);
                 *first = false;
                 return Poll::Ready(Some(Some(value)));
             },
@@ -1101,11 +1101,11 @@ impl<A> Signal for Flatten<A>
         let done = match signal.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(signal, None);
+                signal.set(None);
                 true
             },
             Some(Poll::Ready(Some(new_inner))) => {
-                Pin::set(inner.as_mut(), Some(new_inner));
+                inner.set(Some(new_inner));
                 false
             },
             Some(Poll::Pending) => false,
@@ -1113,7 +1113,7 @@ impl<A> Signal for Flatten<A>
 
         match inner.as_mut().as_pin_mut().map(|inner| inner.poll_change(waker)) {
             Some(Poll::Ready(None)) => {
-                Pin::set(inner, None);
+                inner.set(None);
             },
             Some(poll) => {
                 return poll;

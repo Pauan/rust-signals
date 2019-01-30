@@ -679,7 +679,7 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
                     true
                 },
                 Some(Poll::Ready(None)) => {
-                    Pin::set(signal, None);
+                    signal.set(None);
                     true
                 },
                 Some(Poll::Ready(Some(change))) => {
@@ -831,7 +831,7 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
             break match signal.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(waker)) {
                 None => true,
                 Some(Poll::Ready(None)) => {
-                    Pin::set(signal, None);
+                    signal.set(None);
                     true
                 },
                 Some(Poll::Ready(Some(change))) => {
@@ -1064,7 +1064,7 @@ impl<A> Signal for Len<A> where A: SignalVec {
                     true
                 },
                 Some(Poll::Ready(None)) => {
-                    Pin::set(signal, None);
+                    signal.set(None);
                     true
                 },
                 Some(Poll::Ready(Some(change))) => {
@@ -1307,7 +1307,7 @@ impl<A> Signal for SumSignal<A>
                     true
                 },
                 Some(Poll::Ready(None)) => {
-                    Pin::set(signal, None);
+                    signal.set(None);
                     true
                 },
                 Some(Poll::Ready(Some(change))) => {
@@ -1738,7 +1738,7 @@ impl<S, A, F> SignalVec for DelayRemove<S, A, F>
             break match signal.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(waker)) {
                 None => true,
                 Some(Poll::Ready(None)) => {
-                    Pin::set(signal, None);
+                    signal.set(None);
                     true
                 },
                 Some(Poll::Ready(Some(change))) => {

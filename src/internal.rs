@@ -123,7 +123,7 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
         let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(signal1, None);
+                signal1.set(None);
                 true
             },
             Some(Poll::Ready(a)) => {
@@ -137,7 +137,7 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
         let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(signal2, None);
+                signal2.set(None);
                 true
             },
             Some(Poll::Ready(a)) => {
@@ -215,7 +215,7 @@ impl<A, B> Signal for MapPairMut<A, B>
         let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(signal1, None);
+                signal1.set(None);
                 true
             },
             Some(Poll::Ready(a)) => {
@@ -229,7 +229,7 @@ impl<A, B> Signal for MapPairMut<A, B>
         let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(signal2, None);
+                signal2.set(None);
                 true
             },
             Some(Poll::Ready(a)) => {
@@ -300,7 +300,7 @@ impl<A, B> Signal for MapPair<A, B>
         let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(signal1, None);
+                signal1.set(None);
                 true
             },
             Some(Poll::Ready(a)) => {
@@ -314,7 +314,7 @@ impl<A, B> Signal for MapPair<A, B>
         let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
             None => true,
             Some(Poll::Ready(None)) => {
-                Pin::set(signal2, None);
+                signal2.set(None);
                 true
             },
             Some(Poll::Ready(a)) => {
