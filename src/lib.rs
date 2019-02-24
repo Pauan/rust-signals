@@ -60,12 +60,15 @@ pub use future::{cancelable_future, CancelableFutureHandle, CancelableFuture};
 /// # use futures_signals::signal::Mutable;
 /// # let my_state = Mutable::new(5);
 /// #
-/// assert_eq!(my_state.get(), 5);
+/// // Acquires a mutable lock on my_state
+/// let mut lock = my_state.lock_mut();
 ///
-/// // Changes the current value to 10
-/// my_state.set(10);
+/// assert_eq!(*lock, 5);
 ///
-/// assert_eq!(my_state.get(), 10);
+/// // Changes the current value of my_state to 10
+/// *lock = 10;
+///
+/// assert_eq!(*lock, 10);
 /// ```
 ///
 /// However, if that was all `Mutable` could do, it wouldn't be very useful, because `RwLock`
@@ -205,7 +208,8 @@ pub use future::{cancelable_future, CancelableFutureHandle, CancelableFuture};
 /// and the same is true with `Mutable` and `Signal`.
 ///
 /// If you really *do* need all intermediate values (not just the most recent), then using a
-/// [`Stream`](https://docs.rs/futures-preview/%5E0.3.0-alpha.10/futures/stream/trait.Stream.html) would be a great choice.
+/// [`Stream`](https://docs.rs/futures-preview/%5E0.3.0-alpha.10/futures/stream/trait.Stream.html)
+/// (such as [`futures::channel::mpsc::unbounded`](https://docs.rs/futures-preview/%5E0.3.0-alpha.10/futures/channel/mpsc/fn.unbounded.html)) would be a great choice.
 /// In that case you will pay a small performance penalty, because it has to hold the values in a queue.
 ///
 /// ----
@@ -213,6 +217,9 @@ pub use future::{cancelable_future, CancelableFutureHandle, CancelableFuture};
 /// Now that I've fully explained `Mutable`, I can finally explain [`Signal`](../signal/trait.Signal.html).
 ///
 /// A `Signal` is an efficient zero-cost value which changes over time, and you can be efficiently notified when it changes.
+///
+/// Just like [`Future`](https://docs.rs/futures-preview/%5E0.3.0-alpha.10/futures/future/trait.Future.html) and [`Stream`](https://docs.rs/futures-preview/%5E0.3.0-alpha.10/futures/stream/trait.Stream.html),
+/// all `Signal`s are compiled into a very efficient state machine. Most of the time they are fully stack allocated (*no* heap allocation). And in the rare cases that they heap allocate they only do it *once*, when the `Signal` is created, not while the `Signal` is running.
 ///
 /// Just like [`FutureExt`](https://docs.rs/futures-preview/%5E0.3.0-alpha.10/futures/future/trait.FutureExt.html) and
 /// [`StreamExt`](https://docs.rs/futures-preview/%5E0.3.0-alpha.10/futures/stream/trait.StreamExt.html), the [`SignalExt`](../signal/trait.SignalExt.html) trait has many useful
@@ -238,9 +245,9 @@ pub use future::{cancelable_future, CancelableFutureHandle, CancelableFuture};
 ///
 /// Let's say that the current value of `my_state` is `10`.
 ///
-/// It calls the `|value| value + 5` closure with the current value of `my_value` (it returns `10 + 5`, which is `15`).
+/// When `mapped` is spawned it will call the `|value| value + 5` closure with the current value of `my_value` (the closure returns `10 + 5`, which is `15`).
 ///
-/// Then it calls `do_some_async_calculation(15)`. When that asynchronous function returns, `dedupe` checks if the return value is different from the previous value (using `==`), and if so then it puts the return value into `mapped`.
+/// Then it calls `do_some_async_calculation(15)`. When that asynchronous function returns, `dedupe` checks if the return value is different from the previous value (using `==`), and if so then `mapped` notifies with the new value.
 ///
 /// It automatically repeats this process whenever `my_state` changes, ensuring that `mapped` is always kept in sync with `my_state`.
 ///
