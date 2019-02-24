@@ -2,8 +2,9 @@ use std::marker::Unpin;
 use futures_signals::signal_vec::{VecDiff, SignalVec};
 use futures_signals::signal::Signal;
 use futures_core::Poll;
-use futures_core::task::{LocalWaker, Wake, local_waker_from_nonlocal};
+use futures_core::task::{Waker};
 use futures_util::future::poll_fn;
+use futures_util::task::ArcWake;
 use futures_executor::block_on;
 use pin_utils::pin_mut;
 use std::sync::Arc;
@@ -13,7 +14,7 @@ use std::pin::Pin;
 #[allow(dead_code)]
 pub struct ForEachSignal<A> where A: Signal {
     signal: A,
-    callbacks: Vec<Box<FnMut(&LocalWaker, Poll<Option<A::Item>>)>>,
+    callbacks: Vec<Box<FnMut(&Waker, Poll<Option<A::Item>>)>>,
 }
 
 #[allow(dead_code)]
@@ -25,7 +26,7 @@ impl<A> ForEachSignal<A> where A: Signal {
         }
     }
 
-    pub fn next<B>(mut self, callback: B) -> Self where B: FnMut(&LocalWaker, Poll<Option<A::Item>>) + 'static {
+    pub fn next<B>(mut self, callback: B) -> Self where B: FnMut(&Waker, Poll<Option<A::Item>>) + 'static {
         self.callbacks.insert(0, Box::new(callback));
         self
     }
@@ -68,23 +69,23 @@ impl<A> ForEachSignal<A> where A: Signal {
 
 
 #[allow(dead_code)]
-pub fn with_noop_waker<U, F: FnOnce(&LocalWaker) -> U>(f: F) -> U {
+pub fn with_noop_waker<U, F: FnOnce(&Waker) -> U>(f: F) -> U {
     // borrowed this design from the futures source
     struct Noop;
 
-    impl Wake for Noop {
+    impl ArcWake for Noop {
         fn wake(_: &Arc<Self>) {}
     }
 
     // TODO is this correct ?
-    let waker = local_waker_from_nonlocal(Arc::new(Noop));
+    let waker = ArcWake::into_waker(Arc::new(Noop));
 
     f(&waker)
 }
 
 
 #[allow(dead_code)]
-pub fn get_all_polls<A, B, F>(signal: A, mut initial: B, mut f: F) -> Vec<Poll<Option<A::Item>>> where A: Signal, F: FnMut(&B, &LocalWaker) -> B {
+pub fn get_all_polls<A, B, F>(signal: A, mut initial: B, mut f: F) -> Vec<Poll<Option<A::Item>>> where A: Signal, F: FnMut(&B, &Waker) -> B {
     let mut output = vec![];
 
     // TODO is this correct ?
@@ -181,7 +182,7 @@ impl<A> Source<A> {
         Self { changes }
     }
 
-    fn poll(&mut self, waker: &LocalWaker) -> Poll<Option<A>> {
+    fn poll(&mut self, waker: &Waker) -> Poll<Option<A>> {
         if self.changes.len() > 0 {
             match self.changes.remove(0) {
                 Poll::Pending => {
@@ -201,7 +202,7 @@ impl<A> Signal for Source<A> {
     type Item = A;
 
     #[inline]
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(mut self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
         self.poll(waker)
     }
 }
@@ -210,7 +211,7 @@ impl<A> SignalVec for Source<VecDiff<A>> {
     type Item = A;
 
     #[inline]
-    fn poll_vec_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<VecDiff<Self::Item>>> {
+    fn poll_vec_change(mut self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<VecDiff<Self::Item>>> {
         self.poll(waker)
     }
 }

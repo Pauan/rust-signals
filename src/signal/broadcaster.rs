@@ -4,7 +4,8 @@ use std::marker::Unpin;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use futures_core::Poll;
-use futures_core::task::{LocalWaker, Waker, Wake, local_waker_from_nonlocal};
+use futures_core::task::{Waker};
+use futures_util::task::ArcWake;
 
 
 #[derive(Debug)]
@@ -70,7 +71,7 @@ impl BroadcasterNotifier {
     }
 }
 
-impl Wake for BroadcasterNotifier {
+impl ArcWake for BroadcasterNotifier {
     #[inline]
     fn wake(arc_self: &Arc<Self>) {
         arc_self.notify(true);
@@ -98,7 +99,7 @@ impl<A> BroadcasterInnerState<A> where A: Signal {
     // to wake in the future if it is in Pending state.
     fn poll_underlying(&mut self, notifier: Arc<BroadcasterNotifier>) {
         // TODO is this the best way to do this ?
-        let waker = local_waker_from_nonlocal(notifier);
+        let waker = ArcWake::into_waker(notifier);
 
         loop {
             // TODO what if it is woken up while polling ?
@@ -196,7 +197,7 @@ impl<A> BroadcasterState<A> where A: Signal {
         }
     }
 
-    fn poll_change<F>(&self, waker: &LocalWaker, f: F) -> Poll<Option<A::Item>> where F: FnOnce(&Option<A::Item>) -> Option<A::Item> {
+    fn poll_change<F>(&self, waker: &Waker, f: F) -> Poll<Option<A::Item>> where F: FnOnce(&Option<A::Item>) -> Option<A::Item> {
         // If the poll just done (or a previous poll) has generated a new
         // value, we can report it. Use swap so only one thread will pick up
         // the change
@@ -205,7 +206,7 @@ impl<A> BroadcasterState<A> where A: Signal {
 
         } else {
             // Nothing new to report, save this task's Waker for later
-            *self.status.waker.lock().unwrap() = Some(waker.clone().into_waker());
+            *self.status.waker.lock().unwrap() = Some(waker.clone());
             Poll::Pending
         }
     }
@@ -293,7 +294,7 @@ impl<A> Signal for BroadcasterSignal<A>
     type Item = A::Item;
 
     #[inline]
-    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
         self.state.poll_change(waker, |value| *value)
     }
 }
@@ -324,7 +325,7 @@ impl<A> Signal for BroadcasterSignalCloned<A>
     type Item = A::Item;
 
     #[inline]
-    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
         self.state.poll_change(waker, |value| value.clone())
     }
 }
