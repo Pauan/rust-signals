@@ -9,7 +9,7 @@ use std::sync::{Arc, Weak, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 // TODO use parking_lot ?
 use std::sync::atomic::{AtomicBool, Ordering};
 use futures_core::Poll;
-use futures_core::task::{LocalWaker, Waker};
+use futures_core::task::{Waker};
 use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 
@@ -74,7 +74,7 @@ impl<A> MutableSignalState<A> {
         state
     }
 
-    fn poll_change<B, F>(&self, waker: &LocalWaker, f: F) -> Poll<Option<B>> where F: FnOnce(&A) -> B {
+    fn poll_change<B, F>(&self, waker: &Waker, f: F) -> Poll<Option<B>> where F: FnOnce(&A) -> B {
         // TODO is this correct ?
         let lock = self.state.read().unwrap();
 
@@ -87,7 +87,7 @@ impl<A> MutableSignalState<A> {
 
         } else {
             // TODO is this correct ?
-            *self.waker.lock().unwrap() = Some(waker.clone().into_waker());
+            *self.waker.lock().unwrap() = Some(waker.clone());
             Poll::Pending
         }
     }
@@ -365,7 +365,7 @@ impl<A> Unpin for MutableSignal<A> {}
 impl<A: Copy> Signal for MutableSignal<A> {
     type Item = A;
 
-    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
         self.0.poll_change(waker, |value| *value)
     }
 }
@@ -381,7 +381,7 @@ impl<A, F> Unpin for MutableSignalRef<A, F> {}
 impl<A, B, F> Signal for MutableSignalRef<A, F> where F: FnMut(&A) -> B {
     type Item = B;
 
-    fn poll_change(mut self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(mut self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
         let this = &mut *self;
         let state = &this.0;
         let callback = &mut this.1;
@@ -402,7 +402,7 @@ impl<A: Clone> Signal for MutableSignalCloned<A> {
     type Item = A;
 
     // TODO code duplication with MutableSignal::poll
-    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
         self.0.poll_change(waker, |value| value.clone())
     }
 }

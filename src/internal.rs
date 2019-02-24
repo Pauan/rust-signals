@@ -4,7 +4,7 @@ use std::marker::Unpin;
 // TODO use parking_lot ?
 use std::sync::{Arc, RwLock, Mutex, MutexGuard, RwLockReadGuard};
 use futures_core::Poll;
-use futures_core::task::LocalWaker;
+use futures_core::task::Waker;
 
 
 #[inline]
@@ -109,7 +109,7 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
     type Item = D;
 
     // TODO inline this ?
-    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
         unsafe_project!(self => {
             pin signal1,
             pin signal2,
@@ -197,7 +197,7 @@ impl<A, B> Signal for MapPairMut<A, B>
     type Item = PairMut<A::Item, B::Item>;
 
     // TODO inline this ?
-    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
         unsafe_project!(self => {
             pin signal1,
             pin signal2,
@@ -286,7 +286,7 @@ impl<A, B> Signal for MapPair<A, B>
     type Item = Pair<A::Item, B::Item>;
 
     // TODO inline this ?
-    fn poll_change(self: Pin<&mut Self>, waker: &LocalWaker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
         unsafe_project!(self => {
             pin signal1,
             pin signal2,
