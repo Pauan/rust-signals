@@ -2,11 +2,10 @@ use std::pin::Pin;
 use std::marker::Unpin;
 // TODO use parking_lot ?
 use std::sync::{Arc, Weak, Mutex};
+use std::future::Future;
+use std::task::{Poll, Waker, Context};
 // TODO use parking_lot ?
 use std::sync::atomic::{AtomicBool, Ordering};
-use futures_core::task::{Waker};
-use futures_core::Poll;
-use futures_core::future::Future;
 use discard::{Discard, DiscardOnDrop};
 
 
@@ -56,7 +55,7 @@ impl<A, B> Future for CancelableFuture<A, B>
     type Output = A::Output;
 
     // TODO should this inline ?
-    fn poll(self: Pin<&mut Self>, waker: &Waker) -> Poll<Self::Output> {
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
         unsafe_project!(self => {
             mut state,
             pin future,
@@ -72,10 +71,10 @@ impl<A, B> Future for CancelableFuture<A, B>
             Poll::Ready(callback())
 
         } else {
-            match future.as_pin_mut().unwrap().poll(waker) {
+            match future.as_pin_mut().unwrap().poll(cx) {
                 Poll::Pending => {
                     // TODO is this correct ?
-                    *state.waker.lock().unwrap() = Some(waker.clone());
+                    *state.waker.lock().unwrap() = Some(cx.waker().clone());
                     Poll::Pending
                 },
                 a => a,

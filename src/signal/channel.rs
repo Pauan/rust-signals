@@ -3,9 +3,7 @@ use std::pin::Pin;
 use std::marker::Unpin;
 // TODO use parking_lot ?
 use std::sync::{Arc, Weak, Mutex, MutexGuard};
-// TODO use parking_lot ?
-use futures_core::Poll;
-use futures_core::task::{Waker};
+use std::task::{Poll, Context, Waker};
 
 
 #[derive(Debug)]
@@ -72,7 +70,7 @@ impl<A> Signal for Receiver<A> {
     type Item = A;
 
     #[inline]
-    fn poll_change(self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         let mut inner = self.inner.lock().unwrap();
 
         // TODO is this correct ?
@@ -81,7 +79,7 @@ impl<A> Signal for Receiver<A> {
                 Poll::Ready(None)
 
             } else {
-                inner.waker = Some(waker.clone());
+                inner.waker = Some(cx.waker().clone());
                 Poll::Pending
             },
 

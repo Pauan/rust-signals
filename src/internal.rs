@@ -3,8 +3,7 @@ use std::pin::Pin;
 use std::marker::Unpin;
 // TODO use parking_lot ?
 use std::sync::{Arc, RwLock, Mutex, MutexGuard, RwLockReadGuard};
-use futures_core::Poll;
-use futures_core::task::Waker;
+use std::task::{Poll, Context};
 
 
 #[inline]
@@ -109,7 +108,7 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
     type Item = D;
 
     // TODO inline this ?
-    fn poll_change(self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         unsafe_project!(self => {
             pin signal1,
             pin signal2,
@@ -120,7 +119,7 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
 
         let mut changed = false;
 
-        let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
+        let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
             Some(Poll::Ready(None)) => {
                 signal1.set(None);
@@ -134,7 +133,7 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
             Some(Poll::Pending) => false,
         };
 
-        let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
+        let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
             Some(Poll::Ready(None)) => {
                 signal2.set(None);
@@ -197,7 +196,7 @@ impl<A, B> Signal for MapPairMut<A, B>
     type Item = PairMut<A::Item, B::Item>;
 
     // TODO inline this ?
-    fn poll_change(self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         unsafe_project!(self => {
             pin signal1,
             pin signal2,
@@ -212,7 +211,7 @@ impl<A, B> Signal for MapPairMut<A, B>
         // TODO is it okay to move this to just above right_done ?
         let mut borrow_right = inner.1.lock().unwrap();
 
-        let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
+        let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
             Some(Poll::Ready(None)) => {
                 signal1.set(None);
@@ -226,7 +225,7 @@ impl<A, B> Signal for MapPairMut<A, B>
             Some(Poll::Pending) => false,
         };
 
-        let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
+        let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
             Some(Poll::Ready(None)) => {
                 signal2.set(None);
@@ -286,7 +285,7 @@ impl<A, B> Signal for MapPair<A, B>
     type Item = Pair<A::Item, B::Item>;
 
     // TODO inline this ?
-    fn poll_change(self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         unsafe_project!(self => {
             pin signal1,
             pin signal2,
@@ -297,7 +296,7 @@ impl<A, B> Signal for MapPair<A, B>
 
         let mut borrow = inner.write().unwrap();
 
-        let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
+        let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
             Some(Poll::Ready(None)) => {
                 signal1.set(None);
@@ -311,7 +310,7 @@ impl<A, B> Signal for MapPair<A, B>
             Some(Poll::Pending) => false,
         };
 
-        let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(waker)) {
+        let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
             Some(Poll::Ready(None)) => {
                 signal2.set(None);

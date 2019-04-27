@@ -1,20 +1,19 @@
 use std::marker::Unpin;
+use std::sync::Arc;
+use std::pin::Pin;
+use std::task::{Poll, Context};
 use futures_signals::signal_vec::{VecDiff, SignalVec};
 use futures_signals::signal::Signal;
-use futures_core::Poll;
-use futures_core::task::{Waker};
 use futures_util::future::poll_fn;
 use futures_util::task::ArcWake;
 use futures_executor::block_on;
 use pin_utils::pin_mut;
-use std::sync::Arc;
-use std::pin::Pin;
 
 
 #[allow(dead_code)]
 pub struct ForEachSignal<A> where A: Signal {
     signal: A,
-    callbacks: Vec<Box<FnMut(&Waker, Poll<Option<A::Item>>)>>,
+    callbacks: Vec<Box<FnMut(&mut Context, Poll<Option<A::Item>>)>>,
 }
 
 #[allow(dead_code)]
@@ -26,7 +25,7 @@ impl<A> ForEachSignal<A> where A: Signal {
         }
     }
 
-    pub fn next<B>(mut self, callback: B) -> Self where B: FnMut(&Waker, Poll<Option<A::Item>>) + 'static {
+    pub fn next<B>(mut self, callback: B) -> Self where B: FnMut(&mut Context, Poll<Option<A::Item>>) + 'static {
         self.callbacks.insert(0, Box::new(callback));
         self
     }
@@ -35,24 +34,24 @@ impl<A> ForEachSignal<A> where A: Signal {
         let mut callbacks = self.callbacks;
         let mut signal = self.signal;
 
-        block_on(poll_fn(move |waker| -> Poll<()> {
+        block_on(poll_fn(move |cx| -> Poll<()> {
             loop {
                 return match callbacks.pop() {
                     Some(mut callback) => {
                         // TODO is this safe ?
-                        let poll = unsafe { Pin::new_unchecked(&mut signal) }.poll_change(waker);
+                        let poll = unsafe { Pin::new_unchecked(&mut signal) }.poll_change(cx);
 
                         match poll {
                             Poll::Ready(None) => {
-                                callback(waker, poll);
+                                callback(cx, poll);
                                 Poll::Ready(())
                             },
                             Poll::Ready(Some(_)) => {
-                                callback(waker, poll);
+                                callback(cx, poll);
                                 continue;
                             },
                             Poll::Pending => {
-                                callback(waker, poll);
+                                callback(cx, poll);
                                 Poll::Pending
                             },
                         }
@@ -69,34 +68,35 @@ impl<A> ForEachSignal<A> where A: Signal {
 
 
 #[allow(dead_code)]
-pub fn with_noop_waker<U, F: FnOnce(&Waker) -> U>(f: F) -> U {
+pub fn with_noop_context<U, F: FnOnce(&mut Context) -> U>(f: F) -> U {
     // borrowed this design from the futures source
     struct Noop;
 
     impl ArcWake for Noop {
-        fn wake(_: &Arc<Self>) {}
+        fn wake_by_ref(_: &Arc<Self>) {}
     }
 
     // TODO is this correct ?
     let waker = ArcWake::into_waker(Arc::new(Noop));
+    let context = &mut Context::from_waker(&waker);
 
-    f(&waker)
+    f(context)
 }
 
 
 #[allow(dead_code)]
-pub fn get_all_polls<A, B, F>(signal: A, mut initial: B, mut f: F) -> Vec<Poll<Option<A::Item>>> where A: Signal, F: FnMut(&B, &Waker) -> B {
+pub fn get_all_polls<A, B, F>(signal: A, mut initial: B, mut f: F) -> Vec<Poll<Option<A::Item>>> where A: Signal, F: FnMut(&B, &mut Context) -> B {
     let mut output = vec![];
 
     // TODO is this correct ?
     pin_mut!(signal);
 
-    block_on(poll_fn(|waker| {
+    block_on(poll_fn(|context| {
         loop {
-            initial = f(&initial, waker);
+            initial = f(&initial, context);
 
             // TODO is this correct ?
-            let x = Pin::as_mut(&mut signal).poll_change(waker);
+            let x = Pin::as_mut(&mut signal).poll_change(context);
 
             let x: Poll<()> = match x {
                 Poll::Ready(Some(_)) => {
@@ -128,10 +128,10 @@ pub fn map_poll_vec<A, B, C>(signal: A, mut callback: C) -> Vec<B> where A: Sign
     // TODO is this correct ?
     pin_mut!(signal);
 
-    block_on(poll_fn(|waker| {
+    block_on(poll_fn(|context| {
         loop {
             // TODO is this correct ?
-            let x = Pin::as_mut(&mut signal).poll_vec_change(waker);
+            let x = Pin::as_mut(&mut signal).poll_vec_change(context);
 
             return match x {
                 Poll::Ready(Some(_)) => {
@@ -182,11 +182,11 @@ impl<A> Source<A> {
         Self { changes }
     }
 
-    fn poll(&mut self, waker: &Waker) -> Poll<Option<A>> {
+    fn poll(&mut self, cx: &mut Context) -> Poll<Option<A>> {
         if self.changes.len() > 0 {
             match self.changes.remove(0) {
                 Poll::Pending => {
-                    waker.wake();
+                    cx.waker().wake_by_ref();
                     Poll::Pending
                 },
                 Poll::Ready(change) => Poll::Ready(Some(change)),
@@ -202,8 +202,8 @@ impl<A> Signal for Source<A> {
     type Item = A;
 
     #[inline]
-    fn poll_change(mut self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<Self::Item>> {
-        self.poll(waker)
+    fn poll_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        self.poll(cx)
     }
 }
 
@@ -211,7 +211,7 @@ impl<A> SignalVec for Source<VecDiff<A>> {
     type Item = A;
 
     #[inline]
-    fn poll_vec_change(mut self: Pin<&mut Self>, waker: &Waker) -> Poll<Option<VecDiff<Self::Item>>> {
-        self.poll(waker)
+    fn poll_vec_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
+        self.poll(cx)
     }
 }

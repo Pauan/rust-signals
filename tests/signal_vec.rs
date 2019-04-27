@@ -1,13 +1,11 @@
-#![feature(futures_api, arbitrary_self_types)]
-
 extern crate pin_utils;
 extern crate futures_core;
 extern crate futures_util;
 extern crate futures_executor;
 extern crate futures_signals;
 
+use std::task::Poll;
 use futures_signals::signal_vec::{MutableVec, SignalVecExt, VecDiff};
-use futures_core::Poll;
 
 mod util;
 
