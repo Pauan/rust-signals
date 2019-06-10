@@ -18,7 +18,7 @@ pub mod signal;
 pub mod signal_vec;
 
 mod future;
-pub use future::{cancelable_future, CancelableFutureHandle, CancelableFuture};
+pub use crate::future::{cancelable_future, CancelableFutureHandle, CancelableFuture};
 
 
 /// # Tutorial
