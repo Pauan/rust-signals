@@ -1,13 +1,5 @@
 #![recursion_limit="128"]
 
-extern crate pin_utils;
-extern crate futures_core;
-extern crate futures_executor;
-extern crate futures_util;
-
-#[macro_use]
-extern crate futures_signals;
-
 mod util;
 
 
@@ -18,6 +10,7 @@ macro_rules! map_tests {
         mod $name {
             use super::util;
             use std::task::Poll;
+            use futures_signals::$name;
             use futures_signals::signal::{SignalExt, always};
 
             #[test]

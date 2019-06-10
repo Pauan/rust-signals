@@ -31,6 +31,7 @@ pub fn unwrap_ref<A>(x: &Option<A>) -> &A {
 }
 
 
+// TODO make this an internal-only macro
 #[doc(hidden)]
 #[macro_export]
 macro_rules! unsafe_project {

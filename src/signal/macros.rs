@@ -5,7 +5,7 @@ macro_rules! __internal_map_mut_pairs {
         $crate::internal::MapPairMut::new($value1, $value2)
     };
     (let $name:pat = $value:expr; $($args:tt)+) => {
-        $crate::internal::MapPairMut::new($value, __internal_map_mut_pairs!($($args)+))
+        $crate::internal::MapPairMut::new($value, $crate::__internal_map_mut_pairs!($($args)+))
     };
 }
 
@@ -22,7 +22,7 @@ macro_rules! __internal_map_mut_borrows {
         }
     };
     ($f:expr, $r:ident, { $($lets:stmt)* }, let $name:pat = $value:expr; $($args:tt)+) => {
-        __internal_map_mut_borrows!(
+        $crate::__internal_map_mut_borrows!(
             $f,
             $r,
             {
@@ -61,8 +61,8 @@ macro_rules! __internal_map_mut {
     ) => {
         $crate::internal::Map2::new(
             $value1,
-            __internal_map_mut_pairs!(let $name2 = $value2; $($args)+),
-            $($move)* |$name1, r| __internal_map_mut_borrows!(
+            $crate::__internal_map_mut_pairs!(let $name2 = $value2; $($args)+),
+            $($move)* |$name1, r| $crate::__internal_map_mut_borrows!(
                 $f,
                 r,
                 {
@@ -105,7 +105,7 @@ macro_rules! __internal_map_mut {
 /// `map_ref`, so it's ***highly*** recommended to use `map_ref` instead.
 #[macro_export]
 macro_rules! map_mut {
-    ($($input:tt)*) => { __internal_map_split!(__internal_map_mut, (), $($input)*) };
+    ($($input:tt)*) => { $crate::__internal_map_split!(__internal_map_mut, (), $($input)*) };
 }
 
 
@@ -116,7 +116,7 @@ macro_rules! __internal_map_ref_pairs {
         $crate::internal::MapPair::new($value1, $value2)
     };
     (let $name:pat = $value:expr; $($args:tt)+) => {
-        $crate::internal::MapPair::new($value, __internal_map_ref_pairs!($($args)+))
+        $crate::internal::MapPair::new($value, $crate::__internal_map_ref_pairs!($($args)+))
     };
 }
 
@@ -131,7 +131,7 @@ macro_rules! __internal_map_ref_borrows {
         }
     };
     ($f:expr, $r:ident, { $($lets:stmt)* }, let $name:pat = $value:expr; $($args:tt)+) => {
-        __internal_map_ref_borrows!(
+        $crate::__internal_map_ref_borrows!(
             $f,
             $r,
             {
@@ -172,8 +172,8 @@ macro_rules! __internal_map_ref {
     ) => {
         $crate::internal::Map2::new(
             $value1,
-            __internal_map_ref_pairs!(let $name2 = $value2; $($args)+),
-            $($move)* |l, r| __internal_map_ref_borrows!(
+            $crate::__internal_map_ref_pairs!(let $name2 = $value2; $($args)+),
+            $($move)* |l, r| $crate::__internal_map_ref_borrows!(
                 $f,
                 r,
                 {
@@ -209,8 +209,7 @@ macro_rules! __internal_map_ref {
 /// The `map_ref` macro can be used to *combine* multiple `Signal`s together:
 ///
 /// ```rust
-/// # #[macro_use]
-/// # extern crate futures_signals;
+/// # use futures_signals::map_ref;
 /// # use futures_signals::signal::Mutable;
 /// # fn main() {
 /// #
@@ -281,8 +280,7 @@ macro_rules! __internal_map_ref {
 /// There is also a shorthand syntax:
 ///
 /// ```rust
-/// # #[macro_use]
-/// # extern crate futures_signals;
+/// # use futures_signals::map_ref;
 /// # use futures_signals::signal::always;
 /// # fn main() {
 /// # let signal1 = always(1);
@@ -295,8 +293,7 @@ macro_rules! __internal_map_ref {
 /// The above code is exactly the same as this:
 ///
 /// ```rust
-/// # #[macro_use]
-/// # extern crate futures_signals;
+/// # use futures_signals::map_ref;
 /// # use futures_signals::signal::always;
 /// # fn main() {
 /// # let signal1 = always(1);
@@ -316,8 +313,7 @@ macro_rules! __internal_map_ref {
 /// In addition, it's possible to use pattern matching with the longer syntax:
 ///
 /// ```rust
-/// # #[macro_use]
-/// # extern crate futures_signals;
+/// # use futures_signals::map_ref;
 /// # use futures_signals::signal::always;
 /// # fn main() {
 /// # struct SomeStruct { foo: u32 }
@@ -336,8 +332,7 @@ macro_rules! __internal_map_ref {
 /// It's also possible to combine more than two Signals:
 ///
 /// ```rust
-/// # #[macro_use]
-/// # extern crate futures_signals;
+/// # use futures_signals::map_ref;
 /// # use futures_signals::signal::Mutable;
 /// # fn main() {
 /// # let mutable1 = Mutable::new(1);
@@ -379,8 +374,7 @@ macro_rules! __internal_map_ref {
 /// when you need to:
 ///
 /// ```rust
-/// # #[macro_use]
-/// # extern crate futures_signals;
+/// # use futures_signals::map_ref;
 /// # use futures_signals::signal::Mutable;
 /// # fn main() {
 /// # let mutable1 = Mutable::new(1);
@@ -410,7 +404,7 @@ macro_rules! __internal_map_ref {
 /// Signals.
 #[macro_export]
 macro_rules! map_ref {
-    ($($input:tt)*) => { __internal_map_split!(__internal_map_ref, (), $($input)*) };
+    ($($input:tt)*) => { $crate::__internal_map_split!(__internal_map_ref, (), $($input)*) };
 }
 
 
@@ -418,13 +412,13 @@ macro_rules! map_ref {
 #[macro_export]
 macro_rules! __internal_map_lets {
     ($macro:ident, ($($move:tt)*), $f:expr, { $($lets:tt)* },) => {
-        $macro!(($($move)*), $f, $($lets)*)
+        $crate::$macro!(($($move)*), $f, $($lets)*)
     };
     ($macro:ident, ($($move:tt)*), $f:expr, { $($lets:tt)* }, let $name:pat = $value:expr, $($args:tt)*) => {
-        __internal_map_lets!($macro, ($($move)*), $f, { $($lets)* let $name = $value; }, $($args)*)
+        $crate::__internal_map_lets!($macro, ($($move)*), $f, { $($lets)* let $name = $value; }, $($args)*)
     };
     ($macro:ident, ($($move:tt)*), $f:expr, { $($lets:tt)* }, $name:ident, $($args:tt)*) => {
-        __internal_map_lets!($macro, ($($move)*), $f, { $($lets)* let $name = $name; }, $($args)*)
+        $crate::__internal_map_lets!($macro, ($($move)*), $f, { $($lets)* let $name = $name; }, $($args)*)
     };
 }
 
@@ -433,12 +427,12 @@ macro_rules! __internal_map_lets {
 #[macro_export]
 macro_rules! __internal_map_split {
     ($macro:ident, ($($before:tt)*), => move $f:expr) => {
-        __internal_map_lets!($macro, (move), $f, {}, $($before)*,)
+        $crate::__internal_map_lets!($macro, (move), $f, {}, $($before)*,)
     };
     ($macro:ident, ($($before:tt)*), => $f:expr) => {
-        __internal_map_lets!($macro, (), $f, {}, $($before)*,)
+        $crate::__internal_map_lets!($macro, (), $f, {}, $($before)*,)
     };
     ($macro:ident, ($($before:tt)*), $t:tt $($after:tt)*) => {
-        __internal_map_split!($macro, ($($before)* $t), $($after)*)
+        $crate::__internal_map_split!($macro, ($($before)* $t), $($after)*)
     };
 }

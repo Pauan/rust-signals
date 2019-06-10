@@ -6,13 +6,6 @@
 ///! It is *very highly* recommended to read the tutorial.
 ///! It explains all of the concepts you will need to use Signals effectively.
 
-extern crate discard;
-extern crate serde;
-
-extern crate futures_channel;
-extern crate futures_core;
-extern crate futures_util;
-
 #[cfg(test)]
 extern crate futures_executor;
 
@@ -23,8 +16,6 @@ pub mod internal;
 
 pub mod signal;
 pub mod signal_vec;
-
-mod macros;
 
 mod future;
 pub use future::{cancelable_future, CancelableFutureHandle, CancelableFuture};
@@ -76,8 +67,6 @@ pub use future::{cancelable_future, CancelableFutureHandle, CancelableFuture};
 /// efficiently notified whenever the `Mutable` changes:
 ///
 /// ```rust
-/// # extern crate futures_signals;
-/// # extern crate futures;
 /// # use futures_signals::signal::Mutable;
 /// # let my_state = Mutable::new(10);
 /// #
@@ -224,9 +213,6 @@ pub use future::{cancelable_future, CancelableFutureHandle, CancelableFuture};
 /// methods, and most of them return a `Signal` so they can be chained:
 ///
 /// ```rust
-/// # extern crate futures_core;
-/// # extern crate futures_util;
-/// # extern crate futures_signals;
 /// # use futures_signals::signal::Mutable;
 /// # use futures_signals::signal::SignalExt;
 /// # use futures_util::future::{ready, Ready};
@@ -302,8 +288,6 @@ pub use future::{cancelable_future, CancelableFutureHandle, CancelableFuture};
 /// `for_each` method to be efficiently notified when it changes:
 ///
 /// ```rust
-/// # extern crate futures_signals;
-/// # extern crate futures;
 /// # use futures_signals::signal_vec::MutableVec;
 /// # let my_vec: MutableVec<u32> = MutableVec::new();
 /// #
@@ -419,8 +403,6 @@ pub use future::{cancelable_future, CancelableFutureHandle, CancelableFuture};
 /// `SignalVec`:
 ///
 /// ```rust
-/// # extern crate futures_signals;
-/// # extern crate futures;
 /// # use futures_signals::signal_vec::MutableVec;
 /// # let my_vec: MutableVec<u32> = MutableVec::new();
 /// # use futures_signals::signal_vec::{SignalVecExt, VecDiff};

@@ -9,6 +9,7 @@ readme = "README.md"
 license = "MIT"
 keywords = ["signal", "reactive", "frp", "futures"]
 categories = ["asynchronous"]
+edition = "2018"
 
 [dependencies]
 futures-core-preview = "0.3.0-alpha.15"

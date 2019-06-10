@@ -1,9 +1,3 @@
-extern crate pin_utils;
-extern crate futures_core;
-extern crate futures_util;
-extern crate futures_executor;
-extern crate futures_signals;
-
 use std::rc::Rc;
 use std::cell::Cell;
 use std::task::Poll;

@@ -1,10 +1,4 @@
-extern crate pin_utils;
-extern crate futures_core;
-extern crate futures_util;
-extern crate futures_executor;
-#[macro_use]
-extern crate futures_signals;
-
+use futures_signals::map_ref;
 use futures_signals::signal::{SignalExt, Mutable, Broadcaster};
 use std::task::Poll;
 

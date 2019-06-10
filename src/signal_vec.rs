@@ -8,7 +8,8 @@ use std::task::{Poll, Context};
 use futures_core::Stream;
 use futures_util::stream;
 use futures_util::stream::StreamExt;
-use signal::{Signal, Mutable, ReadOnlyMutable};
+
+use crate::signal::{Signal, Mutable, ReadOnlyMutable};
 
 
 #[derive(Debug, Clone, PartialEq, Eq)]

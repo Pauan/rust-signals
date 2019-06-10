@@ -1,4 +1,3 @@
-use internal::Map2;
 use std::pin::Pin;
 use std::marker::Unpin;
 use std::future::Future;
@@ -6,7 +5,9 @@ use std::task::{Context, Poll};
 use futures_core::stream::Stream;
 use futures_util::stream;
 use futures_util::stream::StreamExt;
-use signal_vec::{VecDiff, SignalVec};
+
+use crate::internal::Map2;
+use crate::signal_vec::{VecDiff, SignalVec};
 
 
 // TODO impl for AssertUnwindSafe ?
@@ -241,9 +242,6 @@ pub trait SignalExt: Signal {
     /// Call an asynchronous network API whenever the input changes:
     ///
     /// ```rust
-    /// # extern crate futures_core;
-    /// # extern crate futures_util;
-    /// # extern crate futures_signals;
     /// # use futures_signals::signal::{always, SignalExt};
     /// # use futures_util::future::{ready, Ready};
     /// # fn call_network_api(value: u32) -> Ready<()> { ready(()) }
