@@ -15,29 +15,29 @@ macro_rules! map_tests {
 
             #[test]
             fn send_sync() {
-                let _: Box<Send + Sync> = Box::new($name! {
+                let _: Box<dyn Send + Sync> = Box::new($name! {
                     let _a = always(1) => ()
                 });
 
-                let _: Box<Send + Sync> = Box::new($name! {
+                let _: Box<dyn Send + Sync> = Box::new($name! {
                     let _a = always(1),
                     let _b = always(2) => ()
                 });
 
-                let _: Box<Send + Sync> = Box::new($name! {
+                let _: Box<dyn Send + Sync> = Box::new($name! {
                     let _a = always(1),
                     let _b = always(2),
                     let _c = always(3) => ()
                 });
 
-                let _: Box<Send + Sync> = Box::new($name! {
+                let _: Box<dyn Send + Sync> = Box::new($name! {
                     let _a = always(1),
                     let _b = always(2),
                     let _c = always(3),
                     let _d = always(4) => ()
                 });
 
-                let _: Box<Send + Sync> = Box::new($name! {
+                let _: Box<dyn Send + Sync> = Box::new($name! {
                     let _a = always(1),
                     let _b = always(2),
                     let _c = always(3),

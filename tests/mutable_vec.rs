@@ -1,0 +1,185 @@
+use std::task::Poll;
+use std::cmp::{PartialOrd, Ordering};
+use futures_signals::signal_vec::{VecDiff, MutableVec, MutableVecLockMut};
+
+mod util;
+
+
+fn is_eq<F>(input: Vec<u32>, output: Vec<u32>, f: F, polls: Vec<Poll<Option<VecDiff<u32>>>>) where F: FnOnce(&mut MutableVecLockMut<u32>) + Send {
+    let v = MutableVec::new_with_values(input);
+
+    let mut end = None;
+
+    assert_eq!(util::get_signal_vec_polls(v.signal_vec(), || {
+        {
+            let mut v = v.lock_mut();
+            f(&mut v);
+            end = Some(v.to_vec());
+        }
+        drop(v);
+    }), polls);
+
+    assert_eq!(end.unwrap(), output);
+}
+
+
+#[test]
+fn test_push() {
+    is_eq(vec![], vec![5, 10, 2], |v| {
+        v.push(5);
+        v.push(10);
+        v.push(2);
+    }, vec![
+        Poll::Ready(Some(VecDiff::Push { value: 5 })),
+        Poll::Ready(Some(VecDiff::Push { value: 10 })),
+        Poll::Ready(Some(VecDiff::Push { value: 2 })),
+        Poll::Ready(None),
+    ]);
+}
+
+
+#[test]
+fn test_move_from_to() {
+    is_eq(vec![5, 10, 15], vec![5, 10, 15], |v| v.move_from_to(0, 0), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![5, 10, 15], vec![10, 5, 15], |v| v.move_from_to(0, 1), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 0, new_index: 1 } )),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![5, 10, 15], vec![10, 5, 15], |v| v.move_from_to(1, 0), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 1, new_index: 0 } )),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![5, 10, 15], vec![10, 15, 5], |v| v.move_from_to(0, 2), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 0, new_index: 2 } )),
+        Poll::Ready(None),
+    ]);
+}
+
+
+#[test]
+fn test_swap() {
+    is_eq(vec![5, 10], vec![10, 5], |v| v.swap(0, 1), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 0, new_index: 1 } )),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![5, 10, 15], vec![10, 5, 15], |v| v.swap(0, 1), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 0, new_index: 1 } )),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![5, 10, 15], vec![15, 10, 5], |v| v.swap(0, 2), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 0, new_index: 2 } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 1, new_index: 0 } )),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![5, 10, 15], vec![5, 15, 10], |v| v.swap(1, 2), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 1, new_index: 2 } )),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![5, 10, 15], vec![5, 15, 10], |v| v.swap(2, 1), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 2, new_index: 1 } )),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![5, 10, 15], vec![15, 10, 5], |v| v.swap(2, 0), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 2, new_index: 0 } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 1, new_index: 2 } )),
+        Poll::Ready(None),
+    ]);
+}
+
+
+#[test]
+fn test_reverse() {
+    is_eq(vec![], vec![], |v| v.reverse(), vec![
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![1], vec![1], |v| v.reverse(), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![1] } )),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![1, 2], vec![2, 1], |v| v.reverse(), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![1, 2] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 1, new_index: 0 } )),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![1, 2, 3], vec![3, 2, 1], |v| v.reverse(), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![1, 2, 3] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 2, new_index: 0 } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 2, new_index: 1 } )),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![1, 2, 3, 4], vec![4, 3, 2, 1], |v| v.reverse(), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![1, 2, 3, 4] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 3, new_index: 0 } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 3, new_index: 1 } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 3, new_index: 2 } )),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![1, 2, 3, 4, 5], vec![5, 4, 3, 2, 1], |v| v.reverse(), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![1, 2, 3, 4, 5] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 4, new_index: 0 } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 4, new_index: 1 } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 4, new_index: 2 } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 4, new_index: 3 } )),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![1, 2, 3, 4, 5, 6], vec![6, 5, 4, 3, 2, 1], |v| v.reverse(), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![1, 2, 3, 4, 5, 6] } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 5, new_index: 0 } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 5, new_index: 1 } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 5, new_index: 2 } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 5, new_index: 3 } )),
+        Poll::Ready(Some(VecDiff::Move { old_index: 5, new_index: 4 } )),
+        Poll::Ready(None),
+    ]);
+}
+
+
+#[test]
+fn test_eq() {
+    let a = MutableVec::new_with_values(vec![1, 2, 3, 4, 5]);
+    let b = MutableVec::new_with_values(vec![1, 2, 3, 4, 5]);
+
+    assert_eq!(a.lock_ref(), b.lock_ref());
+    assert_eq!(*a.lock_ref(), *b.lock_ref());
+    assert_eq!(a.lock_ref(), vec![1, 2, 3, 4, 5].as_slice());
+}
+
+
+#[test]
+fn test_ord() {
+    let a = MutableVec::new_with_values(vec![1, 2, 3, 4, 5]);
+    let b = MutableVec::new_with_values(vec![1, 2, 3, 4, 5]);
+
+    let b = b.lock_ref();
+
+    {
+        assert_eq!(a.lock_ref().partial_cmp(&b), Some(Ordering::Equal));
+        assert_eq!(a.lock_ref().cmp(&b), Ordering::Equal);
+    }
+}

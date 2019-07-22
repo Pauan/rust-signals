@@ -96,16 +96,16 @@ fn test_mutable_drop() {
 #[test]
 fn test_send_sync() {
     let a = cancelable_future(ready(()), || ());
-    let _: Box<Send + Sync> = Box::new(a.0);
-    let _: Box<Send + Sync> = Box::new(a.1);
+    let _: Box<dyn Send + Sync> = Box::new(a.0);
+    let _: Box<dyn Send + Sync> = Box::new(a.1);
 
-    let _: Box<Send + Sync> = Box::new(Mutable::new(1));
-    let _: Box<Send + Sync> = Box::new(Mutable::new(1).signal());
-    let _: Box<Send + Sync> = Box::new(Mutable::new(1).signal_cloned());
+    let _: Box<dyn Send + Sync> = Box::new(Mutable::new(1));
+    let _: Box<dyn Send + Sync> = Box::new(Mutable::new(1).signal());
+    let _: Box<dyn Send + Sync> = Box::new(Mutable::new(1).signal_cloned());
 
     let a = channel(1);
-    let _: Box<Send + Sync> = Box::new(a.0);
-    let _: Box<Send + Sync> = Box::new(a.1);
+    let _: Box<dyn Send + Sync> = Box::new(a.0);
+    let _: Box<dyn Send + Sync> = Box::new(a.1);
 }
 
 

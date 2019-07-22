@@ -1957,9 +1957,11 @@ mod mutable_vec {
         }
 
         fn move_from_to(&mut self, old_index: usize, new_index: usize) {
-            let value = self.values.remove(old_index);
-            self.values.insert(new_index, value);
-            self.notify(|| VecDiff::Move { old_index, new_index });
+            if old_index != new_index {
+                let value = self.values.remove(old_index);
+                self.values.insert(new_index, value);
+                self.notify(|| VecDiff::Move { old_index, new_index });
+            }
         }
 
         fn clear(&mut self) {
@@ -2152,7 +2154,6 @@ mod mutable_vec {
                 }
             }
 
-            // TODO verify that the lifetimes are correct
             impl<'a, A> PartialOrd for $t where A: PartialOrd {
                 #[inline]
                 fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
@@ -2160,7 +2161,6 @@ mod mutable_vec {
                 }
             }
 
-            // TODO verify that the lifetimes are correct
             impl<'a, A> Ord for $t where A: Ord {
                 #[inline]
                 fn cmp(&self, other: &Self) -> Ordering {
@@ -2250,8 +2250,14 @@ mod mutable_vec {
         }
 
         pub fn swap(&mut self, a: usize, b: usize) {
-            self.move_from_to(a, b);
-            self.move_from_to(b - 1, a);
+            if a < b {
+                self.move_from_to(a, b);
+                self.move_from_to(b - 1, a);
+
+            } else if a > b {
+                self.move_from_to(a, b);
+                self.move_from_to(b + 1, a);
+            }
         }
 
         #[inline]
@@ -2259,16 +2265,17 @@ mod mutable_vec {
             self.lock.retain(f)
         }
 
-        // Code copied from the Rust stdlib:
-        // https://doc.rust-lang.org/nightly/std/primitive.slice.html#method.reverse
         pub fn reverse(&mut self) {
-            let mut i: usize = 0;
-            let ln = self.len();
+            let len = self.len();
 
-            while i < ln / 2 {
-                // TODO make this more efficient ?
-                self.swap(i, ln - i - 1);
-                i += 1;
+            if len > 1 {
+                let end = len - 1;
+                let mut i = 0;
+
+                while i < end {
+                    self.move_from_to(end, i);
+                    i += 1;
+                }
             }
         }
 
@@ -2343,6 +2350,7 @@ mod mutable_vec {
 
     impl<A> MutableVec<A> {
         // TODO deprecate this and replace with From ?
+        // TODO deprecate this and replace with with_values ?
         #[inline]
         pub fn new_with_values(values: Vec<A>) -> Self {
             MutableVec(Arc::new(RwLock::new(MutableVecState {
