@@ -1870,7 +1870,11 @@ mod mutable_vec {
     use std::pin::Pin;
     use std::marker::Unpin;
     use std::fmt;
-    use std::ops::Deref;
+    use std::ops::{Deref, Index};
+    use std::slice::SliceIndex;
+    use std::borrow::Borrow;
+    use std::cmp::{Ord, Ordering};
+    use std::hash::{Hash, Hasher};
     use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
     use std::task::{Poll, Context};
     use futures_channel::mpsc;
@@ -2114,21 +2118,111 @@ mod mutable_vec {
     }
 
 
+    // TODO PartialEq with arrays
+    macro_rules! make_shared {
+        ($t:ty, $r:ty) => {
+            impl<'a, A> $t {
+                #[inline]
+                pub fn as_slice(&self) -> &[A] {
+                    self
+                }
+
+                #[inline]
+                pub fn capacity(&self) -> usize {
+                    self.lock.values.capacity()
+                }
+            }
+
+            impl<'a, 'b, A, B> PartialEq<&'b [B]> for $t where A: PartialEq<B> {
+                #[inline] fn eq(&self, other: &&'b [B]) -> bool { self[..] == other[..] }
+                #[inline] fn ne(&self, other: &&'b [B]) -> bool { self[..] != other[..] }
+            }
+
+            impl<'a, 'b, A, B> PartialEq<$r> for $t where A: PartialEq<B> {
+                #[inline] fn eq(&self, other: &$r) -> bool { self[..] == other[..] }
+                #[inline] fn ne(&self, other: &$r) -> bool { self[..] != other[..] }
+            }
+
+            impl<'a, A> Eq for $t where A: Eq {}
+
+            impl<'a, A> Borrow<[A]> for $t {
+                #[inline]
+                fn borrow(&self) -> &[A] {
+                    &self[..]
+                }
+            }
+
+            // TODO verify that the lifetimes are correct
+            impl<'a, A> PartialOrd for $t where A: PartialOrd {
+                #[inline]
+                fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                    PartialOrd::partial_cmp(&**self, &**other)
+                }
+            }
+
+            // TODO verify that the lifetimes are correct
+            impl<'a, A> Ord for $t where A: Ord {
+                #[inline]
+                fn cmp(&self, other: &Self) -> Ordering {
+                    Ord::cmp(&**self, &**other)
+                }
+            }
+
+            impl<'a, A, I> Index<I> for $t where I: SliceIndex<[A]> {
+                type Output = I::Output;
+
+                #[inline]
+                fn index(&self, index: I) -> &Self::Output {
+                    Index::index(&**self, index)
+                }
+            }
+
+            impl<'a, A> Deref for $t {
+                type Target = [A];
+
+                #[inline]
+                fn deref(&self) -> &Self::Target {
+                    &self.lock.values
+                }
+            }
+
+            impl<'a, A> Hash for $t where A: Hash {
+                #[inline]
+                fn hash<H>(&self, state: &mut H) where H: Hasher {
+                    Hash::hash(&**self, state)
+                }
+            }
+
+            impl<'a, A> AsRef<$t> for $t {
+                #[inline]
+                fn as_ref(&self) -> &$t {
+                    self
+                }
+            }
+
+            impl<'a, A> AsRef<[A]> for $t {
+                #[inline]
+                fn as_ref(&self) -> &[A] {
+                    self
+                }
+            }
+        };
+    }
+
+
     #[derive(Debug)]
     pub struct MutableVecLockRef<'a, A> where A: 'a {
         lock: RwLockReadGuard<'a, MutableVecState<A>>,
     }
 
-    impl<'a, A> Deref for MutableVecLockRef<'a, A> {
-        type Target = [A];
-
-        #[inline]
-        fn deref(&self) -> &Self::Target {
-            &self.lock.values
-        }
-    }
+    make_shared!(MutableVecLockRef<'a, A>, MutableVecLockRef<'b, B>);
 
 
+    // TODO rotate_left, rotate_right, sort, sort_by, sort_by_cached_key, sort_by_key,
+    //      sort_unstable, sort_unstable_by, sort_unstable_by_key, dedup, dedup_by,
+    //      dedup_by_key, drain, extend_from_slice, resize, resize_with, splice,
+    //      split_off, swap_remove, truncate
+    // TODO Extend
     #[derive(Debug)]
     pub struct MutableVecLockMut<'a, A> where A: 'a {
         lock: RwLockWriteGuard<'a, MutableVecState<A>>,
@@ -2155,9 +2249,42 @@ mod mutable_vec {
             self.lock.move_from_to(old_index, new_index);
         }
 
+        pub fn swap(&mut self, a: usize, b: usize) {
+            self.move_from_to(a, b);
+            self.move_from_to(b - 1, a);
+        }
+
         #[inline]
         pub fn retain<F>(&mut self, f: F) where F: FnMut(&A) -> bool {
             self.lock.retain(f)
+        }
+
+        // Code copied from the Rust stdlib:
+        // https://doc.rust-lang.org/nightly/std/primitive.slice.html#method.reverse
+        pub fn reverse(&mut self) {
+            let mut i: usize = 0;
+            let ln = self.len();
+
+            while i < ln / 2 {
+                // TODO make this more efficient ?
+                self.swap(i, ln - i - 1);
+                i += 1;
+            }
+        }
+
+        #[inline]
+        pub fn reserve(&mut self, additional: usize) {
+            self.lock.values.reserve(additional)
+        }
+
+        #[inline]
+        pub fn reserve_exact(&mut self, additional: usize) {
+            self.lock.values.reserve_exact(additional)
+        }
+
+        #[inline]
+        pub fn shrink_to_fit(&mut self) {
+            self.lock.values.shrink_to_fit()
         }
     }
 
@@ -2207,20 +2334,15 @@ mod mutable_vec {
         }
     }
 
-    impl<'a, A> Deref for MutableVecLockMut<'a, A> {
-        type Target = [A];
-
-        #[inline]
-        fn deref(&self) -> &Self::Target {
-            &self.lock.values
-        }
-    }
+    make_shared!(MutableVecLockMut<'a, A>, MutableVecLockMut<'b, B>);
 
 
     // TODO get rid of the Arc
+    // TODO impl some of the same traits as Vec
     pub struct MutableVec<A>(Arc<RwLock<MutableVecState<A>>>);
 
     impl<A> MutableVec<A> {
+        // TODO deprecate this and replace with From ?
         #[inline]
         pub fn new_with_values(values: Vec<A>) -> Self {
             MutableVec(Arc::new(RwLock::new(MutableVecState {
@@ -2232,6 +2354,11 @@ mod mutable_vec {
         #[inline]
         pub fn new() -> Self {
             Self::new_with_values(vec![])
+        }
+
+        #[inline]
+        pub fn with_capacity(capacity: usize) -> Self {
+            Self::new_with_values(Vec::with_capacity(capacity))
         }
 
         // TODO return Result ?
