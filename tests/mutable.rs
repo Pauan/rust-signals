@@ -8,58 +8,37 @@ mod util;
 #[test]
 fn test_lock_mut() {
     {
-        let mut mutable = Some(Mutable::new(1));
+        let m = Mutable::new(1);
 
-        let polls = util::get_all_polls(mutable.as_ref().unwrap().signal(), 0, move |state, _cx| {
-            match *state {
-                0 => {},
-                _ => {
-                    {
-                        let mut lock = mutable.as_ref().unwrap().lock_mut();
+        let polls = util::get_signal_polls(m.signal(), move || {
+            let mut lock = m.lock_mut();
 
-                        if *lock == 2 {
-                            *lock = 5;
-                        }
-                    }
-
-                    mutable.take();
-                },
+            if *lock == 2 {
+                *lock = 5;
             }
-
-            state + 1
         });
 
         assert_eq!(polls, vec![
             Poll::Ready(Some(1)),
+            Poll::Pending,
             Poll::Ready(None),
         ]);
     }
 
     {
-        let mut mutable = Some(Mutable::new(1));
+        let m = Mutable::new(1);
 
-        let polls = util::get_all_polls(mutable.as_ref().unwrap().signal(), 0, move |state, _cx| {
-            match *state {
-                0 => {},
-                1 => {
-                    {
-                        let mut lock = mutable.as_ref().unwrap().lock_mut();
+        let polls = util::get_signal_polls(m.signal(), move || {
+            let mut lock = m.lock_mut();
 
-                        if *lock == 1 {
-                            *lock = 5;
-                        }
-                    }
-
-                    mutable.take();
-                },
-                _ => {},
+            if *lock == 1 {
+                *lock = 5;
             }
-
-            state + 1
         });
 
         assert_eq!(polls, vec![
             Poll::Ready(Some(1)),
+            Poll::Pending,
             Poll::Ready(Some(5)),
             Poll::Ready(None),
         ]);

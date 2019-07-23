@@ -89,33 +89,41 @@ pub fn with_noop_context<U, F: FnOnce(&mut Context) -> U>(f: F) -> U {
 #[allow(dead_code)]
 pub fn delay() {
     // TODO is it guaranteed that this will yield to other threads ?
-    sleep(Duration::from_millis(1));
+    sleep(Duration::from_millis(10));
 }
 
 
-fn get_polls<A, F>(mut f: F) -> Vec<Poll<Option<A>>> where F: FnMut(&mut Context) -> Poll<Option<A>> {
-    delay();
+fn get_polls<A, F, P>(f: F, mut p: P) -> Vec<Poll<Option<A>>>
+    where F: FnOnce(),
+          P: FnMut(&mut Context) -> Poll<Option<A>> {
 
+    let mut f = Some(f);
     let mut output = vec![];
 
     block_on(poll_fn(|cx| {
         loop {
-            let x = f(cx);
+            let x = p(cx);
 
-            return match x {
+            let poll = match x {
                 Poll::Ready(Some(_)) => {
                     output.push(x);
                     continue;
                 },
                 Poll::Ready(None) => {
-                    output.push(x);
                     Poll::Ready(())
                 },
                 Poll::Pending => {
-                    output.push(x);
                     Poll::Pending
                 },
             };
+
+            output.push(x);
+
+            if let Some(f) = f.take() {
+                f();
+            }
+
+            return poll;
         }
     }));
 
@@ -125,38 +133,21 @@ fn get_polls<A, F>(mut f: F) -> Vec<Poll<Option<A>>> where F: FnMut(&mut Context
 
 #[allow(dead_code)]
 pub fn get_signal_polls<A, F>(signal: A, f: F) -> Vec<Poll<Option<A::Item>>>
-    where A: Signal + Send,
-          A::Item: Send,
-          F: FnOnce() + Send {
-    let (_, output) = rayon::join(
-        f,
-        move || {
-            pin_mut!(signal);
-            // TODO is the as_mut correct ?
-            get_polls(move |cx| Pin::as_mut(&mut signal).poll_change(cx))
-        },
-    );
-
-    output
+    where A: Signal,
+          F: FnOnce() {
+    pin_mut!(signal);
+    // TODO is the as_mut correct ?
+    get_polls(f, |cx| Pin::as_mut(&mut signal).poll_change(cx))
 }
 
 
 #[allow(dead_code)]
 pub fn get_signal_vec_polls<A, F>(signal: A, f: F) -> Vec<Poll<Option<VecDiff<A::Item>>>>
-    where A: SignalVec + Send,
-          A::Item: Send,
-          F: FnOnce() + Send {
-
-    let (_, output) = rayon::join(
-        f,
-        move || {
-            pin_mut!(signal);
-            // TODO is the as_mut correct ?
-            get_polls(move |cx| Pin::as_mut(&mut signal).poll_vec_change(cx))
-        },
-    );
-
-    output
+    where A: SignalVec,
+          F: FnOnce() {
+    pin_mut!(signal);
+    // TODO is the as_mut correct ?
+    get_polls(f, |cx| Pin::as_mut(&mut signal).poll_vec_change(cx))
 }
 
 
