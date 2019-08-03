@@ -16,8 +16,7 @@ futures-core-preview = "0.3.0-alpha.15"
 futures-channel-preview = "0.3.0-alpha.15"
 futures-util-preview = "0.3.0-alpha.15"
 discard = "1.0.3"
-# TODO make this optional
-serde = "1.0.27"
+serde = { version = "1.0.98", optional = true }
 
 [dev-dependencies]
 futures-preview = "0.3.0-alpha.15"
