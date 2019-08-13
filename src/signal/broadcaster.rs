@@ -4,7 +4,7 @@ use std::marker::Unpin;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Poll, Waker, Context};
-use futures_util::task::ArcWake;
+use futures_util::task::{self, ArcWake};
 
 
 #[derive(Debug)]
@@ -98,7 +98,7 @@ impl<A> BroadcasterInnerState<A> where A: Signal {
     // to wake in the future if it is in Pending state.
     fn poll_underlying(&mut self, notifier: Arc<BroadcasterNotifier>) {
         // TODO is this the best way to do this ?
-        let waker = ArcWake::into_waker(notifier);
+        let waker = task::waker(notifier);
         let cx = &mut Context::from_waker(&waker);
 
         loop {
