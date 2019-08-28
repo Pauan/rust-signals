@@ -1879,7 +1879,6 @@ mod mutable_vec {
     use std::task::{Poll, Context};
     use futures_channel::mpsc;
     use futures_util::stream::StreamExt;
-    #[cfg(feature = "serde")]
     use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 
@@ -2411,7 +2410,6 @@ mod mutable_vec {
         }
     }
 
-    #[cfg(feature = "serde")]
     impl<T> Serialize for MutableVec<T> where T: Serialize {
         #[inline]
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
@@ -2419,7 +2417,6 @@ mod mutable_vec {
         }
     }
 
-    #[cfg(feature = "serde")]
     impl<'de, T> Deserialize<'de> for MutableVec<T> where T: Deserialize<'de> {
         #[inline]
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {

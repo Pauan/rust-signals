@@ -9,7 +9,6 @@ use std::sync::{Arc, Weak, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 // TODO use parking_lot ?
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Poll, Waker, Context};
-#[cfg(feature = "serde")]
 use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 
@@ -309,7 +308,6 @@ impl<A> fmt::Debug for Mutable<A> where A: fmt::Debug {
     }
 }
 
-#[cfg(feature = "serde")]
 impl<T> Serialize for Mutable<T> where T: Serialize {
     #[inline]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
@@ -317,7 +315,6 @@ impl<T> Serialize for Mutable<T> where T: Serialize {
     }
 }
 
-#[cfg(feature = "serde")]
 impl<'de, T> Deserialize<'de> for Mutable<T> where T: Deserialize<'de> {
     #[inline]
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
