@@ -12,14 +12,14 @@ categories = ["asynchronous"]
 edition = "2018"
 
 [dependencies]
-futures-core-preview = "0.3.0-alpha.15"
-futures-channel-preview = "0.3.0-alpha.15"
-futures-util-preview = "0.3.0-alpha.15"
+futures-core-preview = "0.3.0-alpha.18"
+futures-channel-preview = "0.3.0-alpha.18"
+futures-util-preview = "0.3.0-alpha.18"
 discard = "1.0.3"
 # TODO make this optional
 serde = "1.0.27"
 
 [dev-dependencies]
-futures-preview = "0.3.0-alpha.15"
-futures-executor-preview = "0.3.0-alpha.15"
+futures-preview = "0.3.0-alpha.18"
+futures-executor-preview = "0.3.0-alpha.18"
 pin-utils = "0.1.0-alpha.3"

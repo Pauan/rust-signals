@@ -7,7 +7,7 @@ use std::task::{Poll, Context};
 use futures_signals::signal_vec::{VecDiff, SignalVec};
 use futures_signals::signal::Signal;
 use futures_util::future::poll_fn;
-use futures_util::task::ArcWake;
+use futures_util::task::{waker, ArcWake};
 use futures_executor::block_on;
 use pin_utils::pin_mut;
 
@@ -79,7 +79,7 @@ pub fn with_noop_context<U, F: FnOnce(&mut Context) -> U>(f: F) -> U {
     }
 
     // TODO is this correct ?
-    let waker = ArcWake::into_waker(Arc::new(Noop));
+    let waker = waker(Arc::new(Noop));
     let context = &mut Context::from_waker(&waker);
 
     f(context)
