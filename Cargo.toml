@@ -1,6 +1,6 @@
 [package]
 name = "futures-signals"
-version = "0.3.8"
+version = "0.3.9"
 authors = ["Pauan <pcxunlimited@gmail.com>"]
 description = "Zero cost FRP signals using the futures crate"
 repository = "https://github.com/Pauan/rust-signals"
@@ -12,14 +12,14 @@ categories = ["asynchronous"]
 edition = "2018"
 
 [dependencies]
-futures-core-preview = "0.3.0-alpha.18"
-futures-channel-preview = "0.3.0-alpha.18"
-futures-util-preview = "0.3.0-alpha.18"
+futures-core = "0.3.0"
+futures-channel = "0.3.0"
+futures-util = "0.3.0"
 discard = "1.0.3"
 # TODO make this optional
 serde = "1.0.27"
 
 [dev-dependencies]
-futures-preview = "0.3.0-alpha.18"
-futures-executor-preview = "0.3.0-alpha.18"
+futures = "0.3.0"
+futures-executor = "0.3.0"
 pin-utils = "0.1.0-alpha.3"
