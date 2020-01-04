@@ -8,7 +8,7 @@ homepage = "https://github.com/Pauan/rust-signals"
 readme = "README.md"
 license = "MIT"
 keywords = ["signal", "reactive", "frp", "futures"]
-categories = ["asynchronous"]
+categories = ["asynchronous", "concurrency", "data-structures"]
 edition = "2018"
 
 [dependencies]
