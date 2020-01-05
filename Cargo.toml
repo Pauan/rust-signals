@@ -1,6 +1,6 @@
 [package]
 name = "futures-signals"
-version = "0.3.9"
+version = "0.3.10"
 authors = ["Pauan <pcxunlimited@gmail.com>"]
 description = "Zero cost FRP signals using the futures crate"
 repository = "https://github.com/Pauan/rust-signals"
@@ -16,7 +16,8 @@ futures-core = "0.3.0"
 futures-channel = "0.3.0"
 futures-util = "0.3.0"
 discard = "1.0.3"
-serde = { version = "1.0.98", optional = true }
+# TODO make this optional
+serde = "1.0.98"
 
 [dev-dependencies]
 futures = "0.3.0"
