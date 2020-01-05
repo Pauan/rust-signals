@@ -172,6 +172,7 @@ fn to_signal_map() {
 
     let output = input.to_signal_map(|x| x.into_iter().copied().collect::<Vec<u32>>());
 
+    // TODO include the Pending in the output
     util::assert_signal_eq(output, vec![
         Poll::Ready(Some(vec![])),
         Poll::Ready(Some(vec![0, 1, 2, 3, 4, 5])),
@@ -183,4 +184,46 @@ fn to_signal_map() {
         Poll::Ready(Some(vec![])),
         Poll::Ready(None),
     ]);
+}
+
+
+#[test]
+fn to_signal_cloned() {
+    let input = util::Source::new(vec![
+        Poll::Pending,
+        Poll::Ready(VecDiff::Replace { values: vec![0, 1, 2, 3, 4, 5] }),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(VecDiff::InsertAt { index: 0, value: 6 }),
+        Poll::Ready(VecDiff::InsertAt { index: 2, value: 7 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::RemoveAt { index: 0 }),
+        Poll::Ready(VecDiff::UpdateAt { index: 4, value: 0 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::Move { old_index: 1, new_index: 3 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::RemoveAt { index: 1 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::Clear {}),
+    ]);
+
+    let output = input.to_signal_cloned();
+
+    util::assert_signal_eq(output, vec![
+        Poll::Ready(Some(vec![])),
+        Poll::Ready(Some(vec![0, 1, 2, 3, 4, 5])),
+        Poll::Pending,
+        Poll::Ready(Some(vec![6, 0, 7, 1, 2, 3, 4, 5])),
+        Poll::Ready(Some(vec![0, 7, 1, 2, 0, 4, 5])),
+        Poll::Ready(Some(vec![0, 1, 2, 7, 0, 4, 5])),
+        Poll::Ready(Some(vec![0, 2, 7, 0, 4, 5])),
+        Poll::Ready(Some(vec![])),
+        Poll::Ready(None),
+    ]);
+}
+
+#[test]
+fn debug_to_signal_cloned() {
+    let input: util::Source<VecDiff<u32>> = util::Source::new(vec![]);
+    assert_eq!(format!("{:?}", input.to_signal_cloned()), "ToSignalCloned { ... }");
 }

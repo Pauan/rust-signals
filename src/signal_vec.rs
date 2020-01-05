@@ -197,6 +197,15 @@ pub trait SignalVecExt: SignalVec {
         }
     }
 
+    #[inline]
+    fn to_signal_cloned(self) -> ToSignalCloned<Self>
+        where Self::Item: Clone,
+              Self: Sized {
+        ToSignalCloned {
+            signal: self.to_signal_map(|x| x.to_vec()),
+        }
+    }
+
     /// Creates a `SignalVec` which uses a closure to determine if a value should be included or not.
     ///
     /// When the output `SignalVec` is spawned:
@@ -493,6 +502,33 @@ impl<A, B, F> SignalVec for Map<A, F>
 }
 
 
+#[must_use = "Signals do nothing unless polled"]
+pub struct ToSignalCloned<A> where A: SignalVec {
+    signal: ToSignalMap<A, fn(&[A::Item]) -> Vec<A::Item>>,
+}
+
+impl<A> std::fmt::Debug for ToSignalCloned<A> where A: SignalVec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ToSignalCloned { ... }")
+    }
+}
+
+impl<A> Unpin for ToSignalCloned<A> where A: SignalVec + Unpin {}
+
+impl<A> Signal for ToSignalCloned<A>
+    where A: SignalVec {
+    type Item = Vec<A::Item>;
+
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal,
+        });
+
+        signal.poll_change(cx)
+    }
+}
+
+
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
 pub struct ToSignalMap<A, B> where A: SignalVec {
@@ -507,8 +543,7 @@ impl<A, B> Unpin for ToSignalMap<A, B> where A: SignalVec + Unpin {}
 
 impl<A, B, F> Signal for ToSignalMap<A, F>
     where A: SignalVec,
-          F: FnMut(&[A::Item]) -> B,
-          A::Item: std::fmt::Debug {
+          F: FnMut(&[A::Item]) -> B {
     type Item = B;
 
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
