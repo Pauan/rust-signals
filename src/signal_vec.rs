@@ -185,6 +185,27 @@ pub trait SignalVecExt: SignalVec {
         }
     }
 
+    #[inline]
+    fn to_signal_map<A, F>(self, callback: F) -> ToSignalMap<Self, F>
+        where F: FnMut(&[Self::Item]) -> A,
+              Self: Sized {
+        ToSignalMap {
+            signal: Some(self),
+            first: true,
+            values: vec![],
+            callback,
+        }
+    }
+
+    #[inline]
+    fn to_signal_cloned(self) -> ToSignalCloned<Self>
+        where Self::Item: Clone,
+              Self: Sized {
+        ToSignalCloned {
+            signal: self.to_signal_map(|x| x.to_vec()),
+        }
+    }
+
     /// Creates a `SignalVec` which uses a closure to determine if a value should be included or not.
     ///
     /// When the output `SignalVec` is spawned:
@@ -244,6 +265,7 @@ pub trait SignalVecExt: SignalVec {
         }
     }
 
+    // TODO replace with to_signal_map ?
     #[inline]
     fn sum(self) -> SumSignal<Self>
         where Self::Item: for<'a> Sum<&'a Self::Item>,
@@ -362,6 +384,7 @@ pub trait SignalVecExt: SignalVec {
         }
     }
 
+    // TODO replace with to_signal_map ?
     #[inline]
     fn len(self) -> Len<Self> where Self: Sized {
         Len {
@@ -475,6 +498,132 @@ impl<A, B, F> SignalVec for Map<A, F>
         });
 
         signal.poll_vec_change(cx).map(|some| some.map(|change| change.map(|value| callback(value))))
+    }
+}
+
+
+#[must_use = "Signals do nothing unless polled"]
+pub struct ToSignalCloned<A> where A: SignalVec {
+    signal: ToSignalMap<A, fn(&[A::Item]) -> Vec<A::Item>>,
+}
+
+impl<A> std::fmt::Debug for ToSignalCloned<A> where A: SignalVec {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("ToSignalCloned { ... }")
+    }
+}
+
+impl<A> Unpin for ToSignalCloned<A> where A: SignalVec + Unpin {}
+
+impl<A> Signal for ToSignalCloned<A>
+    where A: SignalVec {
+    type Item = Vec<A::Item>;
+
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal,
+        });
+
+        signal.poll_change(cx)
+    }
+}
+
+
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct ToSignalMap<A, B> where A: SignalVec {
+    signal: Option<A>,
+    // This is needed because a Signal must always have a value, even if the SignalVec is empty
+    first: bool,
+    values: Vec<A::Item>,
+    callback: B,
+}
+
+impl<A, B> Unpin for ToSignalMap<A, B> where A: SignalVec + Unpin {}
+
+impl<A, B, F> Signal for ToSignalMap<A, F>
+    where A: SignalVec,
+          F: FnMut(&[A::Item]) -> B {
+    type Item = B;
+
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        unsafe_project!(self => {
+            pin signal,
+            mut first,
+            mut values,
+            mut callback,
+        });
+
+        let mut changed = false;
+
+        let done = loop {
+            break match signal.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(cx)) {
+                None => {
+                    true
+                },
+                Some(Poll::Ready(None)) => {
+                    signal.set(None);
+                    true
+                },
+                Some(Poll::Ready(Some(change))) => {
+                    match change {
+                        VecDiff::Replace { values: new_values } => {
+                            // TODO only set changed if the values are different ?
+                            *values = new_values;
+                        },
+
+                        VecDiff::InsertAt { index, value } => {
+                            values.insert(index, value);
+                        },
+
+                        VecDiff::UpdateAt { index, value } => {
+                            // TODO only set changed if the value is different ?
+                            values[index] = value;
+                        },
+
+                        VecDiff::RemoveAt { index } => {
+                            values.remove(index);
+                        },
+
+                        VecDiff::Move { old_index, new_index } => {
+                            let old = values.remove(old_index);
+                            values.insert(new_index, old);
+                        },
+
+                        VecDiff::Push { value } => {
+                            values.push(value);
+                        },
+
+                        VecDiff::Pop {} => {
+                            values.pop().unwrap();
+                        },
+
+                        VecDiff::Clear {} => {
+                            // TODO only set changed if the len is different ?
+                            values.clear();
+                        },
+                    }
+
+                    changed = true;
+
+                    continue;
+                },
+                Some(Poll::Pending) => {
+                    false
+                },
+            };
+        };
+
+        if changed || *first {
+            *first = false;
+            Poll::Ready(Some(callback(&values)))
+
+        } else if done {
+            Poll::Ready(None)
+
+        } else {
+            Poll::Pending
+        }
     }
 }
 
@@ -1316,18 +1465,22 @@ impl<A> Signal for SumSignal<A>
                 Some(Poll::Ready(Some(change))) => {
                     match change {
                         VecDiff::Replace { values: new_values } => {
+                            // TODO only mark changed if the values are different
                             *values = new_values;
                         },
 
                         VecDiff::InsertAt { index, value } => {
+                            // TODO only mark changed if the value isn't 0
                             values.insert(index, value);
                         },
 
                         VecDiff::Push { value } => {
+                            // TODO only mark changed if the value isn't 0
                             values.push(value);
                         },
 
                         VecDiff::UpdateAt { index, value } => {
+                            // TODO only mark changed if the value is different
                             values[index] = value;
                         },
 
@@ -1339,14 +1492,17 @@ impl<A> Signal for SumSignal<A>
                         },
 
                         VecDiff::RemoveAt { index } => {
+                            // TODO only mark changed if the value isn't 0
                             values.remove(index);
                         },
 
                         VecDiff::Pop {} => {
+                            // TODO only mark changed if the value isn't 0
                             values.pop().unwrap();
                         },
 
                         VecDiff::Clear {} => {
+                            // TODO only mark changed if the len is different
                             values.clear();
                         },
                     }
@@ -1879,6 +2035,7 @@ mod mutable_vec {
     use std::task::{Poll, Context};
     use futures_channel::mpsc;
     use futures_util::stream::StreamExt;
+    #[cfg(feature = "serde")]
     use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 
@@ -2410,6 +2567,7 @@ mod mutable_vec {
         }
     }
 
+    #[cfg(feature = "serde")]
     impl<T> Serialize for MutableVec<T> where T: Serialize {
         #[inline]
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
@@ -2417,6 +2575,7 @@ mod mutable_vec {
         }
     }
 
+    #[cfg(feature = "serde")]
     impl<'de, T> Deserialize<'de> for MutableVec<T> where T: Deserialize<'de> {
         #[inline]
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {

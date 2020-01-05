@@ -227,9 +227,9 @@ pub fn assert_signal_eq<A, S>(signal: S, expected: Vec<Poll<Option<A>>>)
           S: Signal<Item = A> {
 
     assert_eq!(
-        expected,
         // TODO a little gross
-        get_all_polls(signal, (), |_, _| {})
+        get_all_polls(signal, (), |_, _| {}),
+        expected,
     );
 }
 

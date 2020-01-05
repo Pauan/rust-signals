@@ -8,7 +8,7 @@ homepage = "https://github.com/Pauan/rust-signals"
 readme = "README.md"
 license = "MIT"
 keywords = ["signal", "reactive", "frp", "futures"]
-categories = ["asynchronous"]
+categories = ["asynchronous", "concurrency", "data-structures"]
 edition = "2018"
 
 [dependencies]
@@ -16,8 +16,7 @@ futures-core = "0.3.0"
 futures-channel = "0.3.0"
 futures-util = "0.3.0"
 discard = "1.0.3"
-# TODO make this optional
-serde = "1.0.27"
+serde = { version = "1.0.98", optional = true }
 
 [dev-dependencies]
 futures = "0.3.0"
