@@ -374,6 +374,20 @@ pub trait SignalExt: Signal {
     }
 
     #[inline]
+    fn switch_signal_vec<A, F>(self, callback: F) -> SwitchSignalVec<Self, A, F>
+        where A: SignalVec,
+              F: FnMut(Self::Item) -> A,
+              Self: Sized {
+        SwitchSignalVec {
+            signal: Some(self),
+            signal_vec: None,
+            callback,
+            is_empty: true,
+            pending: None,
+        }
+    }
+
+    #[inline]
     // TODO file Rust bug about bad error message when `callback` isn't marked as `mut`
     fn for_each<U, F>(self, callback: F) -> ForEach<Self, U, F>
         where U: Future<Output = ()>,
@@ -1124,6 +1138,145 @@ impl<A> Signal for Flatten<A>
 
         } else {
             Poll::Pending
+        }
+    }
+}
+
+
+#[derive(Debug)]
+#[must_use = "SignalVecs do nothing unless polled"]
+pub struct SwitchSignalVec<A, B, C> where B: SignalVec {
+    signal: Option<A>,
+    signal_vec: Option<B>,
+    callback: C,
+    is_empty: bool,
+    pending: Option<VecDiff<B::Item>>,
+}
+
+impl<A, B, C> Unpin for SwitchSignalVec<A, B, C> where A: Unpin, B: Unpin + SignalVec {}
+
+impl<A, B, C> SignalVec for SwitchSignalVec<A, B, C>
+    where A: Signal,
+          B: SignalVec,
+          C: FnMut(A::Item) -> B {
+    type Item = B::Item;
+
+    fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
+        unsafe_project!(self => {
+            pin signal,
+            pin signal_vec,
+            mut callback,
+            mut is_empty,
+            mut pending,
+        });
+
+        match pending.take() {
+            Some(value) => Poll::Ready(Some(value)),
+            None => {
+                let mut signal_value = None;
+
+                // TODO is this loop a good idea ?
+                let signal_done = loop {
+                    break match signal.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
+                        None => {
+                            Poll::Ready(None)
+                        },
+                        Some(Poll::Pending) => {
+                            Poll::Pending
+                        },
+                        Some(Poll::Ready(None)) => {
+                            signal.set(None);
+                            Poll::Ready(None)
+                        },
+                        Some(Poll::Ready(Some(value))) => {
+                            signal_value = Some(value);
+                            continue;
+                        },
+                    }
+                };
+
+                fn done<A>(is_empty: &mut bool, signal_done: Poll<Option<VecDiff<A>>>) -> Poll<Option<VecDiff<A>>> {
+                    if *is_empty {
+                        signal_done
+
+                    } else {
+                        *is_empty = true;
+                        Poll::Ready(Some(VecDiff::Replace { values: vec![] }))
+                    }
+                }
+
+                fn replace<A>(is_empty: &mut bool, values: Vec<A>) -> Poll<Option<VecDiff<A>>> {
+                    let new_is_empty = values.is_empty();
+
+                    if *is_empty && new_is_empty {
+                        Poll::Pending
+
+                    } else {
+                        *is_empty = new_is_empty;
+                        Poll::Ready(Some(VecDiff::Replace { values }))
+                    }
+                }
+
+                if let Some(value) = signal_value {
+                    signal_vec.set(Some(callback(value)));
+
+                    match signal_vec.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(cx)) {
+                        None => {
+                            done(is_empty, signal_done)
+                        },
+
+                        Some(Poll::Pending) => {
+                            done(is_empty, Poll::Pending)
+                        },
+
+                        Some(Poll::Ready(None)) => {
+                            signal_vec.set(None);
+                            done(is_empty, signal_done)
+                        },
+
+                        Some(Poll::Ready(Some(VecDiff::Replace { values }))) => {
+                            replace(is_empty, values)
+                        },
+
+                        Some(Poll::Ready(Some(vec_diff))) => {
+                            if *is_empty {
+                                *is_empty = false;
+                                Poll::Ready(Some(vec_diff))
+
+                            } else {
+                                *pending = Some(vec_diff);
+                                *is_empty = true;
+                                Poll::Ready(Some(VecDiff::Replace { values: vec![] }))
+                            }
+                        },
+                    }
+
+                } else {
+                    match signal_vec.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(cx)) {
+                        None => {
+                            signal_done
+                        },
+
+                        Some(Poll::Pending) => {
+                            Poll::Pending
+                        },
+
+                        Some(Poll::Ready(None)) => {
+                            signal_vec.set(None);
+                            signal_done
+                        },
+
+                        Some(Poll::Ready(Some(VecDiff::Replace { values }))) => {
+                            replace(is_empty, values)
+                        },
+
+                        Some(Poll::Ready(Some(vec_diff))) => {
+                            *is_empty = false;
+                            Poll::Ready(Some(vec_diff))
+                        },
+                    }
+                }
+            },
         }
     }
 }

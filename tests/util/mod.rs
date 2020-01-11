@@ -233,6 +233,20 @@ pub fn assert_signal_eq<A, S>(signal: S, expected: Vec<Poll<Option<A>>>)
     );
 }
 
+#[allow(dead_code)]
+pub fn assert_signal_vec_eq<A, S>(signal: S, expected: Vec<Poll<Option<VecDiff<A>>>>)
+    where A: std::fmt::Debug + PartialEq,
+          S: SignalVec<Item = A> {
+
+    let actual = map_poll_vec(signal, |_output, change| change);
+
+    assert_eq!(
+        actual,
+        expected,
+    );
+}
+
+
 
 #[allow(dead_code)]
 #[must_use = "Source does nothing unless polled"]
