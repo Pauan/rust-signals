@@ -315,6 +315,26 @@ pub trait SignalVecExt: SignalVec {
     /// However, this heap allocates each individual value, so it should only be done when the cost of cloning
     /// is expensive. You should benchmark and profile so you know which one is faster for *your* particular program!
     ///
+    /// # Requirements
+    ///
+    /// It is invalid for the sort order to dynamically change. If dynamic sorting is needed, you can use
+    /// [`map_signal`](#method.map_signal):
+    ///
+    /// ```rust
+    /// # use futures_signals::{signal, signal_vec};
+    /// # use futures_signals::signal_vec::SignalVecExt;
+    /// # let input = signal_vec::always(vec![3, 1, 6, 2, 0, 4, 5, 8, 9, 7]);
+    /// # fn returns_a_signal(x: u32) -> impl signal::Signal<Item = u32> { signal::always(x) }
+    /// let sorted = input
+    ///     .map_signal(|x| {
+    ///         returns_a_signal(x)
+    ///     })
+    ///     .sort_by_cloned(|x, y| {
+    ///         // ...
+    ///         # std::cmp::Ordering::Equal
+    ///     });
+    /// ```
+    ///
     /// # Examples
     ///
     /// Sort using the standard [`Ord`](https://doc.rust-lang.org/std/cmp/trait.Ord.html) implementation:
@@ -2035,7 +2055,6 @@ mod mutable_vec {
     use std::task::{Poll, Context};
     use futures_channel::mpsc;
     use futures_util::stream::StreamExt;
-    #[cfg(feature = "serde")]
     use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 
@@ -2567,7 +2586,6 @@ mod mutable_vec {
         }
     }
 
-    #[cfg(feature = "serde")]
     impl<T> Serialize for MutableVec<T> where T: Serialize {
         #[inline]
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
@@ -2575,7 +2593,6 @@ mod mutable_vec {
         }
     }
 
-    #[cfg(feature = "serde")]
     impl<'de, T> Deserialize<'de> for MutableVec<T> where T: Deserialize<'de> {
         #[inline]
         fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
