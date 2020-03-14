@@ -12,6 +12,7 @@ use futures_util::stream::StreamExt;
 use crate::signal::{Signal, Mutable, ReadOnlyMutable};
 
 
+// TODO make this non-exhaustive
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum VecDiff<A> {
     Replace {
@@ -70,6 +71,36 @@ impl<A> VecDiff<A> {
             VecDiff::Move { old_index, new_index } => VecDiff::Move { old_index, new_index },
             VecDiff::Pop {} => VecDiff::Pop {},
             VecDiff::Clear {} => VecDiff::Clear {},
+        }
+    }
+
+    pub fn apply_to_vec(self, vec: &mut Vec<A>) {
+        match self {
+            VecDiff::Replace { values } => {
+                *vec = values;
+            },
+            VecDiff::InsertAt { index, value } => {
+                vec.insert(index, value);
+            },
+            VecDiff::UpdateAt { index, value } => {
+                vec[index] = value;
+            },
+            VecDiff::Push { value } => {
+                vec.push(value);
+            },
+            VecDiff::RemoveAt { index } => {
+                vec.remove(index);
+            },
+            VecDiff::Move { old_index, new_index } => {
+                let value = vec.remove(old_index);
+                vec.insert(new_index, value);
+            },
+            VecDiff::Pop {} => {
+                vec.pop().unwrap();
+            },
+            VecDiff::Clear {} => {
+                vec.clear();
+            },
         }
     }
 }
