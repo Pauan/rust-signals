@@ -425,6 +425,15 @@ mod mutable_btree_map {
         }
 
         #[inline]
+        pub fn signal_vec_keys(&self) -> MutableBTreeMapKeys<K, V> {
+            MutableBTreeMapKeys {
+                signal: self.signal_map_cloned(),
+                keys: vec![],
+            }
+        }
+
+        // TODO deprecate and rename to signal_vec_entries
+        #[inline]
         pub fn entries_cloned(&self) -> MutableBTreeMapEntries<K, V> {
             MutableBTreeMapEntries {
                 signal: self.signal_map_cloned(),
@@ -480,6 +489,54 @@ mod mutable_btree_map {
         #[inline]
         fn poll_map_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
             self.receiver.poll_next_unpin(cx)
+        }
+    }
+
+
+    #[derive(Debug)]
+    #[must_use = "SignalVecs do nothing unless polled"]
+    pub struct MutableBTreeMapKeys<K, V> {
+        signal: MutableSignalMap<K, V>,
+        keys: Vec<K>,
+    }
+
+    impl<K, V> Unpin for MutableBTreeMapKeys<K, V> {}
+
+    impl<K, V> SignalVec for MutableBTreeMapKeys<K, V> where K: Ord + Clone {
+        type Item = K;
+
+        #[inline]
+        fn poll_vec_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
+            loop {
+                return match self.signal.poll_map_change_unpin(cx) {
+                    Poll::Ready(Some(diff)) => match diff {
+                        MapDiff::Replace { entries } => {
+                            // TODO verify that it is in sorted order ?
+                            self.keys = entries.into_iter().map(|(k, _)| k).collect();
+                            Poll::Ready(Some(VecDiff::Replace { values: self.keys.clone() }))
+                        },
+                        MapDiff::Insert { key, value: _ } => {
+                            let index = self.keys.binary_search(&key).unwrap_err();
+                            self.keys.insert(index, key.clone());
+                            Poll::Ready(Some(VecDiff::InsertAt { index, value: key }))
+                        },
+                        MapDiff::Update { .. } => {
+                            continue;
+                        },
+                        MapDiff::Remove { key } => {
+                            let index = self.keys.binary_search(&key).unwrap();
+                            self.keys.remove(index);
+                            Poll::Ready(Some(VecDiff::RemoveAt { index }))
+                        },
+                        MapDiff::Clear {} => {
+                            self.keys.clear();
+                            Poll::Ready(Some(VecDiff::Clear {}))
+                        },
+                    },
+                    Poll::Ready(None) => Poll::Ready(None),
+                    Poll::Pending => Poll::Pending,
+                };
+            }
         }
     }
 
