@@ -148,6 +148,7 @@ impl<A> SignalVec for Pin<A>
 }
 
 
+// TODO Seal this
 pub trait SignalVecExt: SignalVec {
     /// Creates a `SignalVec` which uses a closure to transform the values.
     ///

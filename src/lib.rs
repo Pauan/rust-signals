@@ -16,6 +16,7 @@ pub mod internal;
 
 pub mod signal;
 pub mod signal_vec;
+pub mod signal_map;
 
 mod future;
 pub use crate::future::{cancelable_future, CancelableFutureHandle, CancelableFuture};

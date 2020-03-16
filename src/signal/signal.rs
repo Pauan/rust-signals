@@ -52,6 +52,7 @@ impl<A> Signal for Pin<A>
 }
 
 
+// TODO Seal this
 pub trait SignalExt: Signal {
     /// Creates a `Stream` which contains the values of `self`.
     ///

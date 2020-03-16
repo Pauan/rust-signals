@@ -1,0 +1,532 @@
+use std::pin::Pin;
+use std::marker::Unpin;
+use std::task::{Poll, Context};
+
+
+// TODO make this non-exhaustive
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MapDiff<K, V> {
+    Replace {
+        entries: Vec<(K, V)>,
+    },
+
+    Insert {
+        key: K,
+        value: V,
+    },
+
+    Update {
+        key: K,
+        value: V,
+    },
+
+    Remove {
+        key: K,
+    },
+
+    Clear {},
+}
+
+impl<K, A> MapDiff<K, A> {
+    // TODO inline this ?
+    fn map<B, F>(self, mut callback: F) -> MapDiff<K, B> where F: FnMut(A) -> B {
+        match self {
+            // TODO figure out a more efficient way of implementing this
+            MapDiff::Replace { entries } => MapDiff::Replace { entries: entries.into_iter().map(|(k, v)| (k, callback(v))).collect() },
+            MapDiff::Insert { key, value } => MapDiff::Insert { key, value: callback(value) },
+            MapDiff::Update { key, value } => MapDiff::Update { key, value: callback(value) },
+            MapDiff::Remove { key } => MapDiff::Remove { key },
+            MapDiff::Clear {} => MapDiff::Clear {},
+        }
+    }
+}
+
+
+// TODO impl for AssertUnwindSafe ?
+#[must_use = "SignalMaps do nothing unless polled"]
+pub trait SignalMap {
+    type Key;
+    type Value;
+
+    fn poll_map_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>>;
+}
+
+
+// Copied from Future in the Rust stdlib
+impl<'a, A> SignalMap for &'a mut A where A: ?Sized + SignalMap + Unpin {
+    type Key = A::Key;
+    type Value = A::Value;
+
+    #[inline]
+    fn poll_map_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
+        A::poll_map_change(Pin::new(&mut **self), cx)
+    }
+}
+
+// Copied from Future in the Rust stdlib
+impl<A> SignalMap for Box<A> where A: ?Sized + SignalMap + Unpin {
+    type Key = A::Key;
+    type Value = A::Value;
+
+    #[inline]
+    fn poll_map_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
+        A::poll_map_change(Pin::new(&mut *self), cx)
+    }
+}
+
+// Copied from Future in the Rust stdlib
+impl<A> SignalMap for Pin<A>
+    where A: Unpin + ::std::ops::DerefMut,
+          A::Target: SignalMap {
+    type Key = <<A as ::std::ops::Deref>::Target as SignalMap>::Key;
+    type Value = <<A as ::std::ops::Deref>::Target as SignalMap>::Value;
+
+    #[inline]
+    fn poll_map_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
+        Pin::get_mut(self).as_mut().poll_map_change(cx)
+    }
+}
+
+
+// TODO Seal this
+pub trait SignalMapExt: SignalMap {
+    #[inline]
+    fn map_value<A, F>(self, callback: F) -> MapValue<Self, F>
+        where F: FnMut(Self::Value) -> A,
+              Self: Sized {
+        MapValue {
+            signal: self,
+            callback,
+        }
+    }
+
+    /// A convenience for calling `SignalMap::poll_map_change` on `Unpin` types.
+    #[inline]
+    fn poll_map_change_unpin(&mut self, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> where Self: Unpin + Sized {
+        Pin::new(self).poll_map_change(cx)
+    }
+}
+
+// TODO why is this ?Sized
+impl<T: ?Sized> SignalMapExt for T where T: SignalMap {}
+
+
+#[derive(Debug)]
+#[must_use = "SignalMaps do nothing unless polled"]
+pub struct MapValue<A, B> {
+    signal: A,
+    callback: B,
+}
+
+impl<A, B> Unpin for MapValue<A, B> where A: Unpin {}
+
+impl<A, B, F> SignalMap for MapValue<A, F>
+    where A: SignalMap,
+          F: FnMut(A::Value) -> B {
+    type Key = A::Key;
+    type Value = B;
+
+    // TODO should this inline ?
+    #[inline]
+    fn poll_map_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
+        unsafe_project!(self => {
+            pin signal,
+            mut callback,
+        });
+
+        signal.poll_map_change(cx).map(|some| some.map(|change| change.map(|value| callback(value))))
+    }
+}
+
+
+// TODO verify that this is correct
+mod mutable_btree_map {
+    use super::{SignalMap, SignalMapExt, MapDiff};
+    use std::pin::Pin;
+    use std::marker::Unpin;
+    use std::fmt;
+    use std::ops::{Deref, Index};
+    use std::cmp::{Ord, Ordering};
+    use std::hash::{Hash, Hasher};
+    use std::collections::BTreeMap;
+    use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+    use std::task::{Poll, Context};
+    use futures_channel::mpsc;
+    use futures_util::stream::StreamExt;
+    use serde::{Serialize, Deserialize, Serializer, Deserializer};
+    use crate::signal_vec::{SignalVec, VecDiff};
+
+
+    #[derive(Debug)]
+    struct MutableBTreeState<K, V> {
+        values: BTreeMap<K, V>,
+        senders: Vec<mpsc::UnboundedSender<MapDiff<K, V>>>,
+    }
+
+    impl<K: Ord, V> MutableBTreeState<K, V> {
+        // TODO should this inline ?
+        #[inline]
+        fn notify<B: FnMut() -> MapDiff<K, V>>(&mut self, mut change: B) {
+            self.senders.retain(|sender| {
+                sender.unbounded_send(change()).is_ok()
+            });
+        }
+
+        // If there is only 1 sender then it won't clone at all.
+        // If there is more than 1 sender then it will clone N-1 times.
+        // TODO verify that this works correctly
+        #[inline]
+        fn notify_clone<A, F>(&mut self, value: Option<A>, mut f: F) where A: Clone, F: FnMut(A) -> MapDiff<K, V> {
+            if let Some(value) = value {
+                let mut len = self.senders.len();
+
+                if len > 0 {
+                    let mut copy = Some(value);
+
+                    self.senders.retain(move |sender| {
+                        let value = copy.take().unwrap();
+
+                        len -= 1;
+
+                        // This isn't the last element
+                        if len != 0 {
+                            copy = Some(value.clone());
+                        }
+
+                        sender.unbounded_send(f(value)).is_ok()
+                    });
+                }
+            }
+        }
+
+        #[inline]
+        fn change<A, F>(&self, f: F) -> Option<A> where F: FnOnce() -> A {
+            if self.senders.is_empty() {
+                None
+
+            } else {
+                Some(f())
+            }
+        }
+
+        fn clear(&mut self) {
+            if !self.values.is_empty() {
+                self.values.clear();
+
+                self.notify(|| MapDiff::Clear {});
+            }
+        }
+    }
+
+    impl<K: Ord + Clone, V> MutableBTreeState<K, V> {
+        fn remove(&mut self, key: &K) -> Option<V> {
+            let value = self.values.remove(key)?;
+
+            let key = self.change(|| key.clone());
+            self.notify_clone(key, |key| MapDiff::Remove { key });
+
+            Some(value)
+        }
+    }
+
+    impl<K: Clone + Ord, V: Clone> MutableBTreeState<K, V> {
+        fn entries(values: &BTreeMap<K, V>) -> Vec<(K, V)> {
+            values.into_iter().map(|(k, v)| {
+                (k.clone(), v.clone())
+            }).collect()
+        }
+
+        fn replace_cloned(&mut self, values: BTreeMap<K, V>) {
+            let entries = self.change(|| Self::entries(&values));
+
+            self.values = values;
+
+            self.notify_clone(entries, |entries| MapDiff::Replace { entries });
+        }
+
+        fn insert_cloned(&mut self, key: K, value: V) -> Option<V> {
+            let x = self.change(|| (key.clone(), value.clone()));
+
+            if let Some(value) = self.values.insert(key, value) {
+                self.notify_clone(x, |(key, value)| MapDiff::Update { key, value });
+                Some(value)
+
+            } else {
+                self.notify_clone(x, |(key, value)| MapDiff::Insert { key, value });
+                None
+            }
+        }
+
+        fn signal_map_cloned(&mut self) -> MutableSignalMap<K, V> {
+            let (sender, receiver) = mpsc::unbounded();
+
+            if !self.values.is_empty() {
+                sender.unbounded_send(MapDiff::Replace {
+                    entries: Self::entries(&self.values),
+                }).unwrap();
+            }
+
+            self.senders.push(sender);
+
+            MutableSignalMap {
+                receiver
+            }
+        }
+    }
+
+
+    macro_rules! make_shared {
+        ($t:ty) => {
+            impl<'a, K, V> PartialEq<BTreeMap<K, V>> for $t where K: PartialEq<K>, V: PartialEq<V> {
+                #[inline] fn eq(&self, other: &BTreeMap<K, V>) -> bool { **self == *other }
+                #[inline] fn ne(&self, other: &BTreeMap<K, V>) -> bool { **self != *other }
+            }
+
+            impl<'a, K, V> PartialEq<$t> for $t where K: PartialEq<K>, V: PartialEq<V> {
+                #[inline] fn eq(&self, other: &$t) -> bool { *self == **other }
+                #[inline] fn ne(&self, other: &$t) -> bool { *self != **other }
+            }
+
+            impl<'a, K, V> Eq for $t where K: Eq, V: Eq {}
+
+            impl<'a, K, V> PartialOrd<BTreeMap<K, V>> for $t where K: PartialOrd<K>, V: PartialOrd<V> {
+                #[inline]
+                fn partial_cmp(&self, other: &BTreeMap<K, V>) -> Option<Ordering> {
+                    PartialOrd::partial_cmp(&**self, &*other)
+                }
+            }
+
+            impl<'a, K, V> PartialOrd<$t> for $t where K: PartialOrd<K>, V: PartialOrd<V> {
+                #[inline]
+                fn partial_cmp(&self, other: &Self) -> Option<Ordering> {
+                    PartialOrd::partial_cmp(&**self, &**other)
+                }
+            }
+
+            impl<'a, K, V> Ord for $t where K: Ord, V: Ord {
+                #[inline]
+                fn cmp(&self, other: &Self) -> Ordering {
+                    Ord::cmp(&**self, &**other)
+                }
+            }
+
+            impl<'a, 'b, K, V> Index<&'b K> for $t where K: Ord {
+                type Output = V;
+
+                #[inline]
+                fn index(&self, key: &'b K) -> &Self::Output {
+                    Index::index(&**self, key)
+                }
+            }
+
+            impl<'a, K, V> Deref for $t {
+                type Target = BTreeMap<K, V>;
+
+                #[inline]
+                fn deref(&self) -> &Self::Target {
+                    &self.lock.values
+                }
+            }
+
+            impl<'a, K, V> Hash for $t where K: Hash, V: Hash {
+                #[inline]
+                fn hash<H>(&self, state: &mut H) where H: Hasher {
+                    Hash::hash(&**self, state)
+                }
+            }
+        };
+    }
+
+
+    #[derive(Debug)]
+    pub struct MutableBTreeMapLockRef<'a, K, V> where K: 'a, V: 'a {
+        lock: RwLockReadGuard<'a, MutableBTreeState<K, V>>,
+    }
+
+    make_shared!(MutableBTreeMapLockRef<'a, K, V>);
+
+
+    #[derive(Debug)]
+    pub struct MutableBTreeMapLockMut<'a, K, V> where K: 'a, V: 'a {
+        lock: RwLockWriteGuard<'a, MutableBTreeState<K, V>>,
+    }
+
+    make_shared!(MutableBTreeMapLockMut<'a, K, V>);
+
+    impl<'a, K, V> MutableBTreeMapLockMut<'a, K, V> where K: Ord {
+        #[inline]
+        pub fn clear(&mut self) {
+            self.lock.clear()
+        }
+    }
+
+    impl<'a, K, V> MutableBTreeMapLockMut<'a, K, V> where K: Ord + Clone {
+        #[inline]
+        pub fn remove(&mut self, key: &K) -> Option<V> {
+            self.lock.remove(key)
+        }
+    }
+
+    impl<'a, K, V> MutableBTreeMapLockMut<'a, K, V> where K: Ord + Clone, V: Clone {
+        #[inline]
+        pub fn replace_cloned(&mut self, values: BTreeMap<K, V>) {
+            self.lock.replace_cloned(values)
+        }
+
+        #[inline]
+        pub fn insert_cloned(&mut self, key: K, value: V) -> Option<V> {
+            self.lock.insert_cloned(key, value)
+        }
+    }
+
+
+    // TODO get rid of the Arc
+    // TODO impl some of the same traits as BTreeMap
+    pub struct MutableBTreeMap<K, V>(Arc<RwLock<MutableBTreeState<K, V>>>);
+
+    impl<K, V> MutableBTreeMap<K, V> {
+        // TODO deprecate this and replace with From ?
+        #[inline]
+        pub fn with_values(values: BTreeMap<K, V>) -> Self {
+            Self(Arc::new(RwLock::new(MutableBTreeState {
+                values,
+                senders: vec![],
+            })))
+        }
+
+        // TODO return Result ?
+        #[inline]
+        pub fn lock_ref(&self) -> MutableBTreeMapLockRef<K, V> {
+            MutableBTreeMapLockRef {
+                lock: self.0.read().unwrap(),
+            }
+        }
+
+        // TODO return Result ?
+        #[inline]
+        pub fn lock_mut(&self) -> MutableBTreeMapLockMut<K, V> {
+            MutableBTreeMapLockMut {
+                lock: self.0.write().unwrap(),
+            }
+        }
+    }
+
+    impl<K, V> MutableBTreeMap<K, V> where K: Ord {
+        #[inline]
+        pub fn new() -> Self {
+            Self::with_values(BTreeMap::new())
+        }
+    }
+
+    impl<K, V> MutableBTreeMap<K, V> where K: Ord + Clone, V: Clone {
+        #[inline]
+        pub fn signal_map_cloned(&self) -> MutableSignalMap<K, V> {
+            self.0.write().unwrap().signal_map_cloned()
+        }
+
+        #[inline]
+        pub fn entries_cloned(&self) -> MutableBTreeMapEntries<K, V> {
+            MutableBTreeMapEntries {
+                signal: self.signal_map_cloned(),
+                keys: vec![],
+            }
+        }
+    }
+
+    impl<K, V> fmt::Debug for MutableBTreeMap<K, V> where K: fmt::Debug, V: fmt::Debug {
+        fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
+            let state = self.0.read().unwrap();
+
+            fmt.debug_tuple("MutableBTreeMap")
+                .field(&state.values)
+                .finish()
+        }
+    }
+
+    impl<K, V> Serialize for MutableBTreeMap<K, V> where BTreeMap<K, V>: Serialize {
+        #[inline]
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+            self.0.read().unwrap().values.serialize(serializer)
+        }
+    }
+
+    impl<'de, K, V> Deserialize<'de> for MutableBTreeMap<K, V> where BTreeMap<K, V>: Deserialize<'de> {
+        #[inline]
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+            <BTreeMap<K, V>>::deserialize(deserializer).map(MutableBTreeMap::with_values)
+        }
+    }
+
+    impl<K, V> Default for MutableBTreeMap<K, V> where K: Ord {
+        #[inline]
+        fn default() -> Self {
+            MutableBTreeMap::new()
+        }
+    }
+
+
+    #[derive(Debug)]
+    #[must_use = "SignalMaps do nothing unless polled"]
+    pub struct MutableSignalMap<K, V> {
+        receiver: mpsc::UnboundedReceiver<MapDiff<K, V>>,
+    }
+
+    impl<K, V> Unpin for MutableSignalMap<K, V> {}
+
+    impl<K, V> SignalMap for MutableSignalMap<K, V> {
+        type Key = K;
+        type Value = V;
+
+        #[inline]
+        fn poll_map_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
+            self.receiver.poll_next_unpin(cx)
+        }
+    }
+
+
+    #[derive(Debug)]
+    #[must_use = "SignalVecs do nothing unless polled"]
+    pub struct MutableBTreeMapEntries<K, V> {
+        signal: MutableSignalMap<K, V>,
+        keys: Vec<K>,
+    }
+
+    impl<K, V> Unpin for MutableBTreeMapEntries<K, V> {}
+
+    impl<K, V> SignalVec for MutableBTreeMapEntries<K, V> where K: Ord + Clone {
+        type Item = (K, V);
+
+        #[inline]
+        fn poll_vec_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
+            self.signal.poll_map_change_unpin(cx).map(|opt| opt.map(|diff| {
+                match diff {
+                    MapDiff::Replace { entries } => {
+                        // TODO verify that it is in sorted order ?
+                        self.keys = entries.iter().map(|(k, _)| k.clone()).collect();
+                        VecDiff::Replace { values: entries }
+                    },
+                    MapDiff::Insert { key, value } => {
+                        let index = self.keys.binary_search(&key).unwrap_err();
+                        self.keys.insert(index, key.clone());
+                        VecDiff::InsertAt { index, value: (key, value) }
+                    },
+                    MapDiff::Update { key, value } => {
+                        let index = self.keys.binary_search(&key).unwrap();
+                        VecDiff::UpdateAt { index, value: (key, value) }
+                    },
+                    MapDiff::Remove { key } => {
+                        let index = self.keys.binary_search(&key).unwrap();
+                        self.keys.remove(index);
+                        VecDiff::RemoveAt { index }
+                    },
+                    MapDiff::Clear {} => {
+                        self.keys.clear();
+                        VecDiff::Clear {}
+                    },
+                }
+            }))
+        }
+    }
+}
+
+pub use self::mutable_btree_map::*;
