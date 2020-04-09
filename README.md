@@ -1,3 +1,6 @@
+[![crates.io](http://meritbadge.herokuapp.com/futures-signals)](https://crates.io/crates/futures-signals)
+[![docs.rs](https://docs.rs/futures-signals/badge.svg)](https://docs.rs/futures-signals)
+
 This is a Rust crate that provides zero-cost Signals which are built on top of the
 [futures](https://crates.io/crates/futures) crate.
 
