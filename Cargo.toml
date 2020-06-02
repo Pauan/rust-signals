@@ -18,6 +18,7 @@ futures-util = "0.3.0"
 discard = "1.0.3"
 # TODO make this optional
 serde = "1.0.98"
+pin-project = "0.4.17"
 
 [dev-dependencies]
 futures = "0.3.0"

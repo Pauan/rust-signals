@@ -1,5 +1,4 @@
 use std::pin::Pin;
-use std::marker::Unpin;
 // TODO use parking_lot ?
 use std::sync::{Arc, Weak, Mutex};
 use std::future::Future;
@@ -7,6 +6,7 @@ use std::task::{Poll, Waker, Context};
 // TODO use parking_lot ?
 use std::sync::atomic::{AtomicBool, Ordering};
 use discard::{Discard, DiscardOnDrop};
+use pin_project::pin_project;
 
 
 #[derive(Debug)]
@@ -38,15 +38,15 @@ impl Discard for CancelableFutureHandle {
 }
 
 
+#[pin_project(project = CancelableFutureProj)]
 #[derive(Debug)]
 #[must_use = "Futures do nothing unless polled"]
 pub struct CancelableFuture<A, B> {
     state: Arc<CancelableFutureState>,
+    #[pin]
     future: Option<A>,
     when_cancelled: Option<B>,
 }
-
-impl<A, B> Unpin for CancelableFuture<A, B> where A: Unpin {}
 
 impl<A, B> Future for CancelableFuture<A, B>
     where A: Future,
@@ -56,11 +56,7 @@ impl<A, B> Future for CancelableFuture<A, B>
 
     // TODO should this inline ?
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        unsafe_project!(self => {
-            mut state,
-            pin future,
-            mut when_cancelled,
-        });
+        let CancelableFutureProj { state, mut future, when_cancelled } = self.project();
 
         // TODO is this correct ?
         if state.is_cancelled.load(Ordering::SeqCst) {

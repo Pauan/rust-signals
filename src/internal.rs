@@ -1,9 +1,9 @@
 use super::signal::Signal;
 use std::pin::Pin;
-use std::marker::Unpin;
 // TODO use parking_lot ?
 use std::sync::{Arc, RwLock, Mutex, MutexGuard, RwLockReadGuard};
 use std::task::{Poll, Context};
+use pin_project::pin_project;
 
 
 #[inline]
@@ -31,33 +31,13 @@ pub fn unwrap_ref<A>(x: &Option<A>) -> &A {
 }
 
 
-// TODO make this an internal-only macro
-#[doc(hidden)]
-#[macro_export]
-macro_rules! unsafe_project {
-    (@parse $value:expr,) => {};
-    (@parse $value:expr, pin $name:ident, $($rest:tt)*) => {
-        #[allow(unused_mut)]
-        let mut $name = unsafe { ::std::pin::Pin::new_unchecked(&mut $value.$name) };
-        $crate::unsafe_project! { @parse $value, $($rest)* }
-    };
-    (@parse $value:expr, mut $name:ident, $($rest:tt)*) => {
-        #[allow(unused_mut)]
-        let mut $name = &mut $value.$name;
-        $crate::unsafe_project! { @parse $value, $($rest)* }
-    };
-
-    ($value:expr => { $($bindings:tt)+ }) => {
-        let value = unsafe { ::std::pin::Pin::get_unchecked_mut($value) };
-        $crate::unsafe_project! { @parse value, $($bindings)+ }
-    };
-}
-
-
+#[pin_project(project = Map2Proj)]
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
 pub struct Map2<A, B, C> where A: Signal, B: Signal {
+    #[pin]
     signal1: Option<A>,
+    #[pin]
     signal2: Option<B>,
     callback: C,
     left: Option<A::Item>,
@@ -79,8 +59,6 @@ impl<A, B, C, D> Map2<A, B, C>
         }
     }
 }
-
-impl<A, B, C> Unpin for Map2<A, B, C> where A: Unpin + Signal, B: Unpin + Signal {}
 
 // Poll left  => Has left   => Poll right  => Has right   => Output
 // -----------------------------------------------------------------------------
@@ -110,13 +88,7 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
 
     // TODO inline this ?
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        unsafe_project!(self => {
-            pin signal1,
-            pin signal2,
-            mut left,
-            mut right,
-            mut callback,
-        });
+        let Map2Proj { mut signal1, mut signal2, left, right, callback } = self.project();
 
         let mut changed = false;
 
@@ -168,10 +140,13 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
 // TODO is it possible to use only a single Mutex ?
 pub type PairMut<A, B> = Arc<(Mutex<Option<A>>, Mutex<Option<B>>)>;
 
+#[pin_project(project = MapPairMutProj)]
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
 pub struct MapPairMut<A, B> where A: Signal, B: Signal {
+    #[pin]
     signal1: Option<A>,
+    #[pin]
     signal2: Option<B>,
     inner: PairMut<A::Item, B::Item>,
 }
@@ -189,8 +164,6 @@ impl<A, B> MapPairMut<A, B>
     }
 }
 
-impl<A, B> Unpin for MapPairMut<A, B> where A: Unpin + Signal, B: Unpin + Signal {}
-
 impl<A, B> Signal for MapPairMut<A, B>
     where A: Signal,
           B: Signal {
@@ -198,11 +171,7 @@ impl<A, B> Signal for MapPairMut<A, B>
 
     // TODO inline this ?
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        unsafe_project!(self => {
-            pin signal1,
-            pin signal2,
-            mut inner,
-        });
+        let MapPairMutProj { mut signal1, mut signal2, inner } = self.project();
 
         let mut changed = false;
 
@@ -257,10 +226,13 @@ impl<A, B> Signal for MapPairMut<A, B>
 // TODO maybe it's faster to use a Mutex ?
 pub type Pair<A, B> = Arc<RwLock<(Option<A>, Option<B>)>>;
 
+#[pin_project(project = MapPairProj)]
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
 pub struct MapPair<A, B> where A: Signal, B: Signal {
+    #[pin]
     signal1: Option<A>,
+    #[pin]
     signal2: Option<B>,
     inner: Pair<A::Item, B::Item>,
 }
@@ -278,8 +250,6 @@ impl<A, B> MapPair<A, B>
     }
 }
 
-impl<A, B> Unpin for MapPair<A, B> where A: Unpin + Signal, B: Unpin + Signal {}
-
 impl<A, B> Signal for MapPair<A, B>
     where A: Signal,
           B: Signal {
@@ -287,11 +257,7 @@ impl<A, B> Signal for MapPair<A, B>
 
     // TODO inline this ?
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        unsafe_project!(self => {
-            pin signal1,
-            pin signal2,
-            mut inner,
-        });
+        let MapPairProj { mut signal1, mut signal2, inner } = self.project();
 
         let mut changed = false;
 

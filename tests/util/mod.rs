@@ -34,14 +34,16 @@ impl<A> ForEachSignal<A> where A: Signal {
 
     pub fn run(self) {
         let mut callbacks = self.callbacks;
-        let mut signal = self.signal;
+        let signal = self.signal;
+
+        pin_mut!(signal);
 
         block_on(poll_fn(move |cx| -> Poll<()> {
             loop {
                 return match callbacks.pop() {
                     Some(mut callback) => {
                         // TODO is this safe ?
-                        let poll = unsafe { Pin::new_unchecked(&mut signal) }.poll_change(cx);
+                        let poll = signal.as_mut().poll_change(cx);
 
                         match poll {
                             Poll::Ready(None) => {

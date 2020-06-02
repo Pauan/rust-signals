@@ -8,6 +8,7 @@ use std::task::{Poll, Context};
 use futures_core::Stream;
 use futures_util::stream;
 use futures_util::stream::StreamExt;
+use pin_project::pin_project;
 
 use crate::signal::{Signal, Mutable, ReadOnlyMutable};
 
@@ -502,13 +503,13 @@ pub fn always<A>(values: Vec<A>) -> Always<A> {
 }
 
 
+#[pin_project]
 #[derive(Debug)]
 #[must_use = "Futures do nothing unless polled"]
 pub struct ForEach<A, B, C> {
+    #[pin]
     inner: stream::ForEach<SignalVecStream<A>, B, C>,
 }
-
-impl<A, B, C> Unpin for ForEach<A, B, C> where A: Unpin, B: Unpin {}
 
 impl<A, B, C> Future for ForEach<A, B, C>
     where A: SignalVec,
@@ -518,23 +519,19 @@ impl<A, B, C> Future for ForEach<A, B, C>
 
     #[inline]
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        unsafe_project!(self => {
-            pin inner,
-        });
-
-        inner.poll(cx)
+        self.project().inner.poll(cx)
     }
 }
 
 
+#[pin_project(project = MapProj)]
 #[derive(Debug)]
 #[must_use = "SignalVecs do nothing unless polled"]
 pub struct Map<A, B> {
+    #[pin]
     signal: A,
     callback: B,
 }
-
-impl<A, B> Unpin for Map<A, B> where A: Unpin {}
 
 impl<A, B, F> SignalVec for Map<A, F>
     where A: SignalVec,
@@ -544,18 +541,17 @@ impl<A, B, F> SignalVec for Map<A, F>
     // TODO should this inline ?
     #[inline]
     fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
-        unsafe_project!(self => {
-            pin signal,
-            mut callback,
-        });
+        let MapProj { signal, callback } = self.project();
 
         signal.poll_vec_change(cx).map(|some| some.map(|change| change.map(|value| callback(value))))
     }
 }
 
 
+#[pin_project]
 #[must_use = "Signals do nothing unless polled"]
 pub struct ToSignalCloned<A> where A: SignalVec {
+    #[pin]
     signal: ToSignalMap<A, fn(&[A::Item]) -> Vec<A::Item>>,
 }
 
@@ -565,25 +561,22 @@ impl<A> std::fmt::Debug for ToSignalCloned<A> where A: SignalVec {
     }
 }
 
-impl<A> Unpin for ToSignalCloned<A> where A: SignalVec + Unpin {}
-
 impl<A> Signal for ToSignalCloned<A>
     where A: SignalVec {
     type Item = Vec<A::Item>;
 
+    #[inline]
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        unsafe_project!(self => {
-            pin signal,
-        });
-
-        signal.poll_change(cx)
+        self.project().signal.poll_change(cx)
     }
 }
 
 
+#[pin_project(project = ToSignalMapProj)]
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
 pub struct ToSignalMap<A, B> where A: SignalVec {
+    #[pin]
     signal: Option<A>,
     // This is needed because a Signal must always have a value, even if the SignalVec is empty
     first: bool,
@@ -591,20 +584,13 @@ pub struct ToSignalMap<A, B> where A: SignalVec {
     callback: B,
 }
 
-impl<A, B> Unpin for ToSignalMap<A, B> where A: SignalVec + Unpin {}
-
 impl<A, B, F> Signal for ToSignalMap<A, F>
     where A: SignalVec,
           F: FnMut(&[A::Item]) -> B {
     type Item = B;
 
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        unsafe_project!(self => {
-            pin signal,
-            mut first,
-            mut values,
-            mut callback,
-        });
+        let ToSignalMapProj { mut signal, first, values, callback } = self.project();
 
         let mut changed = false;
 
@@ -680,14 +666,14 @@ impl<A, B, F> Signal for ToSignalMap<A, F>
 }
 
 
+#[pin_project(project = EnumerateProj)]
 #[derive(Debug)]
 #[must_use = "SignalVecs do nothing unless polled"]
 pub struct Enumerate<A> {
+    #[pin]
     signal: A,
     mutables: Vec<Mutable<Option<usize>>>,
 }
-
-impl<A> Unpin for Enumerate<A> where A: Unpin {}
 
 impl<A> SignalVec for Enumerate<A> where A: SignalVec {
     type Item = (ReadOnlyMutable<Option<usize>>, A::Item);
@@ -706,10 +692,7 @@ impl<A> SignalVec for Enumerate<A> where A: SignalVec {
             }
         }
 
-        unsafe_project!(self => {
-            pin signal,
-            mut mutables,
-        });
+        let EnumerateProj { signal, mutables } = self.project();
 
         // TODO use map ?
         match signal.poll_vec_change(cx) {
@@ -845,17 +828,17 @@ fn unwrap<A>(x: Poll<Option<A>>) -> A {
     }
 }
 
+#[pin_project(project = MapSignalProj)]
 #[derive(Debug)]
 #[must_use = "SignalVecs do nothing unless polled"]
 pub struct MapSignal<A, B, F> where B: Signal {
+    #[pin]
     signal: Option<A>,
     // TODO is there a more efficient way to implement this ?
     signals: Vec<Option<Pin<Box<B>>>>,
     pending: VecDeque<VecDiff<B::Item>>,
     callback: F,
 }
-
-impl<A, B, F> Unpin for MapSignal<A, B, F> where A: Unpin, B: Signal {}
 
 impl<A, B, F> SignalVec for MapSignal<A, B, F>
     where A: SignalVec,
@@ -864,12 +847,7 @@ impl<A, B, F> SignalVec for MapSignal<A, B, F>
     type Item = B::Item;
 
     fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
-        unsafe_project!(self => {
-            pin signal,
-            mut signals,
-            mut pending,
-            mut callback,
-        });
+        let MapSignalProj { mut signal, signals, pending, callback } = self.project();
 
         if let Some(diff) = pending.pop_front() {
             return Poll::Ready(Some(diff));
@@ -992,9 +970,11 @@ struct FilterSignalClonedState<A, B> {
     exists: bool,
 }
 
+#[pin_project(project = FilterSignalClonedProj)]
 #[derive(Debug)]
 #[must_use = "SignalVecs do nothing unless polled"]
 pub struct FilterSignalCloned<A, B, F> where A: SignalVec {
+    #[pin]
     signal: Option<A>,
     signals: Vec<FilterSignalClonedState<A::Item, B>>,
     pending: VecDeque<VecDiff<A::Item>>,
@@ -1007,8 +987,6 @@ impl<A, B, F> FilterSignalCloned<A, B, F> where A: SignalVec {
     }
 }
 
-impl<A, B, F> Unpin for FilterSignalCloned<A, B, F> where A: Unpin + SignalVec {}
-
 impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
     where A: SignalVec,
           A::Item: Clone,
@@ -1017,12 +995,7 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
     type Item = A::Item;
 
     fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
-        unsafe_project!(self => {
-            pin signal,
-            mut signals,
-            mut pending,
-            mut callback,
-        });
+        let FilterSignalClonedProj { mut signal, signals, pending, callback } = self.project();
 
         if let Some(diff) = pending.pop_front() {
             return Poll::Ready(Some(diff));
@@ -1240,25 +1213,21 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
 }
 
 
+#[pin_project(project = LenProj)]
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
 pub struct Len<A> {
+    #[pin]
     signal: Option<A>,
     first: bool,
     len: usize,
 }
 
-impl<A> Unpin for Len<A> where A: Unpin {}
-
 impl<A> Signal for Len<A> where A: SignalVec {
     type Item = usize;
 
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        unsafe_project!(self => {
-            pin signal,
-            mut first,
-            mut len,
-        });
+        let LenProj { mut signal, first, len } = self.project();
 
         let mut changed = false;
 
@@ -1325,33 +1294,31 @@ impl<A> Signal for Len<A> where A: SignalVec {
 }
 
 
+#[pin_project]
 #[derive(Debug)]
 #[must_use = "Streams do nothing unless polled"]
 pub struct SignalVecStream<A> {
+    #[pin]
     signal: A,
 }
-
-impl<A> Unpin for SignalVecStream<A> where A: Unpin {}
 
 impl<A: SignalVec> Stream for SignalVecStream<A> {
     type Item = VecDiff<A::Item>;
 
     #[inline]
     fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        unsafe_project!(self => {
-            pin signal,
-        });
-
-        signal.poll_vec_change(cx)
+        self.project().signal.poll_vec_change(cx)
     }
 }
 
 
+#[pin_project(project = FilterProj)]
 #[derive(Debug)]
 #[must_use = "SignalVecs do nothing unless polled"]
 pub struct Filter<A, B> {
     // TODO use a bit vec for smaller size
     indexes: Vec<bool>,
+    #[pin]
     signal: A,
     callback: B,
 }
@@ -1362,19 +1329,13 @@ impl<A, B> Filter<A, B> {
     }
 }
 
-impl<A, B> Unpin for Filter<A, B> where A: Unpin {}
-
 impl<A, F> SignalVec for Filter<A, F>
     where A: SignalVec,
           F: FnMut(&A::Item) -> bool {
     type Item = A::Item;
 
     fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
-        unsafe_project!(self => {
-            mut indexes,
-            pin signal,
-            mut callback,
-        });
+        let FilterProj { indexes, mut signal, callback } = self.project();
 
         loop {
             return match signal.as_mut().poll_vec_change(cx) {
@@ -1481,15 +1442,15 @@ impl<A, F> SignalVec for Filter<A, F>
 }
 
 
+#[pin_project(project = SumSignalProj)]
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
 pub struct SumSignal<A> where A: SignalVec {
+    #[pin]
     signal: Option<A>,
     first: bool,
     values: Vec<A::Item>,
 }
-
-impl<A> Unpin for SumSignal<A> where A: Unpin + SignalVec {}
 
 impl<A> Signal for SumSignal<A>
     where A: SignalVec,
@@ -1497,11 +1458,7 @@ impl<A> Signal for SumSignal<A>
     type Item = A::Item;
 
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        unsafe_project!(self => {
-            pin signal,
-            mut first,
-            mut values,
-        });
+        let SumSignalProj { mut signal, first, values } = self.project();
 
         let mut changed = false;
 
@@ -1583,12 +1540,14 @@ impl<A> Signal for SumSignal<A>
 }
 
 
+#[pin_project(project = SortByClonedProj)]
 #[derive(Debug)]
 #[must_use = "SignalVecs do nothing unless polled"]
 pub struct SortByCloned<A, B> where A: SignalVec {
     pending: Option<VecDiff<A::Item>>,
     values: Vec<A::Item>,
     indexes: Vec<usize>,
+    #[pin]
     signal: A,
     compare: B,
 }
@@ -1670,8 +1629,6 @@ impl<A, F> SortByCloned<A, F>
     }
 }
 
-impl<A, B> Unpin for SortByCloned<A, B> where A: Unpin + SignalVec {}
-
 // TODO implementation of this for Copy
 impl<A, F> SignalVec for SortByCloned<A, F>
     where A: SignalVec,
@@ -1681,13 +1638,7 @@ impl<A, F> SignalVec for SortByCloned<A, F>
 
     // TODO figure out a faster implementation of this
     fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
-        unsafe_project!(self => {
-            mut pending,
-            mut values,
-            mut indexes,
-            pin signal,
-            mut compare,
-        });
+        let SortByClonedProj { pending, values, indexes, mut signal, compare } = self.project();
 
         match pending.take() {
             Some(value) => Poll::Ready(Some(value)),
@@ -1844,9 +1795,11 @@ impl<A> DelayRemoveState<A> {
     }
 }
 
+#[pin_project(project = DelayRemoveProj)]
 #[derive(Debug)]
 #[must_use = "SignalVecs do nothing unless polled"]
 pub struct DelayRemove<A, B, F> where A: SignalVec {
+    #[pin]
     signal: Option<A>,
     futures: Vec<DelayRemoveState<B>>,
     pending: VecDeque<VecDiff<A::Item>>,
@@ -1921,8 +1874,6 @@ impl<S, A, F> DelayRemove<S, A, F>
     }
 }
 
-impl<A, B, F> Unpin for DelayRemove<A, B, F> where A: Unpin + SignalVec {}
-
 impl<S, A, F> SignalVec for DelayRemove<S, A, F>
     where S: SignalVec,
           A: Future<Output = ()>,
@@ -1931,12 +1882,7 @@ impl<S, A, F> SignalVec for DelayRemove<S, A, F>
 
     // TODO this can probably be implemented more efficiently
     fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
-        unsafe_project!(self => {
-            pin signal,
-            mut futures,
-            mut pending,
-            mut callback,
-        });
+        let DelayRemoveProj { mut signal, futures, pending, callback } = self.project();
 
         if let Some(diff) = pending.pop_front() {
             return Poll::Ready(Some(diff));

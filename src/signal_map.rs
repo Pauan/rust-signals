@@ -1,6 +1,7 @@
 use std::pin::Pin;
 use std::marker::Unpin;
 use std::task::{Poll, Context};
+use pin_project::pin_project;
 
 
 // TODO make this non-exhaustive
@@ -111,14 +112,14 @@ pub trait SignalMapExt: SignalMap {
 impl<T: ?Sized> SignalMapExt for T where T: SignalMap {}
 
 
+#[pin_project(project = MapValueProj)]
 #[derive(Debug)]
 #[must_use = "SignalMaps do nothing unless polled"]
 pub struct MapValue<A, B> {
+    #[pin]
     signal: A,
     callback: B,
 }
-
-impl<A, B> Unpin for MapValue<A, B> where A: Unpin {}
 
 impl<A, B, F> SignalMap for MapValue<A, F>
     where A: SignalMap,
@@ -129,10 +130,7 @@ impl<A, B, F> SignalMap for MapValue<A, F>
     // TODO should this inline ?
     #[inline]
     fn poll_map_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
-        unsafe_project!(self => {
-            pin signal,
-            mut callback,
-        });
+        let MapValueProj { signal, callback } = self.project();
 
         signal.poll_map_change(cx).map(|some| some.map(|change| change.map(|value| callback(value))))
     }
