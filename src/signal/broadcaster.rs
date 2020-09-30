@@ -233,6 +233,9 @@ impl<A> ::std::fmt::Debug for BroadcasterState<A>
 /// `Broadcaster` provides the `.signal()` and `.signal_cloned()` methods which
 /// can be used to produce multiple signals out of the one original signal
 /// the `Broadcaster` was created with.
+///
+/// This is especially useful when you have a type `impl Signal` that produces clonable values but
+/// is itself not cloneable — e.g. because it needs to hold a Mutex or listens on a mpsc channel.
 pub struct Broadcaster<A> where A: Signal {
     shared_state: Arc<BroadcasterSharedState<A>>,
 }
