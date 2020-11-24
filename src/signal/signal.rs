@@ -333,6 +333,40 @@ pub trait SignalExt: Signal {
         }
     }
 
+    /// Creates a `Signal` which delays updates until a `Future` finishes.
+    ///
+    /// This can be used to throttle a `Signal` so that it only updates once every X seconds.
+    ///
+    /// If multiple updates happen while it's being delayed, it will only output the most recent
+    /// value.
+    ///
+    /// # Examples
+    ///
+    /// Wait 1 second between each update:
+    ///
+    /// ```rust
+    /// # use core::future::Future;
+    /// # use futures_signals::signal::{always, SignalExt};
+    /// # fn sleep(ms: i32) -> impl Future<Output = ()> { async {} }
+    /// # let input = always(1);
+    /// let output = input.throttle(|| sleep(1_000));
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// This is ***extremely*** efficient: it does not do any heap allocation, and it has *very* little overhead.
+    #[inline]
+    fn throttle<A, B>(self, callback: B) -> Throttle<Self, A, B>
+        where A: Future<Output = ()>,
+              B: FnMut() -> A,
+              Self: Sized {
+        Throttle {
+            signal: Some(self),
+            future: None,
+            callback,
+        }
+    }
+
     /// Creates a `Signal` which flattens `self`.
     ///
     /// When the output `Signal` is spawned:
@@ -815,6 +849,57 @@ impl<A, B, C> Signal for MapFuture<A, B, C>
 
         } else {
             Poll::Pending
+        }
+    }
+}
+
+
+#[pin_project(project = ThrottleProj)]
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct Throttle<A, B, C> where A: Signal {
+    #[pin]
+    signal: Option<A>,
+    #[pin]
+    future: Option<B>,
+    callback: C,
+}
+
+impl<A, B, C> Signal for Throttle<A, B, C>
+    where A: Signal,
+          B: Future<Output = ()>,
+          C: FnMut() -> B {
+    type Item = A::Item;
+
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let ThrottleProj { mut signal, mut future, callback } = self.project();
+
+        match future.as_mut().as_pin_mut().map(|future| future.poll(cx)) {
+            None => {},
+            Some(Poll::Ready(())) => {
+                future.set(None);
+            },
+            Some(Poll::Pending) => {
+                // TODO does this need to poll the Signal as well ?
+                return Poll::Pending;
+            },
+        }
+
+        match signal.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
+            None => {
+                Poll::Ready(None)
+            },
+            Some(Poll::Ready(None)) => {
+                signal.set(None);
+                Poll::Ready(None)
+            },
+            Some(Poll::Ready(Some(value))) => {
+                future.set(Some(callback()));
+                Poll::Ready(Some(value))
+            },
+            Some(Poll::Pending) => {
+                Poll::Pending
+            },
         }
     }
 }

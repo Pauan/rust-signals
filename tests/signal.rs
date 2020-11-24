@@ -206,3 +206,63 @@ fn test_switch_signal_vec() {
         Poll::Ready(None)
     ]);
 }
+
+
+#[test]
+fn test_throttle() {
+    let input = util::Source::new(vec![
+        Poll::Ready(true),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(false),
+        Poll::Ready(false),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(false),
+        Poll::Ready(true),
+        Poll::Pending,
+    ]);
+
+    let output = input.throttle(move || {
+        let mut done = false;
+
+        poll_fn(move |context| {
+            if done {
+                done = false;
+                Poll::Ready(())
+
+            } else {
+                done = true;
+                context.waker().wake_by_ref();
+                Poll::Pending
+            }
+        })
+    });
+
+    util::assert_signal_eq(output, vec![
+        Poll::Ready(Some(true)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(false)),
+        Poll::Pending,
+        Poll::Ready(Some(false)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(false)),
+        Poll::Pending,
+        Poll::Ready(Some(true)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(None),
+    ]);
+}
