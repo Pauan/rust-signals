@@ -895,6 +895,11 @@ impl<A, B, C> Signal for Throttle<A, B, C>
             },
             Some(Poll::Ready(Some(value))) => {
                 future.set(Some(callback()));
+
+                if let Some(Poll::Ready(())) = future.as_mut().as_pin_mut().map(|future| future.poll(cx)) {
+                    future.set(None);
+                }
+
                 Poll::Ready(Some(value))
             },
             Some(Poll::Pending) => {
