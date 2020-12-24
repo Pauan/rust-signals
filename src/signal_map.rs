@@ -344,11 +344,15 @@ mod mutable_btree_map {
             let x = self.change(|| (key, value));
 
             if let Some(value) = self.values.insert(key, value) {
-                self.notify_clone(x, |(key, value)| MapDiff::Update { key, value });
+                if x.is_some() {
+                    self.notify(|| MapDiff::Update { key, value });
+                }
                 Some(value)
 
             } else {
-                self.notify_clone(x, |(key, value)| MapDiff::Insert { key, value });
+                if x.is_some() {
+                    self.notify(|| MapDiff::Insert { key, value });
+                }
                 None
             }
         }
