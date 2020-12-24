@@ -155,6 +155,16 @@ pub fn get_signal_vec_polls<A, F>(signal: A, f: F) -> Vec<Poll<Option<VecDiff<A:
 
 
 #[allow(dead_code)]
+pub fn get_signal_map_polls<A, F>(signal: A, f: F) -> Vec<Poll<Option<MapDiff<A::Key, A::Value>>>>
+    where A: SignalMap,
+          F: FnOnce() {
+    pin_mut!(signal);
+    // TODO is the as_mut correct ?
+    get_polls(f, |cx| Pin::as_mut(&mut signal).poll_map_change(cx))
+}
+
+
+#[allow(dead_code)]
 pub fn get_all_polls<A, B, F>(signal: A, mut initial: B, mut f: F) -> Vec<Poll<Option<A::Item>>> where A: Signal, F: FnMut(&B, &mut Context) -> B {
     let mut output = vec![];
 
