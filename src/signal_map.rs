@@ -1,8 +1,8 @@
+use crate::signal::Signal;
 use std::pin::Pin;
 use std::marker::Unpin;
 use std::task::{Poll, Context};
 use pin_project::pin_project;
-
 
 // TODO make this non-exhaustive
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,6 +101,18 @@ pub trait SignalMapExt: SignalMap {
         }
     }
 
+    /// Returns a signal that tracks the value of a particular key in the map.
+    #[inline]
+    fn watch_key(self, key: Self::Key) -> MapWatchKeySignal<Self, Self::Key, Self::Value>
+        where Self::Key: Eq,
+              Self::Value: Clone,
+              Self: Sized {
+        MapWatchKeySignal {
+            signal_map: self,
+            watch_key: key
+        }
+    }
+
     /// A convenience for calling `SignalMap::poll_map_change` on `Unpin` types.
     #[inline]
     fn poll_map_change_unpin(&mut self, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> where Self: Unpin + Sized {
@@ -133,6 +145,47 @@ impl<A, B, F> SignalMap for MapValue<A, F>
         let MapValueProj { signal, callback } = self.project();
 
         signal.poll_map_change(cx).map(|some| some.map(|change| change.map(|value| callback(value))))
+    }
+}
+
+#[pin_project(project = MapWatchKeySignalProj)]
+#[derive(Debug)]
+pub struct MapWatchKeySignal<M, K, V> where M: SignalMap<Key=K, Value=V>, K: Eq, V: Clone {
+    #[pin]
+    signal_map: M,
+    watch_key: K,
+}
+
+impl<M, K, V> Signal for MapWatchKeySignal<M, K, V>  where  M: SignalMap<Key=K, Value=V>, K: Eq, V: Clone {
+    type Item = Option<V>;
+    
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let MapWatchKeySignalProj {signal_map, watch_key} = self.project();
+
+        match signal_map.poll_map_change(cx) {
+            Poll::Ready(some) => match some {
+                Some(MapDiff::Replace { entries }) => Poll::Ready(Some(
+                    entries.iter().find(|entry| entry.0 == *watch_key).map(|entry| entry.1.clone())
+                )),
+                Some(MapDiff::Insert { key, value }) | Some(MapDiff::Update { key, value }) => {
+                    if key == *watch_key {
+                        Poll::Ready(Some(Some(value)))
+                    } else {
+                        Poll::Pending
+                    }
+                },
+                Some(MapDiff::Remove { key }) => {
+                    if key == *watch_key {
+                        Poll::Ready(Some(None))
+                    } else {
+                        Poll::Pending
+                    }
+                },
+                Some(MapDiff::Clear {}) => Poll::Ready(Some(None)),
+                None => Poll::Ready(None),
+            },
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
@@ -228,14 +281,14 @@ mod mutable_btree_map {
     }
 
     impl<K: Clone + Ord, V: Clone> MutableBTreeState<K, V> {
-        fn entries(values: &BTreeMap<K, V>) -> Vec<(K, V)> {
+        fn entries_cloned(values: &BTreeMap<K, V>) -> Vec<(K, V)> {
             values.into_iter().map(|(k, v)| {
                 (k.clone(), v.clone())
             }).collect()
         }
 
         fn replace_cloned(&mut self, values: BTreeMap<K, V>) {
-            let entries = self.change(|| Self::entries(&values));
+            let entries = self.change(|| Self::entries_cloned(&values));
 
             self.values = values;
 
@@ -256,6 +309,51 @@ mod mutable_btree_map {
         }
 
         fn signal_map_cloned(&mut self) -> MutableSignalMap<K, V> {
+            let (sender, receiver) = mpsc::unbounded();
+
+            if !self.values.is_empty() {
+                sender.unbounded_send(MapDiff::Replace {
+                    entries: Self::entries_cloned(&self.values),
+                }).unwrap();
+            }
+
+            self.senders.push(sender);
+
+            MutableSignalMap {
+                receiver
+            }
+        }
+    }
+
+    impl<K: Copy + Ord, V: Copy> MutableBTreeState<K, V> {
+        fn entries(values: &BTreeMap<K, V>) -> Vec<(K, V)> {
+            values.into_iter().map(|(k, v)| {
+                (*k, *v)
+            }).collect()
+        }
+
+        fn replace(&mut self, values: BTreeMap<K, V>) {
+            let entries = self.change(|| Self::entries(&values));
+
+            self.values = values;
+
+            self.notify_clone(entries, |entries| MapDiff::Replace { entries });
+        }
+
+        fn insert(&mut self, key: K, value: V) -> Option<V> {
+            let x = self.change(|| (key, value));
+
+            if let Some(value) = self.values.insert(key, value) {
+                self.notify_clone(x, |(key, value)| MapDiff::Update { key, value });
+                Some(value)
+
+            } else {
+                self.notify_clone(x, |(key, value)| MapDiff::Insert { key, value });
+                None
+            }
+        }
+
+        fn signal_map(&mut self) -> MutableSignalMap<K, V> {
             let (sender, receiver) = mpsc::unbounded();
 
             if !self.values.is_empty() {
@@ -377,6 +475,18 @@ mod mutable_btree_map {
         }
     }
 
+    impl<'a, K, V> MutableBTreeMapLockMut<'a, K, V> where K: Ord + Copy, V: Copy {
+        #[inline]
+        pub fn replace(&mut self, values: BTreeMap<K, V>) {
+            self.lock.replace(values)
+        }
+
+        #[inline]
+        pub fn insert(&mut self, key: K, value: V) -> Option<V> {
+            self.lock.insert(key, value)
+        }
+    }
+
 
     // TODO get rid of the Arc
     // TODO impl some of the same traits as BTreeMap
@@ -422,6 +532,8 @@ mod mutable_btree_map {
             self.0.write().unwrap().signal_map_cloned()
         }
 
+        // TODO deprecate and rename to signal_vec_keys_cloned.
+        // Then build signal_vec_keys for vecs with a Copy trait.
         #[inline]
         pub fn signal_vec_keys(&self) -> MutableBTreeMapKeys<K, V> {
             MutableBTreeMapKeys {
@@ -435,6 +547,21 @@ mod mutable_btree_map {
         pub fn entries_cloned(&self) -> MutableBTreeMapEntries<K, V> {
             MutableBTreeMapEntries {
                 signal: self.signal_map_cloned(),
+                keys: vec![],
+            }
+        }
+    }
+
+    impl<K, V> MutableBTreeMap<K, V> where K: Ord + Copy, V: Copy {
+        #[inline]
+        pub fn signal_map(&self) -> MutableSignalMap<K, V> {
+            self.0.write().unwrap().signal_map()
+        }
+
+        #[inline]
+        pub fn signal_vec_entries(&self) -> MutableBTreeMapEntries<K, V> {
+            MutableBTreeMapEntries {
+                signal: self.signal_map(),
                 keys: vec![],
             }
         }

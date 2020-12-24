@@ -5,6 +5,7 @@ use std::sync::Arc;
 use std::pin::Pin;
 use std::task::{Poll, Context};
 use futures_signals::signal_vec::{VecDiff, SignalVec};
+use futures_signals::signal_map::{MapDiff, SignalMap};
 use futures_signals::signal::Signal;
 use futures_util::future::poll_fn;
 use futures_util::task::{waker, ArcWake};
@@ -222,6 +223,38 @@ pub fn map_poll_vec<A, B, C>(signal: A, mut callback: C) -> Vec<B> where A: Sign
     changes
 }
 
+#[allow(dead_code)]
+pub fn map_poll_map<A, B, C>(signal: A, mut callback: C) -> Vec<B> where A: SignalMap, C: FnMut(&A, Poll<Option<MapDiff<A::Key, A::Value>>>) -> B {
+    let mut changes = vec![];
+
+    // TODO is this correct ?
+    pin_mut!(signal);
+
+    block_on(poll_fn(|context| {
+        loop {
+            // TODO is this correct ?
+            let x = Pin::as_mut(&mut signal).poll_map_change(context);
+
+            return match x {
+                Poll::Ready(Some(_)) => {
+                    changes.push(callback(&signal, x));
+                    continue;
+                },
+                Poll::Ready(None) => {
+                    changes.push(callback(&signal, x));
+                    Poll::Ready(())
+                },
+                Poll::Pending => {
+                    changes.push(callback(&signal, x));
+                    Poll::Pending
+                },
+            };
+        }
+    }));
+
+    changes
+}
+
 
 #[allow(dead_code)]
 pub fn assert_signal_eq<A, S>(signal: S, expected: Vec<Poll<Option<A>>>)
@@ -241,6 +274,20 @@ pub fn assert_signal_vec_eq<A, S>(signal: S, expected: Vec<Poll<Option<VecDiff<A
           S: SignalVec<Item = A> {
 
     let actual = map_poll_vec(signal, |_output, change| change);
+
+    assert_eq!(
+        actual,
+        expected,
+    );
+}
+
+#[allow(dead_code)]
+pub fn assert_signal_map_eq<K, V, S>(signal: S, expected: Vec<Poll<Option<MapDiff<K, V>>>>)
+    where K: std::fmt::Debug + PartialEq,
+          V: std::fmt::Debug + PartialEq,
+          S: SignalMap<Key = K, Value = V> {
+
+    let actual = map_poll_map(signal, |_output, change| change);
 
     assert_eq!(
         actual,
@@ -295,6 +342,16 @@ impl<A> SignalVec for Source<VecDiff<A>> {
 
     #[inline]
     fn poll_vec_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
+        self.poll(cx)
+    }
+}
+
+impl<K, V> SignalMap for Source<MapDiff<K, V>> {
+    type Key = K;
+    type Value = V;
+
+    #[inline]
+    fn poll_map_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
         self.poll(cx)
     }
 }
