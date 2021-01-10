@@ -103,7 +103,7 @@ pub trait SignalMapExt: SignalMap {
 
     /// Returns a signal that tracks the value of a particular key in the map.
     #[inline]
-    fn watch_key(self, key: Self::Key) -> MapWatchKeySignal<Self, Self::Key, Self::Value>
+    fn key_cloned(self, key: Self::Key) -> MapWatchKeySignal<Self>
         where Self::Key: Eq,
               Self::Value: Clone,
               Self: Sized {
@@ -150,41 +150,68 @@ impl<A, B, F> SignalMap for MapValue<A, F>
 
 #[pin_project(project = MapWatchKeySignalProj)]
 #[derive(Debug)]
-pub struct MapWatchKeySignal<M, K, V> where M: SignalMap<Key=K, Value=V>, K: Eq, V: Clone {
+pub struct MapWatchKeySignal<M> where M: SignalMap {
     #[pin]
     signal_map: M,
-    watch_key: K,
+    watch_key: M::Key,
 }
 
-impl<M, K, V> Signal for MapWatchKeySignal<M, K, V>  where  M: SignalMap<Key=K, Value=V>, K: Eq, V: Clone {
-    type Item = Option<V>;
+impl<M> Signal for MapWatchKeySignal<M> 
+    where M: SignalMap, 
+          M::Key: PartialEq,
+          M::Value: Clone {
+    type Item = Option<M::Value>;
     
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let MapWatchKeySignalProj {signal_map, watch_key} = self.project();
+        let MapWatchKeySignalProj { mut signal_map, watch_key } = self.project();
 
-        match signal_map.poll_map_change(cx) {
-            Poll::Ready(some) => match some {
-                Some(MapDiff::Replace { entries }) => Poll::Ready(Some(
-                    entries.iter().find(|entry| entry.0 == *watch_key).map(|entry| entry.1.clone())
-                )),
-                Some(MapDiff::Insert { key, value }) | Some(MapDiff::Update { key, value }) => {
-                    if key == *watch_key {
-                        Poll::Ready(Some(Some(value)))
-                    } else {
-                        Poll::Pending
+        let mut did_close = false;
+        let mut most_recent_value: Option<Option<M::Value>> = None;
+
+        loop {
+            match signal_map.as_mut().poll_map_change(cx) {
+                Poll::Ready(some) => match some {
+                    Some(MapDiff::Replace { entries }) => {
+                        most_recent_value = Some(
+                            entries
+                                .into_iter()
+                                .find(|entry| entry.0 == *watch_key)
+                                .map(|entry| entry.1)
+                        );
+                    },
+                    Some(MapDiff::Insert { key, value }) | Some(MapDiff::Update { key, value }) => {
+                        if key == *watch_key {
+                            most_recent_value = Some(Some(value));
+                        }
+                        continue;
+                    },
+                    Some(MapDiff::Remove { key }) => {
+                        if key == *watch_key {
+                            most_recent_value = Some(None);
+                        }
+                        continue;
+                    },
+                    Some(MapDiff::Clear {}) => {
+                        most_recent_value = Some(None);
+                        continue;
+                    },
+                    None => {
+                        did_close = true;
+                        break;
                     }
                 },
-                Some(MapDiff::Remove { key }) => {
-                    if key == *watch_key {
-                        Poll::Ready(Some(None))
-                    } else {
-                        Poll::Pending
-                    }
+                Poll::Pending => {
+                    break;
                 },
-                Some(MapDiff::Clear {}) => Poll::Ready(Some(None)),
-                None => Poll::Ready(None),
-            },
-            Poll::Pending => Poll::Pending,
+            }
+        };
+
+        if did_close {
+            Poll::Ready(None)
+        } else if most_recent_value.is_some() {
+            Poll::Ready(most_recent_value)
+        } else {
+            Poll::Pending
         }
     }
 }
@@ -341,18 +368,12 @@ mod mutable_btree_map {
         }
 
         fn insert(&mut self, key: K, value: V) -> Option<V> {
-            let x = self.change(|| (key, value));
-
             if let Some(value) = self.values.insert(key, value) {
-                if x.is_some() {
-                    self.notify(|| MapDiff::Update { key, value });
-                }
+                self.notify(|| MapDiff::Update { key, value });
                 Some(value)
 
             } else {
-                if x.is_some() {
-                    self.notify(|| MapDiff::Insert { key, value });
-                }
+                self.notify(|| MapDiff::Insert { key, value });
                 None
             }
         }
