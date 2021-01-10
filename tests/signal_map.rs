@@ -54,7 +54,7 @@ fn map_value() {
 }
 
 #[test]
-fn watch_key_exists_at_start() {
+fn key_cloned_exists_at_start() {
     let input = util::Source::new(vec![
         Poll::Ready(MapDiff::Replace {
             entries: vec![(1, 1), (2, 1), (3, 2), (4, 3)]
@@ -69,24 +69,22 @@ fn watch_key_exists_at_start() {
             value: 0,
         }),
         Poll::Pending,
+        Poll::Pending,
         Poll::Ready(MapDiff::Remove {key: 1})
     ]);
 
-    let output = input.watch_key(1);
+    let output = input.key_cloned(1);
 
     util::assert_signal_eq(output, vec![
         Poll::Ready(Some(Some(1))),
-        Poll::Pending,
         Poll::Ready(Some(Some(0))),
         Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(None)),
         Poll::Ready(None),
     ]);
 }
 
 #[test]
-fn watch_key_does_not_exist_at_start() {
+fn key_cloned_does_not_exist_at_start() {
     let input = util::Source::new(vec![
         Poll::Ready(MapDiff::Replace {
             entries: vec![(1, 1), (2, 1), (3, 2), (4, 3)]
@@ -101,18 +99,16 @@ fn watch_key_does_not_exist_at_start() {
             value: 0,
         }),
         Poll::Pending,
+        Poll::Pending,
         Poll::Ready(MapDiff::Clear {})
     ]);
 
-    let output = input.watch_key(5);
+    let output = input.key_cloned(5);
 
     util::assert_signal_eq(output, vec![
         Poll::Ready(Some(None)),
-        Poll::Pending,
-        Poll::Ready(Some(Some(5))),
         Poll::Ready(Some(Some(0))),
         Poll::Pending,
-        Poll::Ready(Some(None)),
         Poll::Ready(None),
     ]);
 }
