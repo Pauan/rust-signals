@@ -660,6 +660,7 @@ impl<A, B, C> Signal for Switch<A, B, C>
 }
 
 
+// TODO faster for_each which doesn't poll twice on Poll::Ready
 #[pin_project]
 #[derive(Debug)]
 #[must_use = "Futures do nothing unless polled"]

@@ -10,7 +10,7 @@ use std::task::{Poll, Context, Waker};
 struct Inner<A> {
     value: Option<A>,
     waker: Option<Waker>,
-    dropped: bool,
+    senders: usize,
 }
 
 impl<A> Inner<A> {
@@ -33,14 +33,50 @@ impl<A> Sender<A> {
         if let Some(inner) = self.inner.upgrade() {
             let mut inner = inner.lock().unwrap();
 
-            inner.value = Some(value);
+            // This will be 0 if the channel was closed
+            if inner.senders > 0 {
+                inner.value = Some(value);
 
-            Inner::notify(inner);
+                Inner::notify(inner);
 
-            Ok(())
+                Ok(())
+
+            } else {
+                Err(value)
+            }
 
         } else {
             Err(value)
+        }
+    }
+
+    pub fn close(&self) {
+        if let Some(inner) = self.inner.upgrade() {
+            let mut inner = inner.lock().unwrap();
+
+            // This will be 0 if the channel was closed
+            if inner.senders > 0 {
+                inner.senders = 0;
+
+                Inner::notify(inner);
+            }
+        }
+    }
+}
+
+impl<A> Clone for Sender<A> {
+    fn clone(&self) -> Self {
+        if let Some(inner) = self.inner.upgrade() {
+            let mut inner = inner.lock().unwrap();
+
+            // This will be 0 if the channel was closed
+            if inner.senders > 0 {
+                inner.senders += 1;
+            }
+        }
+
+        Self {
+            inner: self.inner.clone(),
         }
     }
 }
@@ -50,9 +86,14 @@ impl<A> Drop for Sender<A> {
         if let Some(inner) = self.inner.upgrade() {
             let mut inner = inner.lock().unwrap();
 
-            inner.dropped = true;
+            // This will be 0 if the channel was closed
+            if inner.senders > 0 {
+                inner.senders -= 1;
 
-            Inner::notify(inner);
+                if inner.senders == 0 {
+                    Inner::notify(inner);
+                }
+            }
         }
     }
 }
@@ -75,7 +116,7 @@ impl<A> Signal for Receiver<A> {
 
         // TODO is this correct ?
         match inner.value.take() {
-            None => if inner.dropped {
+            None => if inner.senders == 0 {
                 Poll::Ready(None)
 
             } else {
@@ -92,7 +133,7 @@ pub fn channel<A>(initial_value: A) -> (Sender<A>, Receiver<A>) {
     let inner = Arc::new(Mutex::new(Inner {
         value: Some(initial_value),
         waker: None,
-        dropped: false,
+        senders: 1,
     }));
 
     let sender = Sender {
