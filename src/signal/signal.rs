@@ -965,30 +965,32 @@ impl<A, B> SignalVec for SignalSignalVec<A>
 }
 
 
-macro_rules! dedupe {
-    ($signal:expr, $cx:expr, $value:expr, $pat:pat, $name:ident => $output:expr) => {
-        loop {
-            return match $signal.as_mut().poll_change($cx) {
-                Poll::Ready(Some($pat)) => {
-                    let has_changed = match $value {
-                        Some(ref old_value) => *old_value != $name,
-                        None => true,
-                    };
+// TODO should this inline ?
+fn dedupe<A, S, F>(mut signal: Pin<&mut S>, cx: &mut Context, old_value: &mut Option<S::Item>, f: F) -> Poll<Option<A>>
+    where S: Signal,
+          S::Item: PartialEq,
+          F: FnOnce(&mut S::Item) -> A {
+    loop {
+        return match signal.as_mut().poll_change(cx) {
+            Poll::Ready(Some(mut new_value)) => {
+                let has_changed = match old_value {
+                    Some(old_value) => *old_value != new_value,
+                    None => true,
+                };
 
-                    if has_changed {
-                        let output = $output;
-                        *$value = Some($name);
-                        Poll::Ready(Some(output))
+                if has_changed {
+                    let output = f(&mut new_value);
+                    *old_value = Some(new_value);
+                    Poll::Ready(Some(output))
 
-                    } else {
-                        continue;
-                    }
-                },
-                Poll::Ready(None) => Poll::Ready(None),
-                Poll::Pending => Poll::Pending,
-            }
+                } else {
+                    continue;
+                }
+            },
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
         }
-    };
+    }
 }
 
 
@@ -1013,9 +1015,9 @@ impl<A, B, C> Signal for DedupeMap<A, B>
 
     // TODO should this use #[inline] ?
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let DedupeMapProj { old_value, mut signal, callback } = self.project();
+        let DedupeMapProj { old_value, signal, callback } = self.project();
 
-        dedupe!(signal, cx, old_value, mut value, value => callback(&mut value))
+        dedupe(signal, cx, old_value, callback)
     }
 }
 
@@ -1037,9 +1039,9 @@ impl<A> Signal for Dedupe<A>
 
     // TODO should this use #[inline] ?
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let DedupeProj { old_value, mut signal } = self.project();
+        let DedupeProj { old_value, signal } = self.project();
 
-        dedupe!(signal, cx, old_value, value, value => value)
+        dedupe(signal, cx, old_value, |value| *value)
     }
 }
 
@@ -1061,9 +1063,9 @@ impl<A> Signal for DedupeCloned<A>
 
     // TODO should this use #[inline] ?
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let DedupeClonedProj { old_value, mut signal } = self.project();
+        let DedupeClonedProj { old_value, signal } = self.project();
 
-        dedupe!(signal, cx, old_value, value, value => value.clone())
+        dedupe(signal, cx, old_value, |value| value.clone())
     }
 }
 
