@@ -9,9 +9,9 @@ struct TestValueType {
 }
 
 fn emits_diffs<K, V, F>(f: F, polls: Vec<Poll<Option<MapDiff<K, V>>>>)
-    where F: FnOnce(&mut MutableBTreeMapLockMut<K, V>), 
+    where F: FnOnce(&mut MutableBTreeMapLockMut<K, V>),
           K: Ord + Copy + std::fmt::Debug,
-          V: Eq + Copy + std::fmt::Debug {
+          V: PartialEq + Copy + std::fmt::Debug {
 
     let map = MutableBTreeMap::<K, V>::new();
     assert_eq!(util::get_signal_map_polls(map.signal_map(), || {
@@ -24,9 +24,9 @@ fn emits_diffs<K, V, F>(f: F, polls: Vec<Poll<Option<MapDiff<K, V>>>>)
 }
 
 fn emits_diffs_cloned<K, V, F>(f: F, polls: Vec<Poll<Option<MapDiff<K, V>>>>)
-    where F: FnOnce(&mut MutableBTreeMapLockMut<K, V>), 
+    where F: FnOnce(&mut MutableBTreeMapLockMut<K, V>),
           K: Ord + Clone + std::fmt::Debug,
-          V: Eq + Clone + std::fmt::Debug {
+          V: PartialEq + Clone + std::fmt::Debug {
 
     let map = MutableBTreeMap::<K, V>::new();
     assert_eq!(util::get_signal_map_polls(map.signal_map_cloned(), || {
@@ -77,7 +77,7 @@ fn signal_map() {
         writer.insert(1, 1);
         writer.remove(&1);
     }, vec![
-        Poll::Pending, 
+        Poll::Pending,
         Poll::Ready(Some(MapDiff::Insert { key: 1, value: 1 })),
         Poll::Ready(Some(MapDiff::Remove { key: 1 })),
         Poll::Ready(None)
@@ -90,7 +90,7 @@ fn signal_map_cloned() {
         writer.insert_cloned(1, TestValueType {inner: 42});
         writer.remove(&1);
     }, vec![
-        Poll::Pending, 
+        Poll::Pending,
         Poll::Ready(Some(MapDiff::Insert { key: 1, value: TestValueType {inner: 42} })),
         Poll::Ready(Some(MapDiff::Remove { key: 1 })),
         Poll::Ready(None)

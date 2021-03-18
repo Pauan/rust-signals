@@ -79,6 +79,7 @@ fn key_cloned_exists_at_start() {
         Poll::Ready(Some(Some(1))),
         Poll::Ready(Some(Some(0))),
         Poll::Pending,
+        Poll::Ready(Some(None)),
         Poll::Ready(None),
     ]);
 }
@@ -109,6 +110,19 @@ fn key_cloned_does_not_exist_at_start() {
         Poll::Ready(Some(None)),
         Poll::Ready(Some(Some(0))),
         Poll::Pending,
+        Poll::Ready(Some(None)),
+        Poll::Ready(None),
+    ]);
+}
+
+#[test]
+fn key_cloned_empty() {
+    let input = util::Source::<MapDiff<u32, u32>>::new(vec![]);
+
+    let output = input.key_cloned(5);
+
+    util::assert_signal_eq(output, vec![
+        Poll::Ready(Some(None)),
         Poll::Ready(None),
     ]);
 }

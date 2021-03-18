@@ -104,12 +104,13 @@ pub trait SignalMapExt: SignalMap {
     /// Returns a signal that tracks the value of a particular key in the map.
     #[inline]
     fn key_cloned(self, key: Self::Key) -> MapWatchKeySignal<Self>
-        where Self::Key: Eq,
+        where Self::Key: PartialEq,
               Self::Value: Clone,
               Self: Sized {
         MapWatchKeySignal {
             signal_map: self,
-            watch_key: key
+            watch_key: key,
+            first: true,
         }
     }
 
@@ -154,62 +155,69 @@ pub struct MapWatchKeySignal<M> where M: SignalMap {
     #[pin]
     signal_map: M,
     watch_key: M::Key,
+    first: bool,
 }
 
-impl<M> Signal for MapWatchKeySignal<M> 
-    where M: SignalMap, 
+impl<M> Signal for MapWatchKeySignal<M>
+    where M: SignalMap,
           M::Key: PartialEq,
           M::Value: Clone {
     type Item = Option<M::Value>;
-    
+
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let MapWatchKeySignalProj { mut signal_map, watch_key } = self.project();
+        let MapWatchKeySignalProj { mut signal_map, watch_key, first } = self.project();
 
-        let mut did_close = false;
-        let mut most_recent_value: Option<Option<M::Value>> = None;
+        let mut changed: Option<Option<M::Value>> = None;
 
-        loop {
-            match signal_map.as_mut().poll_map_change(cx) {
+        let is_done = loop {
+            break match signal_map.as_mut().poll_map_change(cx) {
                 Poll::Ready(some) => match some {
                     Some(MapDiff::Replace { entries }) => {
-                        most_recent_value = Some(
+                        changed = Some(
                             entries
                                 .into_iter()
                                 .find(|entry| entry.0 == *watch_key)
                                 .map(|entry| entry.1)
                         );
+                        continue;
                     },
                     Some(MapDiff::Insert { key, value }) | Some(MapDiff::Update { key, value }) => {
                         if key == *watch_key {
-                            most_recent_value = Some(Some(value));
+                            changed = Some(Some(value));
                         }
                         continue;
                     },
                     Some(MapDiff::Remove { key }) => {
                         if key == *watch_key {
-                            most_recent_value = Some(None);
+                            changed = Some(None);
                         }
                         continue;
                     },
                     Some(MapDiff::Clear {}) => {
-                        most_recent_value = Some(None);
+                        changed = Some(None);
                         continue;
                     },
                     None => {
-                        did_close = true;
-                        break;
-                    }
+                        true
+                    },
                 },
                 Poll::Pending => {
-                    break;
+                    false
                 },
             }
         };
 
-        if did_close {
+        if let Some(change) = changed {
+            *first = false;
+            Poll::Ready(Some(change))
+
+        } else if *first {
+            *first = false;
+            Poll::Ready(Some(None))
+
+        } else if is_done {
             Poll::Ready(None)
-        } else if most_recent_value.is_some() {
-            Poll::Ready(most_recent_value)
+
         } else {
             Poll::Pending
         }
@@ -368,9 +376,9 @@ mod mutable_btree_map {
         }
 
         fn insert(&mut self, key: K, value: V) -> Option<V> {
-            if let Some(value) = self.values.insert(key, value) {
+            if let Some(old_value) = self.values.insert(key, value) {
                 self.notify(|| MapDiff::Update { key, value });
-                Some(value)
+                Some(old_value)
 
             } else {
                 self.notify(|| MapDiff::Insert { key, value });
@@ -557,8 +565,8 @@ mod mutable_btree_map {
             self.0.write().unwrap().signal_map_cloned()
         }
 
-        // TODO deprecate and rename to signal_vec_keys_cloned.
-        // Then build signal_vec_keys for vecs with a Copy trait.
+        // TODO deprecate and rename to keys_cloned
+        // TODO replace with MutableBTreeMapKeysCloned
         #[inline]
         pub fn signal_vec_keys(&self) -> MutableBTreeMapKeys<K, V> {
             MutableBTreeMapKeys {
@@ -567,7 +575,7 @@ mod mutable_btree_map {
             }
         }
 
-        // TODO deprecate and rename to signal_vec_entries
+        // TODO replace with MutableBTreeMapEntriesCloned
         #[inline]
         pub fn entries_cloned(&self) -> MutableBTreeMapEntries<K, V> {
             MutableBTreeMapEntries {
@@ -583,6 +591,7 @@ mod mutable_btree_map {
             self.0.write().unwrap().signal_map()
         }
 
+        // TODO deprecate and rename to entries
         #[inline]
         pub fn signal_vec_entries(&self) -> MutableBTreeMapEntries<K, V> {
             MutableBTreeMapEntries {
