@@ -2024,8 +2024,9 @@ mod mutable_vec {
     use std::pin::Pin;
     use std::marker::Unpin;
     use std::fmt;
-    use std::ops::{Deref, Index};
+    use std::ops::{Deref, Index, Range, RangeBounds, Bound};
     use std::slice::SliceIndex;
+    use std::vec::Drain;
     use std::borrow::Borrow;
     use std::cmp::{Ord, Ordering};
     use std::hash::{Hash, Hasher};
@@ -2034,6 +2035,35 @@ mod mutable_vec {
     use futures_channel::mpsc;
     use futures_util::stream::StreamExt;
     use serde::{Serialize, Deserialize, Serializer, Deserializer};
+
+
+    // TODO replace with std::slice::range after it stabilizes
+    fn convert_range<R>(range: R, len: usize) -> Range<usize> where R: RangeBounds<usize> {
+        let start = match range.start_bound() {
+            Bound::Included(&start) => start,
+            Bound::Excluded(start) => {
+                start.checked_add(1).unwrap_or_else(|| panic!("attempted to index slice from after maximum usize"))
+            }
+            Bound::Unbounded => 0,
+        };
+
+        let end = match range.end_bound() {
+            Bound::Included(end) => {
+                end.checked_add(1).unwrap_or_else(|| panic!("attempted to index slice up to maximum usize"))
+            }
+            Bound::Excluded(&end) => end,
+            Bound::Unbounded => len,
+        };
+
+        if start > end {
+            panic!("slice index starts at {} but ends at {}", start, end);
+        }
+        if end > len {
+            panic!("range end index {} out of range for slice of length {}", end, len);
+        }
+
+        Range { start, end }
+    }
 
 
     #[derive(Debug)]
@@ -2163,6 +2193,34 @@ mod mutable_vec {
                     }
                 }
             }
+        }
+
+        fn remove_range(&mut self, range: Range<usize>, mut len: usize) {
+            if range.end > range.start {
+                if range.start == 0 && range.end == len {
+                    self.notify(|| VecDiff::Clear {});
+
+                } else {
+                    // TODO use VecDiff::Batch
+                    for index in range.into_iter().rev() {
+                        len -= 1;
+
+                        if index == len {
+                            self.notify(|| VecDiff::Pop {});
+
+                        } else {
+                            self.notify(|| VecDiff::RemoveAt { index });
+                        }
+                    }
+                }
+            }
+        }
+
+        fn drain<R>(&mut self, range: R) -> Drain<'_, A> where R: RangeBounds<usize> {
+            let len = self.values.len();
+            let range = convert_range(range, len);
+            self.remove_range(range.clone(), len);
+            self.values.drain(range)
         }
     }
 
@@ -2374,7 +2432,7 @@ mod mutable_vec {
 
     // TODO rotate_left, rotate_right, sort, sort_by, sort_by_cached_key, sort_by_key,
     //      sort_unstable, sort_unstable_by, sort_unstable_by_key, dedup, dedup_by,
-    //      dedup_by_key, drain, extend_from_slice, resize, resize_with, splice,
+    //      dedup_by_key, extend_from_slice, resize, resize_with, splice,
     //      split_off, swap_remove, truncate
     // TODO Extend
     #[derive(Debug)]
@@ -2417,6 +2475,12 @@ mod mutable_vec {
         #[inline]
         pub fn retain<F>(&mut self, f: F) where F: FnMut(&A) -> bool {
             self.lock.retain(f)
+        }
+
+        // TOOD maybe return a custom wrapper ?
+        #[inline]
+        pub fn drain<R>(&mut self, range: R) -> Drain<'_, A> where R: RangeBounds<usize> {
+            self.lock.drain(range)
         }
 
         pub fn reverse(&mut self) {
