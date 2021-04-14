@@ -115,6 +115,82 @@ fn filter() {
 
 
 #[test]
+fn filter_map() {
+    let input = util::Source::new(vec![
+        Poll::Ready(VecDiff::Replace { values: vec![0, 1, 2, 3, 4, 5] }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::InsertAt { index: 0, value: 6 }),
+        Poll::Ready(VecDiff::InsertAt { index: 2, value: 7 }),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(VecDiff::InsertAt { index: 5, value: 8 }),
+        Poll::Ready(VecDiff::InsertAt { index: 7, value: 9 }),
+        Poll::Ready(VecDiff::InsertAt { index: 9, value: 10 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::InsertAt { index: 11, value: 11 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::InsertAt { index: 0, value: 0 }),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(VecDiff::InsertAt { index: 1, value: 0 }),
+        Poll::Ready(VecDiff::InsertAt { index: 5, value: 0 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::InsertAt { index: 5, value: 12 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::RemoveAt { index: 0 }),
+        Poll::Ready(VecDiff::RemoveAt { index: 0 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::RemoveAt { index: 0 }),
+        Poll::Ready(VecDiff::RemoveAt { index: 1 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::RemoveAt { index: 0 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::RemoveAt { index: 0 }),
+    ]);
+
+    let output = input.filter_map(|x| {
+        if x == 3 || x == 4 || x > 5 {
+            Some(x + 200)
+
+        } else {
+            None
+        }
+    });
+
+    let changes = util::map_poll_vec(output, |_output, change| change);
+
+    assert_eq!(changes, vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![203, 204] })),
+        Poll::Pending,
+        Poll::Ready(Some(VecDiff::InsertAt { index: 0, value: 206 })),
+        Poll::Ready(Some(VecDiff::InsertAt { index: 1, value: 207 })),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(VecDiff::InsertAt { index: 2, value: 208 })),
+        Poll::Ready(Some(VecDiff::InsertAt { index: 4, value: 209 })),
+        Poll::Ready(Some(VecDiff::InsertAt { index: 6, value: 210 })),
+        Poll::Pending,
+        Poll::Ready(Some(VecDiff::InsertAt { index: 7, value: 211 })),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(VecDiff::InsertAt { index: 2, value: 212 })),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 0 })),
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 0 })),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 0 })),
+        Poll::Ready(None),
+    ]);
+}
+
+
+#[test]
 fn sum() {
     let input = util::Source::new(vec![
         Poll::Pending,

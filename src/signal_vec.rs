@@ -298,6 +298,17 @@ pub trait SignalVecExt: SignalVec {
         }
     }
 
+    #[inline]
+    fn filter_map<A, F>(self, callback: F) -> FilterMap<Self, F>
+        where F: FnMut(Self::Item) -> Option<A>,
+              Self: Sized {
+        FilterMap {
+            indexes: vec![],
+            signal: self,
+            callback,
+        }
+    }
+
     // TODO replace with to_signal_map ?
     #[inline]
     fn sum(self) -> SumSignal<Self>
@@ -1312,6 +1323,118 @@ impl<A: SignalVec> Stream for SignalVecStream<A> {
 }
 
 
+fn find_index(indexes: &[bool], index: usize) -> usize {
+    indexes[0..index].into_iter().filter(|x| **x).count()
+}
+
+fn poll_filter_map<A, S, F>(indexes: &mut Vec<bool>, mut signal: Pin<&mut S>, cx: &mut Context, mut callback: F) -> Poll<Option<VecDiff<A>>>
+    where S: SignalVec,
+          F: FnMut(S::Item) -> Option<A> {
+
+    loop {
+        return match signal.as_mut().poll_vec_change(cx) {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Ready(Some(change)) => match change {
+                VecDiff::Replace { values } => {
+                    *indexes = Vec::with_capacity(values.len());
+
+                    Poll::Ready(Some(VecDiff::Replace {
+                        values: values.into_iter().filter_map(|value| {
+                            let value = callback(value);
+                            indexes.push(value.is_some());
+                            value
+                        }).collect()
+                    }))
+                },
+
+                VecDiff::InsertAt { index, value } => {
+                    if let Some(value) = callback(value) {
+                        indexes.insert(index, true);
+                        Poll::Ready(Some(VecDiff::InsertAt { index: find_index(indexes, index), value }))
+
+                    } else {
+                        indexes.insert(index, false);
+                        continue;
+                    }
+                },
+
+                VecDiff::UpdateAt { index, value } => {
+                    if let Some(value) = callback(value) {
+                        if indexes[index] {
+                            Poll::Ready(Some(VecDiff::UpdateAt { index: find_index(indexes, index), value }))
+
+                        } else {
+                            indexes[index] = true;
+                            Poll::Ready(Some(VecDiff::InsertAt { index: find_index(indexes, index), value }))
+                        }
+
+                    } else {
+                        if indexes[index] {
+                            indexes[index] = false;
+                            Poll::Ready(Some(VecDiff::RemoveAt { index: find_index(indexes, index) }))
+
+                        } else {
+                            continue;
+                        }
+                    }
+                },
+
+                // TODO unit tests for this
+                VecDiff::Move { old_index, new_index } => {
+                    if indexes.remove(old_index) {
+                        indexes.insert(new_index, true);
+
+                        Poll::Ready(Some(VecDiff::Move {
+                            old_index: find_index(indexes, old_index),
+                            new_index: find_index(indexes, new_index),
+                        }))
+
+                    } else {
+                        indexes.insert(new_index, false);
+                        continue;
+                    }
+                },
+
+                VecDiff::RemoveAt { index } => {
+                    if indexes.remove(index) {
+                        Poll::Ready(Some(VecDiff::RemoveAt { index: find_index(indexes, index) }))
+
+                    } else {
+                        continue;
+                    }
+                },
+
+                VecDiff::Push { value } => {
+                    if let Some(value) = callback(value) {
+                        indexes.push(true);
+                        Poll::Ready(Some(VecDiff::Push { value }))
+
+                    } else {
+                        indexes.push(false);
+                        continue;
+                    }
+                },
+
+                VecDiff::Pop {} => {
+                    if indexes.pop().expect("Cannot pop from empty vec") {
+                        Poll::Ready(Some(VecDiff::Pop {}))
+
+                    } else {
+                        continue;
+                    }
+                },
+
+                VecDiff::Clear {} => {
+                    indexes.clear();
+                    Poll::Ready(Some(VecDiff::Clear {}))
+                },
+            },
+        }
+    }
+}
+
+
 #[pin_project(project = FilterProj)]
 #[derive(Debug)]
 #[must_use = "SignalVecs do nothing unless polled"]
@@ -1323,121 +1446,44 @@ pub struct Filter<A, B> {
     callback: B,
 }
 
-impl<A, B> Filter<A, B> {
-    fn find_index(indexes: &[bool], index: usize) -> usize {
-        indexes[0..index].into_iter().filter(|x| **x).count()
-    }
-}
-
 impl<A, F> SignalVec for Filter<A, F>
     where A: SignalVec,
           F: FnMut(&A::Item) -> bool {
     type Item = A::Item;
 
     fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
-        let FilterProj { indexes, mut signal, callback } = self.project();
+        let FilterProj { indexes, signal, callback } = self.project();
 
-        loop {
-            return match signal.as_mut().poll_vec_change(cx) {
-                Poll::Pending => Poll::Pending,
-                Poll::Ready(None) => Poll::Ready(None),
-                Poll::Ready(Some(change)) => match change {
-                    VecDiff::Replace { values } => {
-                        *indexes = Vec::with_capacity(values.len());
-
-                        Poll::Ready(Some(VecDiff::Replace {
-                            values: values.into_iter().filter(|value| {
-                                let keep = callback(value);
-                                indexes.push(keep);
-                                keep
-                            }).collect()
-                        }))
-                    },
-
-                    VecDiff::InsertAt { index, value } => {
-                        if callback(&value) {
-                            indexes.insert(index, true);
-                            Poll::Ready(Some(VecDiff::InsertAt { index: Self::find_index(indexes, index), value }))
-
-                        } else {
-                            indexes.insert(index, false);
-                            continue;
-                        }
-                    },
-
-                    VecDiff::UpdateAt { index, value } => {
-                        if callback(&value) {
-                            if indexes[index] {
-                                Poll::Ready(Some(VecDiff::UpdateAt { index: Self::find_index(indexes, index), value }))
-
-                            } else {
-                                indexes[index] = true;
-                                Poll::Ready(Some(VecDiff::InsertAt { index: Self::find_index(indexes, index), value }))
-                            }
-
-                        } else {
-                            if indexes[index] {
-                                indexes[index] = false;
-                                Poll::Ready(Some(VecDiff::RemoveAt { index: Self::find_index(indexes, index) }))
-
-                            } else {
-                                continue;
-                            }
-                        }
-                    },
-
-                    // TODO unit tests for this
-                    VecDiff::Move { old_index, new_index } => {
-                        if indexes.remove(old_index) {
-                            indexes.insert(new_index, true);
-
-                            Poll::Ready(Some(VecDiff::Move {
-                                old_index: Self::find_index(indexes, old_index),
-                                new_index: Self::find_index(indexes, new_index),
-                            }))
-
-                        } else {
-                            indexes.insert(new_index, false);
-                            continue;
-                        }
-                    },
-
-                    VecDiff::RemoveAt { index } => {
-                        if indexes.remove(index) {
-                            Poll::Ready(Some(VecDiff::RemoveAt { index: Self::find_index(indexes, index) }))
-
-                        } else {
-                            continue;
-                        }
-                    },
-
-                    VecDiff::Push { value } => {
-                        if callback(&value) {
-                            indexes.push(true);
-                            Poll::Ready(Some(VecDiff::Push { value }))
-
-                        } else {
-                            indexes.push(false);
-                            continue;
-                        }
-                    },
-
-                    VecDiff::Pop {} => {
-                        if indexes.pop().expect("Cannot pop from empty vec") {
-                            Poll::Ready(Some(VecDiff::Pop {}))
-
-                        } else {
-                            continue;
-                        }
-                    },
-
-                    VecDiff::Clear {} => {
-                        indexes.clear();
-                        Poll::Ready(Some(VecDiff::Clear {}))
-                    },
-                },
+        poll_filter_map(indexes, signal, cx, move |value| {
+            if callback(&value) {
+                Some(value)
+            } else {
+                None
             }
-        }
+        })
+    }
+}
+
+
+#[pin_project(project = FilterMapProj)]
+#[derive(Debug)]
+#[must_use = "SignalVecs do nothing unless polled"]
+pub struct FilterMap<S, F> {
+    // TODO use a bit vec for smaller size
+    indexes: Vec<bool>,
+    #[pin]
+    signal: S,
+    callback: F,
+}
+
+impl<S, A, F> SignalVec for FilterMap<S, F>
+    where S: SignalVec,
+          F: FnMut(S::Item) -> Option<A> {
+    type Item = A;
+
+    fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
+        let FilterMapProj { indexes, signal, callback } = self.project();
+        poll_filter_map(indexes, signal, cx, callback)
     }
 }
 
