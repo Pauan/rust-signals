@@ -227,6 +227,76 @@ fn sum() {
 
 
 #[test]
+fn len() {
+    let input = util::Source::new(vec![
+        Poll::Ready(VecDiff::Replace { values: vec![0, 1, 2, 3, 4, 5] }),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(VecDiff::InsertAt { index: 0, value: 6 }),
+        Poll::Ready(VecDiff::InsertAt { index: 2, value: 7 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::RemoveAt { index: 0 }),
+        Poll::Ready(VecDiff::UpdateAt { index: 4, value: 0 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::Move { old_index: 1, new_index: 3 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::RemoveAt { index: 1 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::Clear {}),
+        Poll::Ready(VecDiff::Replace { values: vec![] }),
+    ]);
+
+    let output = input.len();
+
+    util::assert_signal_eq(output, vec![
+        Poll::Ready(Some(6)),
+        Poll::Pending,
+        Poll::Ready(Some(8)),
+        Poll::Ready(Some(7)),
+        Poll::Pending,
+        Poll::Ready(Some(6)),
+        Poll::Ready(Some(0)),
+        Poll::Ready(None),
+    ]);
+}
+
+
+#[test]
+fn is_empty() {
+    let input = util::Source::new(vec![
+        Poll::Ready(VecDiff::Replace { values: vec![0, 1, 2, 3, 4, 5] }),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(VecDiff::InsertAt { index: 0, value: 6 }),
+        Poll::Ready(VecDiff::InsertAt { index: 2, value: 7 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::RemoveAt { index: 0 }),
+        Poll::Ready(VecDiff::UpdateAt { index: 4, value: 0 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::Move { old_index: 1, new_index: 3 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::RemoveAt { index: 1 }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::Clear {}),
+        Poll::Ready(VecDiff::Replace { values: vec![] }),
+    ]);
+
+    let output = input.is_empty();
+
+    util::assert_signal_eq(output, vec![
+        Poll::Ready(Some(false)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(true)),
+        Poll::Ready(None),
+    ]);
+}
+
+
+#[test]
 fn to_signal_map() {
     let input = util::Source::new(vec![
         Poll::Pending,

@@ -459,6 +459,14 @@ pub trait SignalVecExt: SignalVec {
     }
 
     #[inline]
+    fn is_empty(self) -> IsEmpty<Self> where Self: Sized {
+        IsEmpty {
+            len: self.len(),
+            old: None,
+        }
+    }
+
+    #[inline]
     fn enumerate(self) -> Enumerate<Self> where Self: Sized {
         Enumerate {
             signal: self,
@@ -1219,6 +1227,40 @@ impl<A, B, F> SignalVec for FilterSignalCloned<A, B, F>
 
         } else {
             Poll::Pending
+        }
+    }
+}
+
+
+#[pin_project(project = IsEmptyProj)]
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct IsEmpty<A> {
+    #[pin]
+    len: Len<A>,
+    old: Option<bool>,
+}
+
+impl<A> Signal for IsEmpty<A> where A: SignalVec {
+    type Item = bool;
+
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let IsEmptyProj { len, old } = self.project();
+
+        match len.poll_change(cx) {
+            Poll::Ready(Some(len)) => {
+                let new = Some(len == 0);
+
+                if *old != new {
+                    *old = new;
+                    Poll::Ready(new)
+
+                } else {
+                    Poll::Pending
+                }
+            },
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
         }
     }
 }
