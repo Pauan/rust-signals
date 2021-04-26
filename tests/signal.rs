@@ -112,6 +112,175 @@ fn test_send_sync() {
 
 
 #[test]
+fn test_map() {
+    let input = util::Source::new(vec![
+        Poll::Ready(0),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(1),
+        Poll::Ready(5),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(0),
+        Poll::Pending,
+        Poll::Ready(3),
+        Poll::Pending,
+    ]);
+
+    let output = input.map(move |x| x * 10);
+
+    util::assert_signal_eq(output, vec![
+        Poll::Ready(Some(0)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(10)),
+        Poll::Ready(Some(50)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(0)),
+        Poll::Pending,
+        Poll::Ready(Some(30)),
+        Poll::Pending,
+        Poll::Ready(None),
+    ]);
+}
+
+
+#[test]
+fn test_eq() {
+    let input = util::Source::new(vec![
+        Poll::Ready(0),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(1),
+        Poll::Pending,
+        Poll::Ready(5),
+        Poll::Pending,
+        Poll::Ready(3),
+        Poll::Pending,
+        Poll::Ready(1),
+        Poll::Ready(2),
+        Poll::Ready(3),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(1),
+        Poll::Ready(1),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(0),
+        Poll::Ready(1),
+        Poll::Pending,
+        Poll::Ready(3),
+        Poll::Pending,
+    ]);
+
+    let output = input.eq(1);
+
+    util::assert_signal_eq(output, vec![
+        Poll::Ready(Some(false)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(true)),
+        Poll::Pending,
+        Poll::Ready(Some(false)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(true)),
+        Poll::Ready(Some(false)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(true)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(false)),
+        Poll::Ready(Some(true)),
+        Poll::Pending,
+        Poll::Ready(Some(false)),
+        Poll::Pending,
+        Poll::Ready(None),
+    ]);
+}
+
+
+#[test]
+fn test_neq() {
+    let input = util::Source::new(vec![
+        Poll::Ready(0),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(1),
+        Poll::Pending,
+        Poll::Ready(5),
+        Poll::Pending,
+        Poll::Ready(3),
+        Poll::Pending,
+        Poll::Ready(1),
+        Poll::Ready(2),
+        Poll::Ready(3),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(1),
+        Poll::Ready(1),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(0),
+        Poll::Ready(1),
+        Poll::Pending,
+        Poll::Ready(3),
+        Poll::Pending,
+    ]);
+
+    let output = input.neq(1);
+
+    util::assert_signal_eq(output, vec![
+        Poll::Ready(Some(true)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(false)),
+        Poll::Pending,
+        Poll::Ready(Some(true)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(false)),
+        Poll::Ready(Some(true)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(false)),
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Pending,
+        Poll::Ready(Some(true)),
+        Poll::Ready(Some(false)),
+        Poll::Pending,
+        Poll::Ready(Some(true)),
+        Poll::Pending,
+        Poll::Ready(None),
+    ]);
+}
+
+
+#[test]
 fn test_map_future() {
     let mutable = Rc::new(Mutable::new(1));
 

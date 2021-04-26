@@ -12,6 +12,14 @@ use crate::signal_vec::{VecDiff, SignalVec};
 
 
 // TODO impl for AssertUnwindSafe ?
+// TODO documentation for Signal contract:
+// * a Signal must always return Poll::Ready(Some(...)) the first time it is polled, no exceptions
+// * after the first time it can then return Poll::Ready(None) which means that the Signal is ended (i.e. there won't be any future changes)
+// * or it can return Poll::Pending, which means the Signal hasn't changed from its previous value
+// * whenever the Signal's value has changed, it must call cx.waker().wake_by_ref() which will notify the consumer that the Signal has changed
+// * If wake_by_ref() hasn't been called, then the consumer assumes that nothing has changed, so it won't re-poll the Signal
+// * unlike Streams, the consumer does not poll again if it receives Poll::Ready(Some(...)), it will only repoll if wake_by_ref() is called
+// * If the Signal returns Poll::Ready(None) then the consumer must not re-poll the Signal
 #[must_use = "Signals do nothing unless polled"]
 pub trait Signal {
     type Item;
@@ -160,6 +168,28 @@ pub trait SignalExt: Signal {
         Inspect {
             signal: self,
             callback,
+        }
+    }
+
+    #[inline]
+    fn eq(self, value: Self::Item) -> Eq<Self>
+        where Self::Item: PartialEq,
+              Self: Sized {
+        Eq {
+            signal: self,
+            matches: None,
+            value,
+        }
+    }
+
+    #[inline]
+    fn neq(self, value: Self::Item) -> Neq<Self>
+        where Self::Item: PartialEq,
+              Self: Sized {
+        Neq {
+            signal: self,
+            matches: None,
+            value,
         }
     }
 
@@ -754,6 +784,82 @@ impl<A, B, C> Signal for Map<A, B>
         let MapProj { signal, callback } = self.project();
 
         signal.poll_change(cx).map(|opt| opt.map(|value| callback(value)))
+    }
+}
+
+
+#[pin_project(project = EqProj)]
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct Eq<A> where A: Signal {
+    #[pin]
+    signal: A,
+    matches: Option<bool>,
+    value: A::Item,
+}
+
+impl<A> Signal for Eq<A>
+    where A: Signal,
+          A::Item: PartialEq {
+    type Item = bool;
+
+    #[inline]
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let EqProj { signal, matches, value } = self.project();
+
+        match signal.poll_change(cx) {
+            Poll::Ready(Some(new_value)) => {
+                let new = Some(new_value == *value);
+
+                if *matches != new {
+                    *matches = new;
+                    Poll::Ready(new)
+
+                } else {
+                    Poll::Pending
+                }
+            },
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+
+#[pin_project(project = NeqProj)]
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct Neq<A> where A: Signal {
+    #[pin]
+    signal: A,
+    matches: Option<bool>,
+    value: A::Item,
+}
+
+impl<A> Signal for Neq<A>
+    where A: Signal,
+          A::Item: PartialEq {
+    type Item = bool;
+
+    #[inline]
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let NeqProj { signal, matches, value } = self.project();
+
+        match signal.poll_change(cx) {
+            Poll::Ready(Some(new_value)) => {
+                let new = Some(new_value != *value);
+
+                if *matches != new {
+                    *matches = new;
+                    Poll::Ready(new)
+
+                } else {
+                    Poll::Pending
+                }
+            },
+            Poll::Ready(None) => Poll::Ready(None),
+            Poll::Pending => Poll::Pending,
+        }
     }
 }
 
