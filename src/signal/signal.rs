@@ -221,6 +221,7 @@ pub trait SignalExt: Signal {
     fn dedupe_map<A, B>(self, callback: B) -> DedupeMap<Self, B>
         // TODO should this use & instead of &mut ?
         where B: FnMut(&mut Self::Item) -> A,
+              Self::Item: PartialEq,
               Self: Sized {
         DedupeMap {
             old_value: None,
@@ -230,7 +231,9 @@ pub trait SignalExt: Signal {
     }
 
     #[inline]
-    fn dedupe(self) -> Dedupe<Self> where Self: Sized {
+    fn dedupe(self) -> Dedupe<Self>
+        where Self::Item: PartialEq,
+              Self: Sized {
         Dedupe {
             old_value: None,
             signal: self,
@@ -238,7 +241,9 @@ pub trait SignalExt: Signal {
     }
 
     #[inline]
-    fn dedupe_cloned(self) -> DedupeCloned<Self> where Self: Sized {
+    fn dedupe_cloned(self) -> DedupeCloned<Self>
+        where Self::Item: PartialEq,
+              Self: Sized {
         DedupeCloned {
             old_value: None,
             signal: self,
