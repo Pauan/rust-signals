@@ -2310,6 +2310,16 @@ mod mutable_vec {
             self.remove_range(range.clone(), len);
             self.values.drain(range)
         }
+
+        fn truncate(&mut self, len: usize) {
+            let end = self.values.len();
+            let range = Range {
+                start: len,
+                end: end,
+            };
+            self.remove_range(range, end);
+            self.values.truncate(len)
+        }
     }
 
     impl<A: Copy> MutableVecState<A> {
@@ -2569,6 +2579,11 @@ mod mutable_vec {
         #[inline]
         pub fn drain<R>(&mut self, range: R) -> Drain<'_, A> where R: RangeBounds<usize> {
             self.lock.drain(range)
+        }
+
+        #[inline]
+        pub fn truncate(&mut self, len: usize) {
+            self.lock.truncate(len)
         }
 
         pub fn reverse(&mut self) {

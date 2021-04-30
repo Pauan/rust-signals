@@ -298,3 +298,51 @@ fn test_drain_panic_swap() {
 fn test_drain_panic_included_end() {
     MutableVec::<usize>::new_with_values(vec![]).lock_mut().drain(..=usize::MAX);
 }
+
+
+#[test]
+fn test_truncate() {
+    is_eq(vec![], vec![], |v| drop(v.truncate(0)), vec![
+        Poll::Pending,
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![], vec![], |v| drop(v.truncate(10)), vec![
+        Poll::Pending,
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![5, 10, 15], vec![5, 10, 15], |v| drop(v.truncate(3)), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Pending,
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![5, 10, 15], vec![5, 10, 15], |v| drop(v.truncate(10)), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Pending,
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![5, 10, 15], vec![5, 10], |v| drop(v.truncate(2)), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Pending,
+        Poll::Ready(Some(VecDiff::Pop {})),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![5, 10, 15], vec![5], |v| drop(v.truncate(1)), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Pending,
+        Poll::Ready(Some(VecDiff::Pop {})),
+        Poll::Ready(Some(VecDiff::Pop {})),
+        Poll::Ready(None),
+    ]);
+
+    is_eq(vec![5, 10, 15], vec![], |v| drop(v.truncate(0)), vec![
+        Poll::Ready(Some(VecDiff::Replace { values: vec![5, 10, 15] } )),
+        Poll::Pending,
+        Poll::Ready(Some(VecDiff::Clear {})),
+        Poll::Ready(None),
+    ]);
+}
