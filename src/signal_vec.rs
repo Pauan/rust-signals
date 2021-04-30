@@ -2169,6 +2169,7 @@ mod mutable_vec {
             });
         }
 
+        // TODO can this be improved ?
         fn notify_with<B, C, D, E>(&mut self, value: B, mut clone: C, change: D, mut notify: E)
             where C: FnMut(&B) -> B,
                   D: FnOnce(&mut Self, B),
@@ -2427,6 +2428,13 @@ mod mutable_vec {
                 |this, values| this.values = values,
                 |values| VecDiff::Replace { values });
         }
+
+        // TODO use reserve / extend
+        fn extend<I>(&mut self, iter: I) where I: IntoIterator<Item = A> {
+            for value in iter {
+                self.push_clone(value);
+            }
+        }
     }
 
 
@@ -2663,6 +2671,14 @@ mod mutable_vec {
     }
 
     make_shared!(MutableVecLockMut<'a, A>, MutableVecLockMut<'b, B>);
+
+    // TODO extend_one and extend_reserve
+    impl<'a, A> Extend<A> for MutableVecLockMut<'a, A> where A: Clone {
+        #[inline]
+        fn extend<I>(&mut self, iter: I) where I: IntoIterator<Item = A> {
+            self.lock.extend(iter)
+        }
+    }
 
 
     // TODO get rid of the Arc
