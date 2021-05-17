@@ -21,6 +21,12 @@ struct MutableState<A> {
 }
 
 impl<A> MutableState<A> {
+    fn push_signal(&mut self, state: &Arc<MutableSignalState<A>>) {
+        if self.senders != 0 {
+            self.receivers.push(Arc::downgrade(state));
+        }
+    }
+
     fn notify(&mut self, has_changed: bool) {
         self.receivers.retain(|receiver| {
             if let Some(receiver) = receiver.upgrade() {
@@ -55,22 +61,12 @@ struct MutableSignalState<A> {
 }
 
 impl<A> MutableSignalState<A> {
-    fn new(mutable_state: &Arc<RwLock<MutableState<A>>>) -> Arc<Self> {
-        let state = Arc::new(MutableSignalState {
+    fn new(state: Arc<RwLock<MutableState<A>>>) -> Arc<Self> {
+        Arc::new(MutableSignalState {
             has_changed: AtomicBool::new(true),
             waker: Mutex::new(None),
-            state: mutable_state.clone(),
-        });
-
-        {
-            let mut lock = mutable_state.write().unwrap();
-
-            if lock.senders != 0 {
-                lock.receivers.push(Arc::downgrade(&state));
-            }
-        }
-
-        state
+            state,
+        })
     }
 
     fn poll_change<B, F>(&self, cx: &mut Context, f: F) -> Poll<Option<B>> where F: FnOnce(&A) -> B {
@@ -152,9 +148,15 @@ impl<A> ReadOnlyMutable<A> {
         }
     }
 
+    fn signal_state(&self) -> Arc<MutableSignalState<A>> {
+        let signal = MutableSignalState::new(self.0.clone());
+        self.0.write().unwrap().push_signal(&signal);
+        signal
+    }
+
     #[inline]
     pub fn signal_ref<B, F>(&self, f: F) -> MutableSignalRef<A, F> where F: FnMut(&A) -> B {
-        MutableSignalRef(MutableSignalState::new(&self.0), f)
+        MutableSignalRef(self.signal_state(), f)
     }
 }
 
@@ -166,7 +168,7 @@ impl<A: Copy> ReadOnlyMutable<A> {
 
     #[inline]
     pub fn signal(&self) -> MutableSignal<A> {
-        MutableSignal(MutableSignalState::new(&self.0))
+        MutableSignal(self.signal_state())
     }
 }
 
@@ -178,7 +180,7 @@ impl<A: Clone> ReadOnlyMutable<A> {
 
     #[inline]
     pub fn signal_cloned(&self) -> MutableSignalCloned<A> {
-        MutableSignalCloned(MutableSignalState::new(&self.0))
+        MutableSignalCloned(self.signal_state())
     }
 }
 
