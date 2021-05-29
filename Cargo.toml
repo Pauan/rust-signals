@@ -21,6 +21,5 @@ serde = "1.0.98"
 pin-project = "1.0.2"
 
 [dev-dependencies]
-futures = "0.3.0"
 futures-executor = "0.3.0"
 pin-utils = "0.1.0"
