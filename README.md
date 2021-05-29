@@ -28,3 +28,5 @@ This is useful in many situations:
   sync with your program's state.
 
 * And many more situations!
+
+The best way to learn more is to read [the tutorial](https://docs.rs/futures-signals/^0.3.21/futures_signals/tutorial/index.html).
