@@ -1,7 +1,11 @@
 use crate::signal::Signal;
 use std::pin::Pin;
 use std::marker::Unpin;
+use std::future::Future;
 use std::task::{Poll, Context};
+use futures_core::Stream;
+use futures_util::stream;
+use futures_util::stream::StreamExt;
 use pin_project::pin_project;
 
 // TODO make this non-exhaustive
@@ -114,6 +118,19 @@ pub trait SignalMapExt: SignalMap {
         }
     }
 
+    #[inline]
+    fn for_each<U, F>(self, callback: F) -> ForEach<Self, U, F>
+        where U: Future<Output = ()>,
+              F: FnMut(MapDiff<Self::Key, Self::Value>) -> U,
+              Self: Sized {
+        // TODO a little hacky
+        ForEach {
+            inner: SignalMapStream {
+                signal_map: self,
+            }.for_each(callback)
+        }
+    }
+
     /// A convenience for calling `SignalMap::poll_map_change` on `Unpin` types.
     #[inline]
     fn poll_map_change_unpin(&mut self, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> where Self: Unpin + Sized {
@@ -221,6 +238,45 @@ impl<M> Signal for MapWatchKeySignal<M>
         } else {
             Poll::Pending
         }
+    }
+}
+
+
+#[pin_project]
+#[derive(Debug)]
+#[must_use = "Streams do nothing unless polled"]
+struct SignalMapStream<A> {
+    #[pin]
+    signal_map: A,
+}
+
+impl<A: SignalMap> Stream for SignalMapStream<A> {
+    type Item = MapDiff<A::Key, A::Value>;
+
+    #[inline]
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        self.project().signal_map.poll_map_change(cx)
+    }
+}
+
+
+#[pin_project]
+#[derive(Debug)]
+#[must_use = "Futures do nothing unless polled"]
+pub struct ForEach<A, B, C> {
+    #[pin]
+    inner: stream::ForEach<SignalMapStream<A>, B, C>,
+}
+
+impl<A, B, C> Future for ForEach<A, B, C>
+    where A: SignalMap,
+          B: Future<Output = ()>,
+          C: FnMut(MapDiff<A::Key, A::Value>) -> B {
+    type Output = ();
+
+    #[inline]
+    fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
+        self.project().inner.poll(cx)
     }
 }
 
