@@ -110,7 +110,7 @@ pub use crate::future::{cancelable_future, CancelableFutureHandle, CancelableFut
 /// In order to spawn a `Signal` you first use the `for_each` method (as shown
 /// above) to convert it into a `Future`, and then you spawn that `Future`.
 ///
-/// There are many ways of spawning a `Future`:
+/// There are many ways to spawn a `Future`:
 ///
 /// * [`block_on(future)`](https://docs.rs/futures/^0.3.15/futures/executor/fn.block_on.html)
 /// * [`tokio::spawn(future)`](https://docs.rs/tokio/^1.6.1/tokio/task/fn.spawn.html)
@@ -139,7 +139,7 @@ pub use crate::future::{cancelable_future, CancelableFutureHandle, CancelableFut
 /// of values (starting with the current value of `my_state`, and then followed
 /// by the changes to `my_state`).
 ///
-/// You can then use all of the [`StreamExt`](https://docs.rs/futures/^0.3.15/futures/stream/trait.StreamExt.html)
+/// You can use all of the [`StreamExt`](https://docs.rs/futures/^0.3.15/futures/stream/trait.StreamExt.html)
 /// methods on it, just like with any other
 /// [`Stream`](https://docs.rs/futures/^0.3.15/futures/stream/trait.Stream.html).
 ///
@@ -271,7 +271,7 @@ pub use crate::future::{cancelable_future, CancelableFutureHandle, CancelableFut
 /// ## Signals are lossy
 ///
 /// It is important to understand that `for_each`, `to_stream`, and *all*
-/// other `Signal` methods are *lossy*: they might skip changes.
+/// other `SignalExt` methods are *lossy*: they might skip changes.
 ///
 /// That is because they only care about the *most recent value*. So if the
 /// value changes multiple times in a short period of time it will only detect
@@ -293,7 +293,7 @@ pub use crate::future::{cancelable_future, CancelableFutureHandle, CancelableFut
 /// This is an intentional design choice: it is necessary for correctness and
 /// performance.
 ///
-/// So whenever you are using a `Signal`, you must ***not*** rely upon it being
+/// So whenever you are using a `Signal`, you must ***not*** rely on it being
 /// updated for intermediate values.
 ///
 /// That might sound like a problem, but it's actually not a problem at all:
@@ -309,6 +309,9 @@ pub use crate::future::{cancelable_future, CancelableFutureHandle, CancelableFut
 /// (such as [`futures::channel::mpsc::unbounded`](https://docs.rs/futures/^0.3.15/futures/channel/mpsc/fn.unbounded.html))
 /// would be a great choice. In that case you will pay a small performance
 /// penalty, because it has to hold the values in a queue.
+///
+/// And of course you can freely mix `Future`s, `Stream`s, and `Signal`s in
+/// your program, using each one where it is appropriate.
 ///
 /// ## `MutableVec`
 ///
@@ -448,9 +451,10 @@ pub use crate::future::{cancelable_future, CancelableFutureHandle, CancelableFut
 ///
 /// This allows you to very efficiently update based only on that specific change.
 ///
-/// For example, if you are automatically saving the `MutableVec` to a database whenever it changes, you don't need to save the
-/// entire `MutableVec` when it changes, you only need to save the individual changes. This means that it will often be constant
-/// time, no matter how big the `MutableVec` is.
+/// For example, if you are automatically saving the `MutableVec` to a database
+/// whenever it changes, you don't need to save the entire `MutableVec` when it
+/// changes, you only need to save the individual changes. This means that it will
+/// often be constant `O(1)` time, no matter how big the `MutableVec` is.
 ///
 /// ## `SignalVecExt`
 ///
@@ -490,8 +494,8 @@ pub use crate::future::{cancelable_future, CancelableFutureHandle, CancelableFut
 /// In addition, even though `MutableVec` needs to maintain a queue, `SignalVec`
 /// does ***not***, so it's quite efficient.
 ///
-/// Even though it does not skip changes, if you call a `MutableVec` method
-/// which doesn't *actually* make any changes, then it will not notify at all:
+/// If you call a `MutableVec` method which doesn't *actually* make any changes,
+/// then it will not notify at all:
 ///
 /// ```rust
 /// # use futures_signals::signal_vec::MutableVec;
@@ -524,7 +528,7 @@ pub use crate::future::{cancelable_future, CancelableFutureHandle, CancelableFut
 /// might notify with either `VecDiff::RemoveAt` or `VecDiff::Pop` depending on
 /// whether it removed the last value or not.
 ///
-/// The reason this is done is for performance, and you should ***not*** rely
+/// The reason for this is performance, and you should ***not*** rely
 /// upon it: the behavior of exactly which notifications are sent is an
 /// implementation detail.
 ///
