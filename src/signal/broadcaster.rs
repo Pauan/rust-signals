@@ -141,19 +141,19 @@ impl<A> BroadcasterSharedState<A> where A: Signal {
         }
     }
 
-    fn poll<B, F>(&self, f: F) -> B where F: FnOnce(&Option<A::Item>) -> B {
+    fn poll<B, F>(&self, f: F) -> Option<B> where F: FnOnce(&A::Item) -> B {
         // TODO is this correct ?
         if self.notifier.is_changed.swap(false, Ordering::SeqCst) {
             let mut lock = self.inner.write().unwrap();
 
             lock.poll_underlying(self.notifier.clone());
 
-            f(&lock.value)
+            lock.value.as_ref().map(f)
 
         } else {
             let lock = self.inner.read().unwrap();
 
-            f(&lock.value)
+            lock.value.as_ref().map(f)
         }
     }
 }
@@ -197,7 +197,7 @@ impl<A> BroadcasterState<A> where A: Signal {
         }
     }
 
-    fn poll_change<F>(&self, cx: &mut Context, f: F) -> Poll<Option<A::Item>> where F: FnOnce(&Option<A::Item>) -> Option<A::Item> {
+    fn poll_change<B, F>(&self, cx: &mut Context, f: F) -> Poll<Option<B>> where F: FnOnce(&A::Item) -> B {
         // If the poll just done (or a previous poll) has generated a new
         // value, we can report it. Use swap so only one thread will pick up
         // the change
@@ -247,12 +247,22 @@ impl<A> Broadcaster<A> where A: Signal {
             shared_state: Arc::new(BroadcasterSharedState::new(signal)),
         }
     }
+
+    #[inline]
+    pub fn signal_ref<B, F>(&self, f: F) -> BroadcasterSignalRef<A, F>
+        where F: FnMut(&A::Item) -> B {
+        BroadcasterSignalRef {
+            state: BroadcasterState::new(&self.shared_state),
+            callback: f,
+        }
+    }
 }
 
 impl<A> Broadcaster<A> where A: Signal, A::Item: Copy {
     /// Create a new `Signal` which copies values from the `Signal` wrapped
     /// by the `Broadcaster`
     // TODO: use `impl Signal` for the return type
+    #[inline]
     pub fn signal(&self) -> BroadcasterSignal<A> {
         BroadcasterSignal {
             state: BroadcasterState::new(&self.shared_state),
@@ -264,6 +274,7 @@ impl<A> Broadcaster<A> where A: Signal, A::Item: Clone {
     /// Create a new `Signal` which clones values from the `Signal` wrapped
     /// by the `Broadcaster`
     // TODO: use `impl Signal` for the return type
+    #[inline]
     pub fn signal_cloned(&self) -> BroadcasterSignalCloned<A> {
         BroadcasterSignalCloned {
             state: BroadcasterState::new(&self.shared_state),
@@ -340,6 +351,41 @@ impl<A> ::std::fmt::Debug for BroadcasterSignalCloned<A>
 
     fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         fmt.debug_struct("BroadcasterSignalCloned")
+            .field("state", &self.state)
+            .finish()
+    }
+}
+
+// --------------------------------------------------------------------------
+
+#[must_use = "Signals do nothing unless polled"]
+pub struct BroadcasterSignalRef<A, F> where A: Signal {
+    state: BroadcasterState<A>,
+    callback: F,
+}
+
+impl<A, F> Unpin for BroadcasterSignalRef<A, F> where A: Signal {}
+
+impl<A, B, F> Signal for BroadcasterSignalRef<A, F>
+    where A: Signal,
+          F: FnMut(&A::Item) -> B {
+
+    type Item = B;
+
+    #[inline]
+    fn poll_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let BroadcasterSignalRef { state, callback } = &mut *self;
+        state.poll_change(cx, callback)
+    }
+}
+
+// TODO use derive
+impl<A, F> ::std::fmt::Debug for BroadcasterSignalRef<A, F>
+    where A: ::std::fmt::Debug + Signal,
+          A::Item: ::std::fmt::Debug {
+
+    fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
+        fmt.debug_struct("BroadcasterSignalRef")
             .field("state", &self.state)
             .finish()
     }
