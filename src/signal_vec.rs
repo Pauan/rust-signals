@@ -492,6 +492,18 @@ pub trait SignalVecExt: SignalVec {
     fn poll_vec_change_unpin(&mut self, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> where Self: Unpin + Sized {
         Pin::new(self).poll_vec_change(cx)
     }
+
+    #[inline]
+    fn boxed<'a>(self) -> Pin<Box<dyn SignalVec<Item = Self::Item> + Send + 'a>>
+        where Self: Sized + Send + 'a {
+        Box::pin(self)
+    }
+
+    #[inline]
+    fn boxed_local<'a>(self) -> Pin<Box<dyn SignalVec<Item = Self::Item> + 'a>>
+        where Self: Sized + 'a {
+        Box::pin(self)
+    }
 }
 
 // TODO why is this ?Sized

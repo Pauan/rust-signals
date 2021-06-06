@@ -502,6 +502,18 @@ pub trait SignalExt: Signal {
     fn poll_change_unpin(&mut self, cx: &mut Context) -> Poll<Option<Self::Item>> where Self: Unpin + Sized {
         Pin::new(self).poll_change(cx)
     }
+
+    #[inline]
+    fn boxed<'a>(self) -> Pin<Box<dyn Signal<Item = Self::Item> + Send + 'a>>
+        where Self: Sized + Send + 'a {
+        Box::pin(self)
+    }
+
+    #[inline]
+    fn boxed_local<'a>(self) -> Pin<Box<dyn Signal<Item = Self::Item> + 'a>>
+        where Self: Sized + 'a {
+        Box::pin(self)
+    }
 }
 
 // TODO why is this ?Sized

@@ -136,6 +136,18 @@ pub trait SignalMapExt: SignalMap {
     fn poll_map_change_unpin(&mut self, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> where Self: Unpin + Sized {
         Pin::new(self).poll_map_change(cx)
     }
+
+    #[inline]
+    fn boxed<'a>(self) -> Pin<Box<dyn SignalMap<Key = Self::Key, Value = Self::Value> + Send + 'a>>
+        where Self: Sized + Send + 'a {
+        Box::pin(self)
+    }
+
+    #[inline]
+    fn boxed_local<'a>(self) -> Pin<Box<dyn SignalMap<Key = Self::Key, Value = Self::Value> + 'a>>
+        where Self: Sized + 'a {
+        Box::pin(self)
+    }
 }
 
 // TODO why is this ?Sized
