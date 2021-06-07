@@ -1,19 +1,19 @@
 use super::signal::Signal;
 use std::pin::Pin;
-// TODO use parking_lot ?
-use std::sync::{Arc, RwLock, Mutex, MutexGuard, RwLockReadGuard};
+use std::sync::Arc;
+use parking_lot::{Mutex, MutexGuard, RwLockReadGuard, RwLock};
 use std::task::{Poll, Context};
 use pin_project::pin_project;
 
 
 #[inline]
 pub fn lock_mut<A>(x: &Mutex<A>) -> MutexGuard<A> {
-    x.lock().unwrap()
+    x.lock()
 }
 
 #[inline]
 pub fn lock_ref<A>(x: &RwLock<A>) -> RwLockReadGuard<A> {
-    x.read().unwrap()
+    x.read()
 }
 
 pub fn unwrap_mut<A>(x: &mut Option<A>) -> &mut A {
@@ -176,10 +176,10 @@ impl<A, B> Signal for MapPairMut<A, B>
         let mut changed = false;
 
         // TODO can this deadlock ?
-        let mut borrow_left = inner.0.lock().unwrap();
+        let mut borrow_left = inner.0.lock();
 
         // TODO is it okay to move this to just above right_done ?
-        let mut borrow_right = inner.1.lock().unwrap();
+        let mut borrow_right = inner.1.lock();
 
         let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
             None => true,
@@ -261,7 +261,7 @@ impl<A, B> Signal for MapPair<A, B>
 
         let mut changed = false;
 
-        let mut borrow = inner.write().unwrap();
+        let mut borrow = inner.write();
 
         let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
             None => true,

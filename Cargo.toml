@@ -19,6 +19,7 @@ discard = "1.0.3"
 # TODO make this optional
 serde = "1.0.98"
 pin-project = "1.0.2"
+parking_lot = "0.11.1"
 
 [dev-dependencies]
 futures-executor = "0.3.0"
