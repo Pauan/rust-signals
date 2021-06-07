@@ -2118,7 +2118,8 @@ mod mutable_vec {
     use std::borrow::Borrow;
     use std::cmp::{Ord, Ordering};
     use std::hash::{Hash, Hasher};
-    use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+    use std::sync::{Arc};
+    use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
     use std::task::{Poll, Context};
     use futures_channel::mpsc;
     use futures_util::stream::StreamExt;
@@ -2710,7 +2711,7 @@ mod mutable_vec {
         #[inline]
         pub fn lock_ref(&self) -> MutableVecLockRef<A> {
             MutableVecLockRef {
-                lock: self.0.read().unwrap(),
+                lock: self.0.read(),
             }
         }
 
@@ -2718,7 +2719,7 @@ mod mutable_vec {
         #[inline]
         pub fn lock_mut(&self) -> MutableVecLockMut<A> {
             MutableVecLockMut {
-                lock: self.0.write().unwrap(),
+                lock: self.0.write(),
             }
         }
     }
@@ -2726,20 +2727,20 @@ mod mutable_vec {
     impl<A: Copy> MutableVec<A> {
         #[inline]
         pub fn signal_vec(&self) -> MutableSignalVec<A> {
-            self.0.write().unwrap().signal_vec_copy()
+            self.0.write().signal_vec_copy()
         }
     }
 
     impl<A: Clone> MutableVec<A> {
         #[inline]
         pub fn signal_vec_cloned(&self) -> MutableSignalVec<A> {
-            self.0.write().unwrap().signal_vec_clone()
+            self.0.write().signal_vec_clone()
         }
     }
 
     impl<A> fmt::Debug for MutableVec<A> where A: fmt::Debug {
         fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-            let state = self.0.read().unwrap();
+            let state = self.0.read();
 
             fmt.debug_tuple("MutableVec")
                 .field(&state.values)
@@ -2750,7 +2751,7 @@ mod mutable_vec {
     impl<T> Serialize for MutableVec<T> where T: Serialize {
         #[inline]
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-            self.0.read().unwrap().values.serialize(serializer)
+            self.0.read().values.serialize(serializer)
         }
     }
 

@@ -1,8 +1,8 @@
 use super::Signal;
 use std::pin::Pin;
 use std::marker::Unpin;
-// TODO use parking_lot ?
-use std::sync::{Arc, Weak, Mutex, MutexGuard};
+use std::sync::{Arc, Weak};
+use parking_lot::{Mutex, MutexGuard};
 use std::task::{Poll, Context, Waker};
 
 
@@ -31,7 +31,7 @@ pub struct Sender<A> {
 impl<A> Sender<A> {
     pub fn send(&self, value: A) -> Result<(), A> {
         if let Some(inner) = self.inner.upgrade() {
-            let mut inner = inner.lock().unwrap();
+            let mut inner = inner.lock();
 
             // This will be 0 if the channel was closed
             if inner.senders > 0 {
@@ -52,7 +52,7 @@ impl<A> Sender<A> {
 
     pub fn close(&self) {
         if let Some(inner) = self.inner.upgrade() {
-            let mut inner = inner.lock().unwrap();
+            let mut inner = inner.lock();
 
             // This will be 0 if the channel was closed
             if inner.senders > 0 {
@@ -67,7 +67,7 @@ impl<A> Sender<A> {
 impl<A> Clone for Sender<A> {
     fn clone(&self) -> Self {
         if let Some(inner) = self.inner.upgrade() {
-            let mut inner = inner.lock().unwrap();
+            let mut inner = inner.lock();
 
             // This will be 0 if the channel was closed
             if inner.senders > 0 {
@@ -84,7 +84,7 @@ impl<A> Clone for Sender<A> {
 impl<A> Drop for Sender<A> {
     fn drop(&mut self) {
         if let Some(inner) = self.inner.upgrade() {
-            let mut inner = inner.lock().unwrap();
+            let mut inner = inner.lock();
 
             // This will be 0 if the channel was closed
             if inner.senders > 0 {
@@ -112,7 +112,7 @@ impl<A> Signal for Receiver<A> {
 
     #[inline]
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let mut inner = self.inner.lock().unwrap();
+        let mut inner = self.inner.lock();
 
         // TODO is this correct ?
         match inner.value.take() {

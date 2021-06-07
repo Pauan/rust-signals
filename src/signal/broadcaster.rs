@@ -1,7 +1,8 @@
 use super::Signal;
 use std::pin::Pin;
 use std::marker::Unpin;
-use std::sync::{Arc, Mutex, RwLock, Weak};
+use std::sync::{Arc, Weak};
+use parking_lot::{Mutex, RwLock};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Poll, Waker, Context};
 use futures_util::task::{self, ArcWake};
@@ -41,7 +42,7 @@ impl BroadcasterNotifier {
     }
 
     fn notify(&self, is_changed: bool) {
-        let mut lock = self.targets.lock().unwrap();
+        let mut lock = self.targets.lock();
 
         if is_changed {
             self.is_changed.store(true, Ordering::SeqCst);
@@ -50,7 +51,7 @@ impl BroadcasterNotifier {
         // Take this opportunity to GC dead children
         lock.retain(|weak_child_state| {
             if let Some(child_status) = weak_child_state.upgrade() {
-                let mut lock = child_status.waker.lock().unwrap();
+                let mut lock = child_status.waker.lock();
 
                 if is_changed {
                     child_status.is_changed.store(true, Ordering::SeqCst);
@@ -144,14 +145,14 @@ impl<A> BroadcasterSharedState<A> where A: Signal {
     fn poll<B, F>(&self, f: F) -> B where F: FnOnce(&Option<A::Item>) -> B {
         // TODO is this correct ?
         if self.notifier.is_changed.swap(false, Ordering::SeqCst) {
-            let mut lock = self.inner.write().unwrap();
+            let mut lock = self.inner.write();
 
             lock.poll_underlying(self.notifier.clone());
 
             f(&lock.value)
 
         } else {
-            let lock = self.inner.read().unwrap();
+            let lock = self.inner.read();
 
             f(&lock.value)
         }
@@ -187,7 +188,7 @@ impl<A> BroadcasterState<A> where A: Signal {
         let new_status = Arc::new(BroadcasterStatus::new());
 
         {
-            let mut lock = shared_state.notifier.targets.lock().unwrap();
+            let mut lock = shared_state.notifier.targets.lock();
             lock.push(Arc::downgrade(&new_status));
         }
 
@@ -206,7 +207,7 @@ impl<A> BroadcasterState<A> where A: Signal {
 
         } else {
             // Nothing new to report, save this task's Waker for later
-            *self.status.waker.lock().unwrap() = Some(cx.waker().clone());
+            *self.status.waker.lock() = Some(cx.waker().clone());
             Poll::Pending
         }
     }

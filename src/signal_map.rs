@@ -291,7 +291,8 @@ mod mutable_btree_map {
     use std::cmp::{Ord, Ordering};
     use std::hash::{Hash, Hasher};
     use std::collections::BTreeMap;
-    use std::sync::{Arc, RwLock, RwLockReadGuard, RwLockWriteGuard};
+    use std::sync::Arc;
+    use parking_lot::{RwLock, RwLockReadGuard, RwLockWriteGuard};
     use std::task::{Poll, Context};
     use futures_channel::mpsc;
     use futures_util::stream::StreamExt;
@@ -595,7 +596,7 @@ mod mutable_btree_map {
         #[inline]
         pub fn lock_ref(&self) -> MutableBTreeMapLockRef<K, V> {
             MutableBTreeMapLockRef {
-                lock: self.0.read().unwrap(),
+                lock: self.0.read(),
             }
         }
 
@@ -603,7 +604,7 @@ mod mutable_btree_map {
         #[inline]
         pub fn lock_mut(&self) -> MutableBTreeMapLockMut<K, V> {
             MutableBTreeMapLockMut {
-                lock: self.0.write().unwrap(),
+                lock: self.0.write(),
             }
         }
     }
@@ -618,7 +619,7 @@ mod mutable_btree_map {
     impl<K, V> MutableBTreeMap<K, V> where K: Ord + Clone, V: Clone {
         #[inline]
         pub fn signal_map_cloned(&self) -> MutableSignalMap<K, V> {
-            self.0.write().unwrap().signal_map_cloned()
+            self.0.write().signal_map_cloned()
         }
 
         // TODO deprecate and rename to keys_cloned
@@ -644,7 +645,7 @@ mod mutable_btree_map {
     impl<K, V> MutableBTreeMap<K, V> where K: Ord + Copy, V: Copy {
         #[inline]
         pub fn signal_map(&self) -> MutableSignalMap<K, V> {
-            self.0.write().unwrap().signal_map()
+            self.0.write().signal_map()
         }
 
         // TODO deprecate and rename to entries
@@ -659,7 +660,7 @@ mod mutable_btree_map {
 
     impl<K, V> fmt::Debug for MutableBTreeMap<K, V> where K: fmt::Debug, V: fmt::Debug {
         fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-            let state = self.0.read().unwrap();
+            let state = self.0.read();
 
             fmt.debug_tuple("MutableBTreeMap")
                 .field(&state.values)
@@ -670,7 +671,7 @@ mod mutable_btree_map {
     impl<K, V> Serialize for MutableBTreeMap<K, V> where BTreeMap<K, V>: Serialize {
         #[inline]
         fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-            self.0.read().unwrap().values.serialize(serializer)
+            self.0.read().values.serialize(serializer)
         }
     }
 

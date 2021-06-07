@@ -1,9 +1,8 @@
 use std::pin::Pin;
-// TODO use parking_lot ?
-use std::sync::{Arc, Weak, Mutex};
+use parking_lot::Mutex;
+use std::sync::{Arc, Weak};
 use std::future::Future;
 use std::task::{Poll, Waker, Context};
-// TODO use parking_lot ?
 use std::sync::atomic::{AtomicBool, Ordering};
 use discard::{Discard, DiscardOnDrop};
 use pin_project::pin_project;
@@ -24,7 +23,7 @@ pub struct CancelableFutureHandle {
 impl Discard for CancelableFutureHandle {
     fn discard(self) {
         if let Some(state) = self.state.upgrade() {
-            let mut lock = state.waker.lock().unwrap();
+            let mut lock = state.waker.lock();
 
             // TODO verify that this is correct
             state.is_cancelled.store(true, Ordering::SeqCst);
@@ -70,7 +69,7 @@ impl<A, B> Future for CancelableFuture<A, B>
             match future.as_pin_mut().unwrap().poll(cx) {
                 Poll::Pending => {
                     // TODO is this correct ?
-                    *state.waker.lock().unwrap() = Some(cx.waker().clone());
+                    *state.waker.lock() = Some(cx.waker().clone());
                     Poll::Pending
                 },
                 a => a,
