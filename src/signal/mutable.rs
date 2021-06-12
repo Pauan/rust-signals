@@ -30,15 +30,18 @@ impl<A> MutableState<A> {
     fn notify(&mut self, has_changed: bool) {
         self.receivers.retain(|receiver| {
             if let Some(receiver) = receiver.upgrade() {
-                let mut lock = receiver.waker.lock().unwrap();
+                let waker = {
+                    let mut lock = receiver.waker.lock().unwrap();
 
-                if has_changed {
-                    // TODO verify that this is correct
-                    receiver.has_changed.store(true, Ordering::SeqCst);
-                }
+                    if has_changed {
+                        // TODO verify that this is correct
+                        receiver.has_changed.store(true, Ordering::SeqCst);
+                    }
 
-                if let Some(waker) = lock.take() {
-                    drop(lock);
+                    lock.take()
+                };
+
+                if let Some(waker) = waker {
                     waker.wake();
                 }
 
