@@ -13,38 +13,64 @@ use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 
 #[derive(Debug)]
+pub(crate) struct ChangedWaker {
+    changed: AtomicBool,
+    waker: Mutex<Option<Waker>>,
+}
+
+impl ChangedWaker {
+    pub(crate) fn new() -> Self {
+        Self {
+            changed: AtomicBool::new(true),
+            waker: Mutex::new(None),
+        }
+    }
+
+    pub(crate) fn wake(&self, changed: bool) {
+        let waker = {
+            let mut lock = self.waker.lock().unwrap();
+
+            if changed {
+                self.changed.store(true, Ordering::SeqCst);
+            }
+
+            lock.take()
+        };
+
+        if let Some(waker) = waker {
+            waker.wake();
+        }
+    }
+
+    pub(crate) fn set_waker(&self, cx: &Context) {
+        *self.waker.lock().unwrap() = Some(cx.waker().clone());
+    }
+
+    pub(crate) fn is_changed(&self) -> bool {
+        self.changed.swap(false, Ordering::SeqCst)
+    }
+}
+
+
+#[derive(Debug)]
 struct MutableState<A> {
     value: A,
     senders: usize,
     // TODO use HashMap or BTreeMap instead ?
-    receivers: Vec<Weak<MutableSignalState<A>>>,
+    signals: Vec<Weak<ChangedWaker>>,
 }
 
 impl<A> MutableState<A> {
-    fn push_signal(&mut self, state: &Arc<MutableSignalState<A>>) {
+    fn push_signal(&mut self, state: &Arc<ChangedWaker>) {
         if self.senders != 0 {
-            self.receivers.push(Arc::downgrade(state));
+            self.signals.push(Arc::downgrade(state));
         }
     }
 
     fn notify(&mut self, has_changed: bool) {
-        self.receivers.retain(|receiver| {
-            if let Some(receiver) = receiver.upgrade() {
-                let waker = {
-                    let mut lock = receiver.waker.lock().unwrap();
-
-                    if has_changed {
-                        // TODO verify that this is correct
-                        receiver.has_changed.store(true, Ordering::SeqCst);
-                    }
-
-                    lock.take()
-                };
-
-                if let Some(waker) = waker {
-                    waker.wake();
-                }
-
+        self.signals.retain(|signal| {
+            if let Some(signal) = signal.upgrade() {
+                signal.wake(has_changed);
                 true
 
             } else {
@@ -57,35 +83,30 @@ impl<A> MutableState<A> {
 
 #[derive(Debug)]
 struct MutableSignalState<A> {
-    has_changed: AtomicBool,
-    waker: Mutex<Option<Waker>>,
+    waker: Arc<ChangedWaker>,
     // TODO change this to Weak ?
     state: Arc<RwLock<MutableState<A>>>,
 }
 
 impl<A> MutableSignalState<A> {
-    fn new(state: Arc<RwLock<MutableState<A>>>) -> Arc<Self> {
-        Arc::new(MutableSignalState {
-            has_changed: AtomicBool::new(true),
-            waker: Mutex::new(None),
+    fn new(state: Arc<RwLock<MutableState<A>>>) -> Self {
+        MutableSignalState {
+            waker: Arc::new(ChangedWaker::new()),
             state,
-        })
+        }
     }
 
     fn poll_change<B, F>(&self, cx: &mut Context, f: F) -> Poll<Option<B>> where F: FnOnce(&A) -> B {
-        // TODO is this correct ?
         let lock = self.state.read().unwrap();
 
-        // TODO verify that this is correct
-        if self.has_changed.swap(false, Ordering::SeqCst) {
+        if self.waker.is_changed() {
             Poll::Ready(Some(f(&lock.value)))
 
         } else if lock.senders == 0 {
             Poll::Ready(None)
 
         } else {
-            // TODO is this correct ?
-            *self.waker.lock().unwrap() = Some(cx.waker().clone());
+            self.waker.set_waker(cx);
             Poll::Pending
         }
     }
@@ -151,9 +172,9 @@ impl<A> ReadOnlyMutable<A> {
         }
     }
 
-    fn signal_state(&self) -> Arc<MutableSignalState<A>> {
+    fn signal_state(&self) -> MutableSignalState<A> {
         let signal = MutableSignalState::new(self.0.clone());
-        self.0.write().unwrap().push_signal(&signal);
+        self.0.write().unwrap().push_signal(&signal.waker);
         signal
     }
 
@@ -213,7 +234,7 @@ impl<A> Mutable<A> {
         Mutable(ReadOnlyMutable(Arc::new(RwLock::new(MutableState {
             value,
             senders: 1,
-            receivers: vec![],
+            signals: vec![],
         }))))
     }
 
@@ -350,19 +371,19 @@ impl<A> Drop for Mutable<A> {
 
         state.senders -= 1;
 
-        if state.senders == 0 && state.receivers.len() > 0 {
+        if state.senders == 0 && state.signals.len() > 0 {
             state.notify(false);
             // TODO is this necessary ?
-            state.receivers = vec![];
+            state.signals = vec![];
         }
     }
 }
 
 
-// TODO remove it from receivers when it's dropped
+// TODO remove it from signals when it's dropped
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
-pub struct MutableSignal<A>(Arc<MutableSignalState<A>>);
+pub struct MutableSignal<A>(MutableSignalState<A>);
 
 impl<A> Unpin for MutableSignal<A> {}
 
@@ -375,10 +396,10 @@ impl<A: Copy> Signal for MutableSignal<A> {
 }
 
 
-// TODO remove it from receivers when it's dropped
+// TODO remove it from signals when it's dropped
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
-pub struct MutableSignalRef<A, F>(Arc<MutableSignalState<A>>, F);
+pub struct MutableSignalRef<A, F>(MutableSignalState<A>, F);
 
 impl<A, F> Unpin for MutableSignalRef<A, F> {}
 
@@ -395,10 +416,10 @@ impl<A, B, F> Signal for MutableSignalRef<A, F> where F: FnMut(&A) -> B {
 
 
 // TODO it should have a single MutableSignal implementation for both Copy and Clone
-// TODO remove it from receivers when it's dropped
+// TODO remove it from signals when it's dropped
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
-pub struct MutableSignalCloned<A>(Arc<MutableSignalState<A>>);
+pub struct MutableSignalCloned<A>(MutableSignalState<A>);
 
 impl<A> Unpin for MutableSignalCloned<A> {}
 
