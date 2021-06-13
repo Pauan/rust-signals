@@ -1,5 +1,5 @@
 use futures_signals::map_ref;
-use futures_signals::signal::{SignalExt, Mutable, Broadcaster};
+use futures_signals::signal::{SignalExt, Mutable, Broadcaster, always};
 use std::task::Poll;
 
 mod util;
@@ -61,4 +61,55 @@ fn test_polls() {
         Poll::Pending,
         Poll::Ready(None),
     ]);
+}
+
+
+#[test]
+fn test_broadcaster_signal_ref() {
+    let broadcaster = Broadcaster::new(always(1));
+    let mut signal = broadcaster.signal_ref(|x| x + 5);
+    util::with_noop_context(|cx| {
+        assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(Some(6)));
+        assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(None));
+    });
+}
+
+
+#[test]
+fn test_broadcaster_always() {
+    let broadcaster = Broadcaster::new(always(1));
+    let mut signal = broadcaster.signal();
+    util::with_noop_context(|cx| {
+        assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(Some(1)));
+        assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(None));
+    });
+}
+
+
+#[test]
+fn test_broadcaster_drop() {
+    let mutable = Mutable::new(1);
+    let broadcaster = Broadcaster::new(mutable.signal());
+    let mut signal = broadcaster.signal();
+    util::with_noop_context(|cx| {
+        assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(Some(1)));
+        drop(mutable);
+        assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(None));
+    });
+}
+
+
+#[test]
+fn test_broadcaster_multiple() {
+    let mutable = Mutable::new(1);
+    let broadcaster = Broadcaster::new(mutable.signal());
+    let mut signal1 = broadcaster.signal();
+    let mut signal2 = broadcaster.signal();
+    drop(mutable);
+    util::with_noop_context(|cx| {
+        assert_eq!(signal1.poll_change_unpin(cx), Poll::Ready(Some(1)));
+        assert_eq!(signal1.poll_change_unpin(cx), Poll::Ready(None));
+        assert_eq!(signal2.poll_change_unpin(cx), Poll::Ready(Some(1)));
+        assert_eq!(signal2.poll_change_unpin(cx), Poll::Ready(None));
+    });
 }

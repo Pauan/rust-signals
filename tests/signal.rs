@@ -2,13 +2,23 @@ use std::rc::Rc;
 use std::cell::Cell;
 use std::task::Poll;
 use futures_signals::cancelable_future;
-use futures_signals::signal::{Signal, SignalExt, Mutable, channel};
+use futures_signals::signal::{Signal, SignalExt, Mutable, channel, always};
 use futures_signals::signal_vec::VecDiff;
 use futures_util::future::{ready, poll_fn};
 use pin_utils::pin_mut;
 
 mod util;
 
+
+#[test]
+fn test_always() {
+    let mut signal = always(1);
+
+    util::with_noop_context(|cx| {
+        assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(Some(1)));
+        assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(None));
+    });
+}
 
 #[test]
 fn test_mutable() {

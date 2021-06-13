@@ -1,66 +1,39 @@
 use super::Signal;
 use std::pin::Pin;
 use std::marker::Unpin;
+use std::fmt::Debug;
 use std::sync::{Arc, Mutex, RwLock, Weak};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::task::{Poll, Waker, Context};
 use futures_util::task::{self, ArcWake};
+use crate::signal::ChangedWaker;
 
 
-#[derive(Debug)]
-struct BroadcasterStatus {
-    is_changed: AtomicBool,
-    waker: Mutex<Option<Waker>>,
-}
-
-impl BroadcasterStatus {
-    fn new() -> Self {
-        Self {
-            is_changed: AtomicBool::new(true),
-            waker: Mutex::new(None),
-        }
-    }
-}
-
-// ---------------------------------------------------------------------------
-
-/// This is responsible for propagating a "wake" down to any pending tasks
-/// attached to broadcasted children.
+/// When the Signal changes it will wake up the BroadcasterNotifier, which will
+/// then wake up all of the child ChangedWaker.
 #[derive(Debug)]
 struct BroadcasterNotifier {
     is_changed: AtomicBool,
-    targets: Mutex<Vec<Weak<BroadcasterStatus>>>,
+    wakers: Mutex<Vec<Weak<ChangedWaker>>>,
 }
 
 impl BroadcasterNotifier {
     fn new() -> Self {
         Self {
             is_changed: AtomicBool::new(true),
-            targets: Mutex::new(vec![]),
+            wakers: Mutex::new(vec![]),
         }
     }
 
-    fn notify(&self, is_changed: bool) {
-        let mut lock = self.targets.lock().unwrap();
+    fn notify(&self) {
+        let mut lock = self.wakers.lock().unwrap();
 
-        if is_changed {
-            self.is_changed.store(true, Ordering::SeqCst);
-        }
+        self.is_changed.store(true, Ordering::SeqCst);
 
-        // Take this opportunity to GC dead children
-        lock.retain(|weak_child_state| {
-            if let Some(child_status) = weak_child_state.upgrade() {
-                let mut lock = child_status.waker.lock().unwrap();
-
-                if is_changed {
-                    child_status.is_changed.store(true, Ordering::SeqCst);
-                }
-
-                if let Some(waker) = lock.take() {
-                    drop(lock);
-                    waker.wake();
-                }
-
+        // Take this opportunity to GC dead wakers
+        lock.retain(|waker| {
+            if let Some(waker) = waker.upgrade() {
+                waker.wake(false);
                 true
 
             } else {
@@ -68,66 +41,74 @@ impl BroadcasterNotifier {
             }
         });
     }
+
+    fn is_changed(&self) -> bool {
+        self.is_changed.swap(false, Ordering::SeqCst)
+    }
 }
 
 impl ArcWake for BroadcasterNotifier {
     #[inline]
     fn wake_by_ref(arc_self: &Arc<Self>) {
-        arc_self.notify(true);
+        arc_self.notify();
     }
 }
 
-// ---------------------------------------------------------------------------
 
+/// This will poll the input Signal and keep track of the most recent value.
 #[derive(Debug)]
 struct BroadcasterInnerState<A> where A: Signal {
     // TODO is there a more efficient way to implement this ?
-    signal: Pin<Box<A>>,
+    signal: Option<Pin<Box<A>>>,
+    waker: Waker,
     value: Option<A::Item>,
+    // This is used to keep track of when the value changes
+    epoch: usize,
 }
 
 impl<A> BroadcasterInnerState<A> where A: Signal {
-    fn new(signal: A) -> Self {
+    fn new(signal: A, waker: Waker) -> Self {
         Self {
-            signal: Box::pin(signal),
+            signal: Some(Box::pin(signal)),
+            waker,
             value: None,
+            epoch: 0,
         }
     }
 
-    // Poll the underlying signal for changes, giving it a BroadcasterNotifier
-    // to wake in the future if it is in Pending state.
-    fn poll_underlying(&mut self, notifier: Arc<BroadcasterNotifier>) {
-        // TODO is this the best way to do this ?
-        let waker = task::waker(notifier);
-        let cx = &mut Context::from_waker(&waker);
+    fn poll_signal(&mut self) {
+        if let Some(ref mut signal) = self.signal {
+            let cx = &mut Context::from_waker(&self.waker);
 
-        loop {
-            // TODO what if it is woken up while polling ?
-            // TODO is this safe for pinned types ?
-            match self.signal.as_mut().poll_change(cx) {
-                Poll::Ready(value) => {
-                    let done = value.is_none();
+            let mut changed = false;
 
-                    self.value = value;
-
-                    if done {
+            loop {
+                // TODO what if it is woken up while polling ?
+                match signal.as_mut().poll_change(cx) {
+                    Poll::Ready(Some(value)) => {
+                        self.value = Some(value);
+                        changed = true;
+                        continue;
+                    },
+                    Poll::Ready(None) => {
+                        self.signal = None;
                         break;
-                    }
-                },
-                Poll::Pending => {
-                    break;
-                },
+                    },
+                    Poll::Pending => {
+                        break;
+                    },
+                }
+            }
+
+            if changed {
+                self.epoch += 1;
             }
         }
     }
 }
 
-// TODO is this correct ?
-impl<A> Unpin for BroadcasterInnerState<A> where A: Signal {}
 
-// ---------------------------------------------------------------------------
-
-// Shared state underpinning a Cloned set of broadcasters
+/// Shared state for the Broadcaster and all child signals.
 struct BroadcasterSharedState<A> where A: Signal {
     inner: RwLock<BroadcasterInnerState<A>>,
     notifier: Arc<BroadcasterNotifier>,
@@ -135,33 +116,35 @@ struct BroadcasterSharedState<A> where A: Signal {
 
 impl<A> BroadcasterSharedState<A> where A: Signal {
     fn new(signal: A) -> Self {
+        let notifier = Arc::new(BroadcasterNotifier::new());
+        let waker = task::waker(notifier.clone());
+
         Self {
-            inner: RwLock::new(BroadcasterInnerState::new(signal)),
-            notifier: Arc::new(BroadcasterNotifier::new()),
+            inner: RwLock::new(BroadcasterInnerState::new(signal, waker)),
+            notifier,
         }
     }
 
-    fn poll<B, F>(&self, f: F) -> Option<B> where F: FnOnce(&A::Item) -> B {
-        // TODO is this correct ?
-        if self.notifier.is_changed.swap(false, Ordering::SeqCst) {
+    fn poll<B, F>(&self, f: F) -> B where F: FnOnce(&BroadcasterInnerState<A>) -> B {
+        if self.notifier.is_changed() {
             let mut lock = self.inner.write().unwrap();
 
-            lock.poll_underlying(self.notifier.clone());
+            lock.poll_signal();
 
-            lock.value.as_ref().map(f)
+            f(&lock)
 
         } else {
             let lock = self.inner.read().unwrap();
 
-            lock.value.as_ref().map(f)
+            f(&lock)
         }
     }
 }
 
 // TODO use derive
-impl<A> ::std::fmt::Debug for BroadcasterSharedState<A>
-    where A: ::std::fmt::Debug + Signal,
-          A::Item: ::std::fmt::Debug {
+impl<A> Debug for BroadcasterSharedState<A>
+    where A: Debug + Signal,
+          A::Item: Debug {
 
     fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         fmt.debug_struct("BroadcasterSharedState")
@@ -171,55 +154,60 @@ impl<A> ::std::fmt::Debug for BroadcasterSharedState<A>
     }
 }
 
-// ---------------------------------------------------------------------------
 
-// State for a single broadcaster instance.
-//
-// It's split in this way because the BroadcasterSharedState also needs to
-// access the status (e.g. to notify of changes).
 struct BroadcasterState<A> where A: Signal {
-    status: Arc<BroadcasterStatus>,
+    epoch: usize,
+    waker: Arc<ChangedWaker>,
     shared_state: Arc<BroadcasterSharedState<A>>,
 }
 
 impl<A> BroadcasterState<A> where A: Signal {
     fn new(shared_state: &Arc<BroadcasterSharedState<A>>) -> Self {
-        let new_status = Arc::new(BroadcasterStatus::new());
+        let waker = Arc::new(ChangedWaker::new());
 
         {
-            let mut lock = shared_state.notifier.targets.lock().unwrap();
-            lock.push(Arc::downgrade(&new_status));
+            let mut lock = shared_state.notifier.wakers.lock().unwrap();
+            lock.push(Arc::downgrade(&waker));
         }
 
         Self {
-            status: new_status,
+            epoch: 0,
+            waker,
             shared_state: shared_state.clone(),
         }
     }
 
-    fn poll_change<B, F>(&self, cx: &mut Context, f: F) -> Poll<Option<B>> where F: FnOnce(&A::Item) -> B {
-        // If the poll just done (or a previous poll) has generated a new
-        // value, we can report it. Use swap so only one thread will pick up
-        // the change
-        if self.status.is_changed.swap(false, Ordering::SeqCst) {
-            Poll::Ready(self.shared_state.poll(f))
+    fn poll_change<B, F>(&mut self, cx: &mut Context, f: F) -> Poll<Option<B>> where F: FnOnce(&A::Item) -> B {
+        let BroadcasterState { epoch, waker, shared_state } = self;
 
-        } else {
-            // Nothing new to report, save this task's Waker for later
-            *self.status.waker.lock().unwrap() = Some(cx.waker().clone());
-            Poll::Pending
-        }
+        shared_state.poll(|state| {
+            // Value hasn't changed
+            if state.epoch == *epoch {
+                if state.signal.is_none() {
+                    Poll::Ready(None)
+
+                } else {
+                    waker.set_waker(cx);
+                    Poll::Pending
+                }
+
+            } else {
+                *epoch = state.epoch;
+                Poll::Ready(Some(f(state.value.as_ref().unwrap())))
+            }
+        })
     }
 }
 
 // TODO use derive
-impl<A> ::std::fmt::Debug for BroadcasterState<A>
-    where A: ::std::fmt::Debug + Signal,
-          A::Item: ::std::fmt::Debug {
+impl<A> Debug for BroadcasterState<A>
+    where A: Debug + Signal,
+          A::Item: Debug {
 
     fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         fmt.debug_struct("BroadcasterState")
-            .field("status", &self.status)
+            .field("epoch", &self.epoch)
+            .field("waker", &self.waker)
             .field("shared_state", &self.shared_state)
             .finish()
     }
@@ -227,15 +215,17 @@ impl<A> ::std::fmt::Debug for BroadcasterState<A>
 
 // ---------------------------------------------------------------------------
 
-/// Wraps any `Signal` to make it possible to "broadcast" it to several
-/// consumers.
+/// Splits an input `Signal` into multiple output `Signals`.
 ///
-/// `Broadcaster` provides the `.signal()` and `.signal_cloned()` methods which
-/// can be used to produce multiple signals out of the one original signal
-/// the `Broadcaster` was created with.
+/// `Broadcaster` provides `.signal()`, `.signal_cloned()`, and `.signal_ref()`
+/// methods which can be used to create multiple signals from a single signal.
 ///
-/// This is especially useful when you have a type `impl Signal` that produces clonable values but
-/// is itself not cloneable — e.g. because it needs to hold a Mutex or listens on a mpsc channel.
+/// This is useful because `Signal` usually does not implement `Clone`, so it is
+/// necessary to use `Broadcaster` to "clone" a `Signal`.
+///
+/// If you are using a `Mutable` then you don't need `Broadcaster`, because
+/// `Mutable` already supports the `.signal()`, `.signal_cloned()` and
+/// `.signal_ref()` methods (they are faster than `Broadcaster`).
 pub struct Broadcaster<A> where A: Signal {
     shared_state: Arc<BroadcasterSharedState<A>>,
 }
@@ -259,8 +249,7 @@ impl<A> Broadcaster<A> where A: Signal {
 }
 
 impl<A> Broadcaster<A> where A: Signal, A::Item: Copy {
-    /// Create a new `Signal` which copies values from the `Signal` wrapped
-    /// by the `Broadcaster`
+    /// Returns a new `Signal` which copies values from the input `Signal`
     // TODO: use `impl Signal` for the return type
     #[inline]
     pub fn signal(&self) -> BroadcasterSignal<A> {
@@ -271,8 +260,7 @@ impl<A> Broadcaster<A> where A: Signal, A::Item: Copy {
 }
 
 impl<A> Broadcaster<A> where A: Signal, A::Item: Clone {
-    /// Create a new `Signal` which clones values from the `Signal` wrapped
-    /// by the `Broadcaster`
+    /// Returns a new `Signal` which clones values from the input `Signal`
     // TODO: use `impl Signal` for the return type
     #[inline]
     pub fn signal_cloned(&self) -> BroadcasterSignalCloned<A> {
@@ -283,9 +271,9 @@ impl<A> Broadcaster<A> where A: Signal, A::Item: Clone {
 }
 
 // TODO use derive
-impl<A> ::std::fmt::Debug for Broadcaster<A>
-    where A: ::std::fmt::Debug + Signal,
-          A::Item: ::std::fmt::Debug {
+impl<A> Debug for Broadcaster<A>
+    where A: Debug + Signal,
+          A::Item: Debug {
 
     fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         fmt.debug_struct("Broadcaster")
@@ -308,15 +296,15 @@ impl<A> Signal for BroadcasterSignal<A>
     type Item = A::Item;
 
     #[inline]
-    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+    fn poll_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         self.state.poll_change(cx, |value| *value)
     }
 }
 
 // TODO use derive
-impl<A> ::std::fmt::Debug for BroadcasterSignal<A>
-    where A: ::std::fmt::Debug + Signal,
-          A::Item: ::std::fmt::Debug {
+impl<A> Debug for BroadcasterSignal<A>
+    where A: Debug + Signal,
+          A::Item: Debug {
 
     fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         fmt.debug_struct("BroadcasterSignal")
@@ -339,15 +327,15 @@ impl<A> Signal for BroadcasterSignalCloned<A>
     type Item = A::Item;
 
     #[inline]
-    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+    fn poll_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         self.state.poll_change(cx, |value| value.clone())
     }
 }
 
 // TODO use derive
-impl<A> ::std::fmt::Debug for BroadcasterSignalCloned<A>
-    where A: ::std::fmt::Debug + Signal,
-          A::Item: ::std::fmt::Debug {
+impl<A> Debug for BroadcasterSignalCloned<A>
+    where A: Debug + Signal,
+          A::Item: Debug {
 
     fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         fmt.debug_struct("BroadcasterSignalCloned")
@@ -380,9 +368,9 @@ impl<A, B, F> Signal for BroadcasterSignalRef<A, F>
 }
 
 // TODO use derive
-impl<A, F> ::std::fmt::Debug for BroadcasterSignalRef<A, F>
-    where A: ::std::fmt::Debug + Signal,
-          A::Item: ::std::fmt::Debug {
+impl<A, F> Debug for BroadcasterSignalRef<A, F>
+    where A: Debug + Signal,
+          A::Item: Debug {
 
     fn fmt(&self, fmt: &mut ::std::fmt::Formatter) -> ::std::fmt::Result {
         fmt.debug_struct("BroadcasterSignalRef")
