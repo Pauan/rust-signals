@@ -1,8 +1,8 @@
 [![crates.io](http://meritbadge.herokuapp.com/futures-signals)](https://crates.io/crates/futures-signals)
 [![docs.rs](https://docs.rs/futures-signals/badge.svg)](https://docs.rs/futures-signals)
 
-This is a Rust crate that provides zero-cost FRP Signals which are built on top of the
-[futures](https://crates.io/crates/futures) crate.
+This is a Rust crate that provides zero-cost [FRP](https://quickbirdstudios.com/blog/what-is-functional-reactive-programming-frp/)
+Signals which are built on top of the [futures](https://crates.io/crates/futures) crate.
 
 Hold on, zero-cost? Yup, that's right: if you don't use a feature you don't pay any performance cost,
 and the features that you *do* use are as fast as possible. Signals are ***very*** efficient.
