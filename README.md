@@ -1,4 +1,4 @@
-[![crates.io](http://meritbadge.herokuapp.com/futures-signals)](https://crates.io/crates/futures-signals)
+[![crates.io](https://img.shields.io/crates/v/futures-signals.svg)](https://crates.io/crates/futures-signals)
 [![docs.rs](https://docs.rs/futures-signals/badge.svg)](https://docs.rs/futures-signals)
 
 This is a Rust crate that provides zero-cost [FRP](https://quickbirdstudios.com/blog/what-is-functional-reactive-programming-frp/)
