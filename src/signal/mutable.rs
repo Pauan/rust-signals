@@ -7,7 +7,7 @@ use std::ops::{Deref, DerefMut};
 // TODO use parking_lot ?
 use std::sync::{Arc, Weak, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 // TODO use parking_lot ?
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Poll, Waker, Context};
 use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
@@ -53,18 +53,15 @@ impl ChangedWaker {
 
 
 #[derive(Debug)]
-struct MutableState<A> {
+struct MutableLockState<A> {
     value: A,
-    senders: usize,
     // TODO use HashMap or BTreeMap instead ?
     signals: Vec<Weak<ChangedWaker>>,
 }
 
-impl<A> MutableState<A> {
+impl<A> MutableLockState<A> {
     fn push_signal(&mut self, state: &Arc<ChangedWaker>) {
-        if self.senders != 0 {
-            self.signals.push(Arc::downgrade(state));
-        }
+        self.signals.push(Arc::downgrade(state));
     }
 
     fn notify(&mut self, has_changed: bool) {
@@ -82,14 +79,21 @@ impl<A> MutableState<A> {
 
 
 #[derive(Debug)]
+struct MutableState<A> {
+    senders: AtomicUsize,
+    lock: RwLock<MutableLockState<A>>,
+}
+
+
+#[derive(Debug)]
 struct MutableSignalState<A> {
     waker: Arc<ChangedWaker>,
     // TODO change this to Weak ?
-    state: Arc<RwLock<MutableState<A>>>,
+    state: Arc<MutableState<A>>,
 }
 
 impl<A> MutableSignalState<A> {
-    fn new(state: Arc<RwLock<MutableState<A>>>) -> Self {
+    fn new(state: Arc<MutableState<A>>) -> Self {
         MutableSignalState {
             waker: Arc::new(ChangedWaker::new()),
             state,
@@ -97,12 +101,14 @@ impl<A> MutableSignalState<A> {
     }
 
     fn poll_change<B, F>(&self, cx: &mut Context, f: F) -> Poll<Option<B>> where F: FnOnce(&A) -> B {
-        let lock = self.state.read().unwrap();
-
         if self.waker.is_changed() {
-            Poll::Ready(Some(f(&lock.value)))
+            let value = {
+                let lock = self.state.lock.read().unwrap();
+                f(&lock.value)
+            };
+            Poll::Ready(Some(value))
 
-        } else if lock.senders == 0 {
+        } else if self.state.senders.load(Ordering::SeqCst) == 0 {
             Poll::Ready(None)
 
         } else {
@@ -116,7 +122,7 @@ impl<A> MutableSignalState<A> {
 #[derive(Debug)]
 pub struct MutableLockMut<'a, A> where A: 'a {
     mutated: bool,
-    lock: RwLockWriteGuard<'a, MutableState<A>>,
+    lock: RwLockWriteGuard<'a, MutableLockState<A>>,
 }
 
 impl<'a, A> Deref for MutableLockMut<'a, A> {
@@ -148,7 +154,7 @@ impl<'a, A> Drop for MutableLockMut<'a, A> {
 
 #[derive(Debug)]
 pub struct MutableLockRef<'a, A> where A: 'a {
-    lock: RwLockReadGuard<'a, MutableState<A>>,
+    lock: RwLockReadGuard<'a, MutableLockState<A>>,
 }
 
 impl<'a, A> Deref for MutableLockRef<'a, A> {
@@ -161,20 +167,25 @@ impl<'a, A> Deref for MutableLockRef<'a, A> {
 }
 
 
-pub struct ReadOnlyMutable<A>(Arc<RwLock<MutableState<A>>>);
+#[repr(transparent)]
+pub struct ReadOnlyMutable<A>(Arc<MutableState<A>>);
 
 impl<A> ReadOnlyMutable<A> {
     // TODO return Result ?
     #[inline]
     pub fn lock_ref(&self) -> MutableLockRef<A> {
         MutableLockRef {
-            lock: self.0.read().unwrap(),
+            lock: self.0.lock.read().unwrap(),
         }
     }
 
     fn signal_state(&self) -> MutableSignalState<A> {
         let signal = MutableSignalState::new(self.0.clone());
-        self.0.write().unwrap().push_signal(&signal.waker);
+
+        if self.0.senders.load(Ordering::SeqCst) != 0 {
+            self.0.lock.write().unwrap().push_signal(&signal.waker);
+        }
+
         signal
     }
 
@@ -187,7 +198,7 @@ impl<A> ReadOnlyMutable<A> {
 impl<A: Copy> ReadOnlyMutable<A> {
     #[inline]
     pub fn get(&self) -> A {
-        self.0.read().unwrap().value
+        self.0.lock.read().unwrap().value
     }
 
     #[inline]
@@ -199,7 +210,7 @@ impl<A: Copy> ReadOnlyMutable<A> {
 impl<A: Clone> ReadOnlyMutable<A> {
     #[inline]
     pub fn get_cloned(&self) -> A {
-        self.0.read().unwrap().value.clone()
+        self.0.lock.read().unwrap().value.clone()
     }
 
     #[inline]
@@ -217,7 +228,7 @@ impl<A> Clone for ReadOnlyMutable<A> {
 
 impl<A> fmt::Debug for ReadOnlyMutable<A> where A: fmt::Debug {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        let state = self.0.read().unwrap();
+        let state = self.0.lock.read().unwrap();
 
         fmt.debug_tuple("ReadOnlyMutable")
             .field(&state.value)
@@ -226,20 +237,23 @@ impl<A> fmt::Debug for ReadOnlyMutable<A> where A: fmt::Debug {
 }
 
 
+#[repr(transparent)]
 pub struct Mutable<A>(ReadOnlyMutable<A>);
 
 impl<A> Mutable<A> {
     // TODO should this inline ?
     pub fn new(value: A) -> Self {
-        Mutable(ReadOnlyMutable(Arc::new(RwLock::new(MutableState {
-            value,
-            senders: 1,
-            signals: vec![],
-        }))))
+        Mutable(ReadOnlyMutable(Arc::new(MutableState {
+            senders: AtomicUsize::new(1),
+            lock: RwLock::new(MutableLockState {
+                value,
+                signals: vec![],
+            }),
+        })))
     }
 
     #[inline]
-    fn state(&self) -> &Arc<RwLock<MutableState<A>>> {
+    fn state(&self) -> &Arc<MutableState<A>> {
         &(self.0).0
     }
 
@@ -249,7 +263,7 @@ impl<A> Mutable<A> {
     }
 
     pub fn replace(&self, value: A) -> A {
-        let mut state = self.state().write().unwrap();
+        let mut state = self.state().lock.write().unwrap();
 
         let value = std::mem::replace(&mut state.value, value);
 
@@ -259,7 +273,7 @@ impl<A> Mutable<A> {
     }
 
     pub fn replace_with<F>(&self, f: F) -> A where F: FnOnce(&mut A) -> A {
-        let mut state = self.state().write().unwrap();
+        let mut state = self.state().lock.write().unwrap();
 
         let new_value = f(&mut state.value);
         let value = std::mem::replace(&mut state.value, new_value);
@@ -271,8 +285,8 @@ impl<A> Mutable<A> {
 
     pub fn swap(&self, other: &Mutable<A>) {
         // TODO can this dead lock ?
-        let mut state1 = self.state().write().unwrap();
-        let mut state2 = other.state().write().unwrap();
+        let mut state1 = self.state().lock.write().unwrap();
+        let mut state2 = other.state().lock.write().unwrap();
 
         std::mem::swap(&mut state1.value, &mut state2.value);
 
@@ -281,7 +295,7 @@ impl<A> Mutable<A> {
     }
 
     pub fn set(&self, value: A) {
-        let mut state = self.state().write().unwrap();
+        let mut state = self.state().lock.write().unwrap();
 
         state.value = value;
 
@@ -289,7 +303,7 @@ impl<A> Mutable<A> {
     }
 
     pub fn set_if<F>(&self, value: A, f: F) where F: FnOnce(&A, &A) -> bool {
-        let mut state = self.state().write().unwrap();
+        let mut state = self.state().lock.write().unwrap();
 
         if f(&state.value, &value) {
             state.value = value;
@@ -303,7 +317,7 @@ impl<A> Mutable<A> {
     pub fn lock_mut(&self) -> MutableLockMut<A> {
         MutableLockMut {
             mutated: false,
-            lock: self.state().write().unwrap(),
+            lock: self.state().lock.write().unwrap(),
         }
     }
 }
@@ -326,7 +340,7 @@ impl<A: PartialEq> Mutable<A> {
 
 impl<A> fmt::Debug for Mutable<A> where A: fmt::Debug {
     fn fmt(&self, fmt: &mut fmt::Formatter) -> fmt::Result {
-        let state = self.state().read().unwrap();
+        let state = self.state().lock.read().unwrap();
 
         fmt.debug_tuple("Mutable")
             .field(&state.value)
@@ -337,7 +351,7 @@ impl<A> fmt::Debug for Mutable<A> where A: fmt::Debug {
 impl<T> Serialize for Mutable<T> where T: Serialize {
     #[inline]
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
-        self.state().read().unwrap().value.serialize(serializer)
+        self.state().lock.read().unwrap().value.serialize(serializer)
     }
 }
 
@@ -359,7 +373,7 @@ impl<T: Default> Default for Mutable<T> {
 impl<A> Clone for Mutable<A> {
     #[inline]
     fn clone(&self) -> Self {
-        self.state().write().unwrap().senders += 1;
+        self.state().senders.fetch_add(1, Ordering::SeqCst);
         Mutable(self.0.clone())
     }
 }
@@ -367,14 +381,18 @@ impl<A> Clone for Mutable<A> {
 impl<A> Drop for Mutable<A> {
     #[inline]
     fn drop(&mut self) {
-        let mut state = self.state().write().unwrap();
+        let state = self.state();
 
-        state.senders -= 1;
+        let old_senders = state.senders.fetch_sub(1, Ordering::SeqCst);
 
-        if state.senders == 0 && state.signals.len() > 0 {
-            state.notify(false);
-            // TODO is this necessary ?
-            state.signals = vec![];
+        if old_senders == 1 {
+            let mut lock = state.lock.write().unwrap();
+
+            if lock.signals.len() > 0 {
+                lock.notify(false);
+                // TODO is this necessary ?
+                lock.signals = vec![];
+            }
         }
     }
 }
@@ -382,6 +400,7 @@ impl<A> Drop for Mutable<A> {
 
 // TODO remove it from signals when it's dropped
 #[derive(Debug)]
+#[repr(transparent)]
 #[must_use = "Signals do nothing unless polled"]
 pub struct MutableSignal<A>(MutableSignalState<A>);
 
@@ -418,6 +437,7 @@ impl<A, B, F> Signal for MutableSignalRef<A, F> where F: FnMut(&A) -> B {
 // TODO it should have a single MutableSignal implementation for both Copy and Clone
 // TODO remove it from signals when it's dropped
 #[derive(Debug)]
+#[repr(transparent)]
 #[must_use = "Signals do nothing unless polled"]
 pub struct MutableSignalCloned<A>(MutableSignalState<A>);
 
