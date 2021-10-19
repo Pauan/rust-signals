@@ -250,7 +250,6 @@ impl<A> Broadcaster<A> where A: Signal {
 
 impl<A> Broadcaster<A> where A: Signal, A::Item: Copy {
     /// Returns a new `Signal` which copies values from the input `Signal`
-    // TODO: use `impl Signal` for the return type
     #[inline]
     pub fn signal(&self) -> BroadcasterSignal<A> {
         BroadcasterSignal {
@@ -261,7 +260,6 @@ impl<A> Broadcaster<A> where A: Signal, A::Item: Copy {
 
 impl<A> Broadcaster<A> where A: Signal, A::Item: Clone {
     /// Returns a new `Signal` which clones values from the input `Signal`
-    // TODO: use `impl Signal` for the return type
     #[inline]
     pub fn signal_cloned(&self) -> BroadcasterSignalCloned<A> {
         BroadcasterSignalCloned {

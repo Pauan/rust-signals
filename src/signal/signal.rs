@@ -1014,6 +1014,7 @@ impl<A, B, C> Signal for Throttle<A, B, C>
                 Poll::Ready(None)
             },
             Some(Poll::Ready(None)) => {
+                // TODO maybe remove the future too ?
                 signal.set(None);
                 Poll::Ready(None)
             },

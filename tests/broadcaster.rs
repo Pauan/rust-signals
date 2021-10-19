@@ -24,8 +24,11 @@ fn test_broadcaster() {
         assert_eq!(b2.poll_change_unpin(cx), Poll::Ready(Some(5)));
         assert_eq!(b2.poll_change_unpin(cx), Poll::Pending);
 
+        mutable.set(6);
         drop(mutable);
+        assert_eq!(b1.poll_change_unpin(cx), Poll::Ready(Some(6)));
         assert_eq!(b1.poll_change_unpin(cx), Poll::Ready(None));
+        assert_eq!(b2.poll_change_unpin(cx), Poll::Ready(Some(6)));
         assert_eq!(b2.poll_change_unpin(cx), Poll::Ready(None));
     });
 }

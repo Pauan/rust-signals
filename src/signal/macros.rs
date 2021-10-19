@@ -216,7 +216,7 @@ macro_rules! __internal_map_ref {
 /// let mutable1 = Mutable::new(1);
 /// let mutable2 = Mutable::new(2);
 ///
-/// let mapped = map_ref! {
+/// let output = map_ref! {
 ///     let value1 = mutable1.signal(),
 ///     let value2 = mutable2.signal() =>
 ///     *value1 + *value2
@@ -237,9 +237,9 @@ macro_rules! __internal_map_ref {
 ///
 /// 4. Whenever `mutable1.signal()` or `mutable2.signal()` changes it repeats the above steps.
 ///
-/// So the end result is that `mapped` always contains the value of `mutable1 + mutable2`.
+/// So the end result is that `output` always contains the value of `mutable1 + mutable2`.
 ///
-/// So in the above example, `mapped` will have the value `3` (because it's `1 + 2`).
+/// So in the above example, `output` will have the value `3` (because it's `1 + 2`).
 ///
 /// But let's say that `mutable1` changes...
 ///
@@ -250,7 +250,7 @@ macro_rules! __internal_map_ref {
 /// mutable1.set(5);
 /// ```
 ///
-/// ...then `mapped` will now have the value `7` (because it's `5 + 2`). And then if `mutable2` changes...
+/// ...then `output` will now have the value `7` (because it's `5 + 2`). And then if `mutable2` changes...
 ///
 /// ```rust
 /// # use futures_signals::signal::Mutable;
@@ -259,7 +259,7 @@ macro_rules! __internal_map_ref {
 /// mutable2.set(10);
 /// ```
 ///
-/// ...then `mapped` will now have the value `15` (because it's `5 + 10`).
+/// ...then `output` will now have the value `15` (because it's `5 + 10`).
 ///
 /// If multiple input Signals change at the same time, then it will only update once:
 ///
@@ -272,7 +272,7 @@ macro_rules! __internal_map_ref {
 /// mutable2.set(20);
 /// ```
 ///
-/// In the above example, `mapped` will now have the value `35` (because it's `15 + 20`), and it only
+/// In the above example, `output` will now have the value `35` (because it's `15 + 20`), and it only
 /// updates once (***not*** once per input Signal).
 ///
 /// ----
@@ -286,7 +286,7 @@ macro_rules! __internal_map_ref {
 /// # let signal1 = always(1);
 /// # let signal2 = always(2);
 /// #
-/// let mapped = map_ref!(signal1, signal2 => *signal1 + *signal2);
+/// let output = map_ref!(signal1, signal2 => *signal1 + *signal2);
 /// # }
 /// ```
 ///
@@ -299,7 +299,7 @@ macro_rules! __internal_map_ref {
 /// # let signal1 = always(1);
 /// # let signal2 = always(2);
 /// #
-/// let mapped = map_ref! {
+/// let output = map_ref! {
 ///     let signal1 = signal1,
 ///     let signal2 = signal2 =>
 ///     *signal1 + *signal2
@@ -320,7 +320,7 @@ macro_rules! __internal_map_ref {
 /// # let signal1 = always((1, 2));
 /// # let signal2 = always(SomeStruct { foo: 3 });
 /// #
-/// let mapped = map_ref! {
+/// let output = map_ref! {
 ///     let (t1, t2) = signal1,
 ///     let SomeStruct { foo } = signal2 =>
 ///     // ...
@@ -339,7 +339,7 @@ macro_rules! __internal_map_ref {
 /// # let mutable2 = Mutable::new(2);
 /// # let mutable3 = Mutable::new(3);
 /// #
-/// let mapped = map_ref! {
+/// let output = map_ref! {
 ///     let value1 = mutable1.signal(),
 ///     let value2 = mutable2.signal(),
 ///     let value3 = mutable3.signal() =>
@@ -358,7 +358,7 @@ macro_rules! __internal_map_ref {
 ///
 /// ----
 ///
-/// You might be wondering why it's called `map_ref`: that's because `value1` and `value2` are *immutable references*
+/// You might be wondering why it's called `map_ref`: that's because `value1` and `value2` are *immutable `&` references*
 /// to the current values of the input Signals. That's also why you need to use `*value1` and `*value2` to dereference them.
 ///
 /// Why does it use references? Let's say one of the input Signals changes but the other ones haven't changed. In that situation
@@ -380,7 +380,7 @@ macro_rules! __internal_map_ref {
 /// # let mutable1 = Mutable::new(1);
 /// # let mutable2 = Mutable::new(2);
 /// #
-/// let mapped = map_ref! {
+/// let output = map_ref! {
 ///     let value1 = mutable1.signal(),
 ///     let value2 = mutable2.signal() =>
 ///     value1.clone() + value2.clone()
