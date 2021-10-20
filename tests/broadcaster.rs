@@ -1,5 +1,6 @@
 use futures_signals::map_ref;
-use futures_signals::signal::{SignalExt, Mutable, Broadcaster, always};
+use futures_signals::signal::{SignalExt, Mutable, Broadcaster, always, from_stream};
+use futures_executor::block_on_stream;
 use std::task::Poll;
 
 mod util;
@@ -115,4 +116,33 @@ fn test_broadcaster_multiple() {
         assert_eq!(signal2.poll_change_unpin(cx), Poll::Ready(Some(1)));
         assert_eq!(signal2.poll_change_unpin(cx), Poll::Ready(None));
     });
+}
+
+
+#[test]
+fn test_block_on_stream() {
+    let observable = Mutable::new(1);
+    let signal_from_stream = observable.signal();
+
+    let broadcaster = Broadcaster::new(signal_from_stream);
+    let mut blocking_stream = block_on_stream(broadcaster.signal().to_stream());
+
+    assert_eq!(blocking_stream.next(), Some(1));
+    observable.set(2);
+
+    assert_eq!(blocking_stream.next(), Some(2));
+}
+
+#[test]
+fn test_block_on_stream_wrapper() {
+    let observable = Mutable::new(1);
+    let signal_from_stream = from_stream(observable.signal().to_stream());
+
+    let broadcaster = Broadcaster::new(signal_from_stream);
+    let mut blocking_stream = block_on_stream(broadcaster.signal().debug().to_stream());
+
+    assert_eq!(blocking_stream.next().unwrap(), Some(1));
+    observable.set(2);
+
+    assert_eq!(blocking_stream.next().unwrap(), Some(2));
 }

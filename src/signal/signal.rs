@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::pin::Pin;
 use std::marker::Unpin;
 use std::future::Future;
@@ -497,6 +498,13 @@ pub trait SignalExt: Signal {
         }
     }
 
+    #[inline]
+    fn debug(self) -> SignalDebug<Self> where Self: Sized, Self::Item: Debug {
+        SignalDebug {
+            signal: self,
+        }
+    }
+
     /// A convenience for calling `Signal::poll_change` on `Unpin` types.
     #[inline]
     fn poll_change_unpin(&mut self, cx: &mut Context) -> Poll<Option<Self::Item>> where Self: Unpin + Sized {
@@ -543,6 +551,29 @@ pub fn or<A, B>(left: A, right: B) -> impl Signal<Item = bool>
     where A: Signal<Item = bool>,
           B: Signal<Item = bool> {
     Map2::new(left, right, |a, b| *a || *b)
+}
+
+
+#[pin_project]
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct SignalDebug<A> {
+    #[pin]
+    signal: A,
+}
+
+impl<A> Signal for SignalDebug<A> where A: Signal, A::Item: Debug {
+    type Item = A::Item;
+
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+
+        let poll = this.signal.poll_change(cx);
+
+        println!("{:#?}", poll);
+
+        poll
+    }
 }
 
 
@@ -613,6 +644,7 @@ impl<A> Signal for FromStream<A> where A: Stream {
             },
 
             Poll::Ready(Some(value)) => {
+                *this.first = false;
                 Poll::Ready(Some(Some(value)))
             },
 
