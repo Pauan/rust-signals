@@ -1,5 +1,6 @@
-## Next
+## 0.3.23 - (2021-10-20)
 * `Mutable::clone` is now lock-free.
+* Adding in `SignalExt::debug` method which prints the state of the signal to the console.
 * Fixing bug with `from_stream` function.
 
 ## 0.3.22 - (2021-06-13)
