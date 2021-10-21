@@ -1,8 +1,10 @@
+use std::panic::Location;
 use std::fmt::Debug;
 use std::pin::Pin;
 use std::marker::Unpin;
 use std::future::Future;
 use std::task::{Context, Poll};
+use log::trace;
 use futures_core::stream::Stream;
 use futures_util::stream;
 use futures_util::stream::StreamExt;
@@ -499,9 +501,11 @@ pub trait SignalExt: Signal {
     }
 
     #[inline]
+    #[track_caller]
     fn debug(self) -> SignalDebug<Self> where Self: Sized, Self::Item: Debug {
         SignalDebug {
             signal: self,
+            location: Location::caller(),
         }
     }
 
@@ -560,6 +564,7 @@ pub fn or<A, B>(left: A, right: B) -> impl Signal<Item = bool>
 pub struct SignalDebug<A> {
     #[pin]
     signal: A,
+    location: &'static Location<'static>,
 }
 
 impl<A> Signal for SignalDebug<A> where A: Signal, A::Item: Debug {
@@ -570,7 +575,7 @@ impl<A> Signal for SignalDebug<A> where A: Signal, A::Item: Debug {
 
         let poll = this.signal.poll_change(cx);
 
-        println!("{:#?}", poll);
+        trace!("[{}] {:#?}", this.location, poll);
 
         poll
     }

@@ -1,3 +1,6 @@
+## NEXT
+* Changing `SignalExt::debug` to use the [`log` crate](https://crates.io/crates/log).
+
 ## 0.3.23 - (2021-10-20)
 * `Mutable::clone` is now lock-free.
 * Adding in `SignalExt::debug` method which prints the state of the signal to the console.
