@@ -2134,7 +2134,6 @@ mod mutable_vec {
     use std::task::{Poll, Context};
     use futures_channel::mpsc;
     use futures_util::stream::StreamExt;
-    use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 
     // TODO replace with std::slice::range after it stabilizes
@@ -2759,16 +2758,18 @@ mod mutable_vec {
         }
     }
 
-    impl<T> Serialize for MutableVec<T> where T: Serialize {
+    #[cfg(feature = "serde")]
+    impl<T> serde::Serialize for MutableVec<T> where T: serde::Serialize {
         #[inline]
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
             self.0.read().unwrap().values.serialize(serializer)
         }
     }
 
-    impl<'de, T> Deserialize<'de> for MutableVec<T> where T: Deserialize<'de> {
+    #[cfg(feature = "serde")]
+    impl<'de, T> serde::Deserialize<'de> for MutableVec<T> where T: serde::Deserialize<'de> {
         #[inline]
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::Deserializer<'de> {
             <Vec<T>>::deserialize(deserializer).map(MutableVec::new_with_values)
         }
     }

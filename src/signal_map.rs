@@ -307,7 +307,6 @@ mod mutable_btree_map {
     use std::task::{Poll, Context};
     use futures_channel::mpsc;
     use futures_util::stream::StreamExt;
-    use serde::{Serialize, Deserialize, Serializer, Deserializer};
     use crate::signal_vec::{SignalVec, VecDiff};
 
 
@@ -679,16 +678,18 @@ mod mutable_btree_map {
         }
     }
 
-    impl<K, V> Serialize for MutableBTreeMap<K, V> where BTreeMap<K, V>: Serialize {
+    #[cfg(feature = "serde")]
+    impl<K, V> serde::Serialize for MutableBTreeMap<K, V> where BTreeMap<K, V>: serde::Serialize {
         #[inline]
-        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+        fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
             self.0.read().unwrap().values.serialize(serializer)
         }
     }
 
-    impl<'de, K, V> Deserialize<'de> for MutableBTreeMap<K, V> where BTreeMap<K, V>: Deserialize<'de> {
+    #[cfg(feature = "serde")]
+    impl<'de, K, V> serde::Deserialize<'de> for MutableBTreeMap<K, V> where BTreeMap<K, V>: serde::Deserialize<'de> {
         #[inline]
-        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+        fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::Deserializer<'de> {
             <BTreeMap<K, V>>::deserialize(deserializer).map(MutableBTreeMap::with_values)
         }
     }
