@@ -18,10 +18,15 @@ futures-util = "0.3.0"
 discard = "1.0.3"
 pin-project = "1.0.2"
 # TODO make this optional
-serde = "1.0.98"
-# TODO make this optional
 log = "0.4.14"
+
+[dependencies.serde]
+version = "1.0.98"
+optional = true
 
 [dev-dependencies]
 futures-executor = "0.3.0"
 pin-utils = "0.1.0"
+
+[features]
+default = ["serde"]

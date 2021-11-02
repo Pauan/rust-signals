@@ -9,7 +9,6 @@ use std::sync::{Arc, Weak, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
 // TODO use parking_lot ?
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Poll, Waker, Context};
-use serde::{Serialize, Deserialize, Serializer, Deserializer};
 
 
 #[derive(Debug)]
@@ -348,16 +347,18 @@ impl<A> fmt::Debug for Mutable<A> where A: fmt::Debug {
     }
 }
 
-impl<T> Serialize for Mutable<T> where T: Serialize {
+#[cfg(feature = "serde")]
+impl<T> serde::Serialize for Mutable<T> where T: serde::Serialize {
     #[inline]
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: Serializer {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error> where S: serde::Serializer {
         self.state().lock.read().unwrap().value.serialize(serializer)
     }
 }
 
-impl<'de, T> Deserialize<'de> for Mutable<T> where T: Deserialize<'de> {
+#[cfg(feature = "serde")]
+impl<'de, T> serde::Deserialize<'de> for Mutable<T> where T: serde::Deserialize<'de> {
     #[inline]
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: Deserializer<'de> {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error> where D: serde::Deserializer<'de> {
         T::deserialize(deserializer).map(Mutable::new)
     }
 }
