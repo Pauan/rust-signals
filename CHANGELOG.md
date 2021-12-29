@@ -1,4 +1,4 @@
-## NEXT
+## 0.3.24 - (2021-12-29)
 * Changing `SignalExt::debug` to use the [`log` crate](https://crates.io/crates/log).
 * Adding in new `signal_vec::from_stream` function.
 
