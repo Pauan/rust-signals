@@ -526,6 +526,9 @@ impl<A> SignalVec for Always<A> {
     }
 }
 
+/// Converts a `Vec<A>` into a `SignalVec<Item = A>`
+///
+/// This has no performance cost.
 #[inline]
 pub fn always<A>(values: Vec<A>) -> Always<A> {
     Always {
@@ -552,6 +555,9 @@ impl<S> SignalVec for StreamSignalVec<S> where S: Stream {
     }
 }
 
+/// Converts a `Stream<Item = A>` into a `SignalVec<Item = A>`
+///
+/// The values are always pushed to the end of the SignalVec. This has no performance cost.
 #[inline]
 pub fn from_stream<S>(stream: S) -> StreamSignalVec<S> {
     StreamSignalVec {
