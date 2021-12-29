@@ -534,6 +534,32 @@ pub fn always<A>(values: Vec<A>) -> Always<A> {
 }
 
 
+#[pin_project(project = StreamSignalVecProj)]
+#[derive(Debug)]
+#[must_use = "SignalVecs do nothing unless polled"]
+pub struct StreamSignalVec<S> {
+    #[pin]
+    stream: S,
+}
+
+impl<S> SignalVec for StreamSignalVec<S> where S: Stream {
+    type Item = S::Item;
+
+    fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
+        let StreamSignalVecProj { stream } = self.project();
+
+        stream.poll_next(cx).map(|some| some.map(|value| VecDiff::Push { value }))
+    }
+}
+
+#[inline]
+pub fn from_stream<S>(stream: S) -> StreamSignalVec<S> {
+    StreamSignalVec {
+        stream,
+    }
+}
+
+
 #[pin_project]
 #[derive(Debug)]
 #[must_use = "Futures do nothing unless polled"]
