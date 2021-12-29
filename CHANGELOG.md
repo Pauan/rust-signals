@@ -1,5 +1,6 @@
 ## NEXT
 * Changing `SignalExt::debug` to use the [`log` crate](https://crates.io/crates/log).
+* Adding in new `signal_vec::from_stream` function.
 
 ## 0.3.23 - (2021-10-20)
 * `Mutable::clone` is now lock-free.
