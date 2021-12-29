@@ -1,5 +1,5 @@
 use std::task::Poll;
-use futures_signals::signal_vec::{MutableVec, SignalVecExt, VecDiff};
+use futures_signals::signal_vec::{MutableVec, SignalVecExt, VecDiff, from_stream};
 
 mod util;
 
@@ -372,4 +372,23 @@ fn to_signal_cloned() {
 fn debug_to_signal_cloned() {
     let input: util::Source<VecDiff<u32>> = util::Source::new(vec![]);
     assert_eq!(format!("{:?}", input.to_signal_cloned()), "ToSignalCloned { ... }");
+}
+
+
+#[test]
+fn test_from_stream() {
+    let input = futures_util::stream::iter(vec![1, 2, 3, 4, 5]);
+
+    let output = from_stream(input);
+
+    let changes = util::map_poll_vec(output, |_output, change| change);
+
+    assert_eq!(changes, vec![
+        Poll::Ready(Some(VecDiff::Push { value: 1 })),
+        Poll::Ready(Some(VecDiff::Push { value: 2 })),
+        Poll::Ready(Some(VecDiff::Push { value: 3 })),
+        Poll::Ready(Some(VecDiff::Push { value: 4 })),
+        Poll::Ready(Some(VecDiff::Push { value: 5 })),
+        Poll::Ready(None),
+    ]);
 }
