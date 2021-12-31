@@ -11,6 +11,9 @@ keywords = ["signal", "reactive", "frp", "futures"]
 categories = ["asynchronous", "concurrency", "data-structures"]
 edition = "2018"
 
+[features]
+default = ["serde"]
+
 [dependencies]
 futures-core = "0.3.0"
 futures-channel = "0.3.0"
@@ -27,6 +30,8 @@ optional = true
 [dev-dependencies]
 futures-executor = "0.3.0"
 pin-utils = "0.1.0"
+criterion = { version = "0.3.5", features = [] }
 
-[features]
-default = ["serde"]
+[[bench]]
+name = "channel"
+harness = false
