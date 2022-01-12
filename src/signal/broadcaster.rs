@@ -280,6 +280,15 @@ impl<A> Debug for Broadcaster<A>
     }
 }
 
+impl<A> Clone for Broadcaster<A> where A: Signal {
+    #[inline]
+    fn clone(&self) -> Self {
+        Self {
+            shared_state: self.shared_state.clone(),
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------
 
 #[must_use = "Signals do nothing unless polled"]
