@@ -701,6 +701,12 @@ mod mutable_btree_map {
         }
     }
 
+    impl<K, V> Clone for MutableBTreeMap<K, V> {
+        #[inline]
+        fn clone(&self) -> Self {
+            MutableBTreeMap(self.0.clone())
+        }
+    }
 
     #[derive(Debug)]
     #[must_use = "SignalMaps do nothing unless polled"]
