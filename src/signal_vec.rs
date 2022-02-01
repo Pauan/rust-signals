@@ -2813,6 +2813,12 @@ mod mutable_vec {
         }
     }
 
+    impl<T> Clone for MutableVec<T> {
+        #[inline]
+        fn clone(&self) -> Self {
+            MutableVec(self.0.clone())
+        }
+    }
 
     #[derive(Debug)]
     #[must_use = "SignalVecs do nothing unless polled"]
