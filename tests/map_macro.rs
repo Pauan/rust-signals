@@ -1,7 +1,6 @@
-#![recursion_limit="128"]
+#![recursion_limit = "128"]
 
 mod util;
-
 
 #[macro_export]
 macro_rules! map_tests {

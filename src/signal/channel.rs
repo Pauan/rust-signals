@@ -1,11 +1,10 @@
 use super::Signal;
-use std::pin::Pin;
-use std::marker::Unpin;
-use std::sync::{Arc, Weak};
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::task::{Poll, Context, Waker};
 use crate::atomic::AtomicOption;
-
+use std::marker::Unpin;
+use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Weak};
+use std::task::{Context, Poll, Waker};
 
 #[derive(Debug)]
 struct Inner<A> {
@@ -44,7 +43,6 @@ impl<A> Inner<A> {
     }
 }
 
-
 #[derive(Debug)]
 pub struct Sender<A> {
     inner: Weak<Inner<A>>,
@@ -57,11 +55,9 @@ impl<A> Sender<A> {
                 inner.value.store(Some(value));
                 inner.notify();
                 Ok(())
-
             } else {
                 Err(value)
             }
-
         } else {
             Err(value)
         }
@@ -106,7 +102,6 @@ impl<A> Drop for Sender<A> {
     }
 }
 
-
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
 pub struct Receiver<A> {
@@ -125,11 +120,10 @@ impl<A> Signal for Receiver<A> {
                 if self.inner.has_senders() {
                     self.inner.waker.store(Some(cx.waker().clone()));
                     Poll::Pending
-
                 } else {
                     Poll::Ready(None)
                 }
-            },
+            }
 
             a => Poll::Ready(a),
         }
@@ -147,9 +141,7 @@ pub fn channel<A>(initial_value: A) -> (Sender<A>, Receiver<A>) {
         inner: Arc::downgrade(&inner),
     };
 
-    let receiver = Receiver {
-        inner,
-    };
+    let receiver = Receiver { inner };
 
     (sender, receiver)
 }

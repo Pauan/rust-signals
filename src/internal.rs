@@ -1,10 +1,9 @@
 use super::signal::Signal;
 use std::pin::Pin;
 // TODO use parking_lot ?
-use std::sync::{Arc, RwLock, Mutex, MutexGuard, RwLockReadGuard};
-use std::task::{Poll, Context};
 use pin_project::pin_project;
-
+use std::sync::{Arc, Mutex, MutexGuard, RwLock, RwLockReadGuard};
+use std::task::{Context, Poll};
 
 #[inline]
 pub fn lock_mut<A>(x: &Mutex<A>) -> MutexGuard<A> {
@@ -30,11 +29,14 @@ pub fn unwrap_ref<A>(x: &Option<A>) -> &A {
     }
 }
 
-
 #[pin_project(project = Map2Proj)]
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
-pub struct Map2<A, B, C> where A: Signal, B: Signal {
+pub struct Map2<A, B, C>
+where
+    A: Signal,
+    B: Signal,
+{
     #[pin]
     signal1: Option<A>,
     #[pin]
@@ -45,9 +47,11 @@ pub struct Map2<A, B, C> where A: Signal, B: Signal {
 }
 
 impl<A, B, C, D> Map2<A, B, C>
-    where A: Signal,
-          B: Signal,
-          C: FnMut(&mut A::Item, &mut B::Item) -> D {
+where
+    A: Signal,
+    B: Signal,
+    C: FnMut(&mut A::Item, &mut B::Item) -> D,
+{
     #[inline]
     pub fn new(left: A, right: B, callback: C) -> Self {
         Self {
@@ -81,42 +85,58 @@ impl<A, B, C, D> Map2<A, B, C>
 // Pending    => None       => Pending     => Some(right) => Pending
 // Pending    => None       => Pending     => None        => Pending
 impl<A, B, C, D> Signal for Map2<A, B, C>
-    where A: Signal,
-          B: Signal,
-          C: FnMut(&mut A::Item, &mut B::Item) -> D {
+where
+    A: Signal,
+    B: Signal,
+    C: FnMut(&mut A::Item, &mut B::Item) -> D,
+{
     type Item = D;
 
     // TODO inline this ?
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let Map2Proj { mut signal1, mut signal2, left, right, callback } = self.project();
+        let Map2Proj {
+            mut signal1,
+            mut signal2,
+            left,
+            right,
+            callback,
+        } = self.project();
 
         let mut changed = false;
 
-        let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
+        let left_done = match signal1
+            .as_mut()
+            .as_pin_mut()
+            .map(|signal| signal.poll_change(cx))
+        {
             None => true,
             Some(Poll::Ready(None)) => {
                 signal1.set(None);
                 true
-            },
+            }
             Some(Poll::Ready(a)) => {
                 *left = a;
                 changed = true;
                 false
-            },
+            }
             Some(Poll::Pending) => false,
         };
 
-        let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
+        let right_done = match signal2
+            .as_mut()
+            .as_pin_mut()
+            .map(|signal| signal.poll_change(cx))
+        {
             None => true,
             Some(Poll::Ready(None)) => {
                 signal2.set(None);
                 true
-            },
+            }
             Some(Poll::Ready(a)) => {
                 *right = a;
                 changed = true;
                 false
-            },
+            }
             Some(Poll::Pending) => false,
         };
 
@@ -125,16 +145,13 @@ impl<A, B, C, D> Signal for Map2<A, B, C>
                 left.as_mut().unwrap(),
                 right.as_mut().unwrap(),
             )))
-
         } else if left_done && right_done {
             Poll::Ready(None)
-
         } else {
             Poll::Pending
         }
     }
 }
-
 
 // TODO is it possible to avoid the Arc ?
 // TODO is it possible to use only a single Mutex ?
@@ -143,7 +160,11 @@ pub type PairMut<A, B> = Arc<(Mutex<Option<A>>, Mutex<Option<B>>)>;
 #[pin_project(project = MapPairMutProj)]
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
-pub struct MapPairMut<A, B> where A: Signal, B: Signal {
+pub struct MapPairMut<A, B>
+where
+    A: Signal,
+    B: Signal,
+{
     #[pin]
     signal1: Option<A>,
     #[pin]
@@ -152,8 +173,10 @@ pub struct MapPairMut<A, B> where A: Signal, B: Signal {
 }
 
 impl<A, B> MapPairMut<A, B>
-    where A: Signal,
-          B: Signal {
+where
+    A: Signal,
+    B: Signal,
+{
     #[inline]
     pub fn new(left: A, right: B) -> Self {
         Self {
@@ -165,13 +188,19 @@ impl<A, B> MapPairMut<A, B>
 }
 
 impl<A, B> Signal for MapPairMut<A, B>
-    where A: Signal,
-          B: Signal {
+where
+    A: Signal,
+    B: Signal,
+{
     type Item = PairMut<A::Item, B::Item>;
 
     // TODO inline this ?
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let MapPairMutProj { mut signal1, mut signal2, inner } = self.project();
+        let MapPairMutProj {
+            mut signal1,
+            mut signal2,
+            inner,
+        } = self.project();
 
         let mut changed = false;
 
@@ -181,46 +210,51 @@ impl<A, B> Signal for MapPairMut<A, B>
         // TODO is it okay to move this to just above right_done ?
         let mut borrow_right = inner.1.lock().unwrap();
 
-        let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
+        let left_done = match signal1
+            .as_mut()
+            .as_pin_mut()
+            .map(|signal| signal.poll_change(cx))
+        {
             None => true,
             Some(Poll::Ready(None)) => {
                 signal1.set(None);
                 true
-            },
+            }
             Some(Poll::Ready(a)) => {
                 *borrow_left = a;
                 changed = true;
                 false
-            },
+            }
             Some(Poll::Pending) => false,
         };
 
-        let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
+        let right_done = match signal2
+            .as_mut()
+            .as_pin_mut()
+            .map(|signal| signal.poll_change(cx))
+        {
             None => true,
             Some(Poll::Ready(None)) => {
                 signal2.set(None);
                 true
-            },
+            }
             Some(Poll::Ready(a)) => {
                 *borrow_right = a;
                 changed = true;
                 false
-            },
+            }
             Some(Poll::Pending) => false,
         };
 
         if changed {
             Poll::Ready(Some(inner.clone()))
-
         } else if left_done && right_done {
             Poll::Ready(None)
-
         } else {
             Poll::Pending
         }
     }
 }
-
 
 // TODO is it possible to avoid the Arc ?
 // TODO maybe it's faster to use a Mutex ?
@@ -229,7 +263,11 @@ pub type Pair<A, B> = Arc<RwLock<(Option<A>, Option<B>)>>;
 #[pin_project(project = MapPairProj)]
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
-pub struct MapPair<A, B> where A: Signal, B: Signal {
+pub struct MapPair<A, B>
+where
+    A: Signal,
+    B: Signal,
+{
     #[pin]
     signal1: Option<A>,
     #[pin]
@@ -238,8 +276,10 @@ pub struct MapPair<A, B> where A: Signal, B: Signal {
 }
 
 impl<A, B> MapPair<A, B>
-    where A: Signal,
-          B: Signal {
+where
+    A: Signal,
+    B: Signal,
+{
     #[inline]
     pub fn new(left: A, right: B) -> Self {
         Self {
@@ -251,52 +291,64 @@ impl<A, B> MapPair<A, B>
 }
 
 impl<A, B> Signal for MapPair<A, B>
-    where A: Signal,
-          B: Signal {
+where
+    A: Signal,
+    B: Signal,
+{
     type Item = Pair<A::Item, B::Item>;
 
     // TODO inline this ?
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let MapPairProj { mut signal1, mut signal2, inner } = self.project();
+        let MapPairProj {
+            mut signal1,
+            mut signal2,
+            inner,
+        } = self.project();
 
         let mut changed = false;
 
         let mut borrow = inner.write().unwrap();
 
-        let left_done = match signal1.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
+        let left_done = match signal1
+            .as_mut()
+            .as_pin_mut()
+            .map(|signal| signal.poll_change(cx))
+        {
             None => true,
             Some(Poll::Ready(None)) => {
                 signal1.set(None);
                 true
-            },
+            }
             Some(Poll::Ready(a)) => {
                 borrow.0 = a;
                 changed = true;
                 false
-            },
+            }
             Some(Poll::Pending) => false,
         };
 
-        let right_done = match signal2.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
+        let right_done = match signal2
+            .as_mut()
+            .as_pin_mut()
+            .map(|signal| signal.poll_change(cx))
+        {
             None => true,
             Some(Poll::Ready(None)) => {
                 signal2.set(None);
                 true
-            },
+            }
             Some(Poll::Ready(a)) => {
                 borrow.1 = a;
                 changed = true;
                 false
-            },
+            }
             Some(Poll::Pending) => false,
         };
 
         if changed {
             Poll::Ready(Some(inner.clone()))
-
         } else if left_done && right_done {
             Poll::Ready(None)
-
         } else {
             Poll::Pending
         }

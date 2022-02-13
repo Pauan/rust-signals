@@ -1,26 +1,31 @@
-use std::marker::Unpin;
-use std::time::Duration;
-use std::thread::sleep;
-use std::sync::Arc;
-use std::pin::Pin;
-use std::task::{Poll, Context};
-use futures_signals::signal_vec::{VecDiff, SignalVec};
-use futures_signals::signal_map::{MapDiff, SignalMap};
+use futures_executor::block_on;
 use futures_signals::signal::Signal;
+use futures_signals::signal_map::{MapDiff, SignalMap};
+use futures_signals::signal_vec::{SignalVec, VecDiff};
 use futures_util::future::poll_fn;
 use futures_util::task::{waker, ArcWake};
-use futures_executor::block_on;
 use pin_utils::pin_mut;
-
+use std::marker::Unpin;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::task::{Context, Poll};
+use std::thread::sleep;
+use std::time::Duration;
 
 #[allow(dead_code)]
-pub struct ForEachSignal<A> where A: Signal {
+pub struct ForEachSignal<A>
+where
+    A: Signal,
+{
     signal: A,
     callbacks: Vec<Box<dyn FnMut(&mut Context, Poll<Option<A::Item>>)>>,
 }
 
 #[allow(dead_code)]
-impl<A> ForEachSignal<A> where A: Signal {
+impl<A> ForEachSignal<A>
+where
+    A: Signal,
+{
     pub fn new(signal: A) -> Self {
         Self {
             signal,
@@ -28,7 +33,10 @@ impl<A> ForEachSignal<A> where A: Signal {
         }
     }
 
-    pub fn next<B>(mut self, callback: B) -> Self where B: FnMut(&mut Context, Poll<Option<A::Item>>) + 'static {
+    pub fn next<B>(mut self, callback: B) -> Self
+    where
+        B: FnMut(&mut Context, Poll<Option<A::Item>>) + 'static,
+    {
         self.callbacks.insert(0, Box::new(callback));
         self
     }
@@ -50,27 +58,23 @@ impl<A> ForEachSignal<A> where A: Signal {
                             Poll::Ready(None) => {
                                 callback(cx, poll);
                                 Poll::Ready(())
-                            },
+                            }
                             Poll::Ready(Some(_)) => {
                                 callback(cx, poll);
                                 continue;
-                            },
+                            }
                             Poll::Pending => {
                                 callback(cx, poll);
                                 Poll::Pending
-                            },
+                            }
                         }
-                    },
-                    None => {
-                        Poll::Ready(())
-                    },
-                }
+                    }
+                    None => Poll::Ready(()),
+                };
             }
         }));
     }
 }
-
-
 
 #[allow(dead_code)]
 pub fn with_noop_context<U, F: FnOnce(&mut Context) -> U>(f: F) -> U {
@@ -88,84 +92,83 @@ pub fn with_noop_context<U, F: FnOnce(&mut Context) -> U>(f: F) -> U {
     f(context)
 }
 
-
 #[allow(dead_code)]
 pub fn delay() {
     // TODO is it guaranteed that this will yield to other threads ?
     sleep(Duration::from_millis(10));
 }
 
-
 fn get_polls<A, F, P>(f: F, mut p: P) -> Vec<Poll<Option<A>>>
-    where F: FnOnce(),
-          P: FnMut(&mut Context) -> Poll<Option<A>> {
-
+where
+    F: FnOnce(),
+    P: FnMut(&mut Context) -> Poll<Option<A>>,
+{
     let mut f = Some(f);
     let mut output = vec![];
 
-    block_on(poll_fn(|cx| {
-        loop {
-            let x = p(cx);
+    block_on(poll_fn(|cx| loop {
+        let x = p(cx);
 
-            let poll = match x {
-                Poll::Ready(Some(_)) => {
-                    output.push(x);
-                    continue;
-                },
-                Poll::Ready(None) => {
-                    Poll::Ready(())
-                },
-                Poll::Pending => {
-                    Poll::Pending
-                },
-            };
-
-            output.push(x);
-
-            if let Some(f) = f.take() {
-                f();
+        let poll = match x {
+            Poll::Ready(Some(_)) => {
+                output.push(x);
+                continue;
             }
+            Poll::Ready(None) => Poll::Ready(()),
+            Poll::Pending => Poll::Pending,
+        };
 
-            return poll;
+        output.push(x);
+
+        if let Some(f) = f.take() {
+            f();
         }
+
+        return poll;
     }));
 
     output
 }
 
-
 #[allow(dead_code)]
 pub fn get_signal_polls<A, F>(signal: A, f: F) -> Vec<Poll<Option<A::Item>>>
-    where A: Signal,
-          F: FnOnce() {
+where
+    A: Signal,
+    F: FnOnce(),
+{
     pin_mut!(signal);
     // TODO is the as_mut correct ?
     get_polls(f, |cx| Pin::as_mut(&mut signal).poll_change(cx))
 }
 
-
 #[allow(dead_code)]
 pub fn get_signal_vec_polls<A, F>(signal: A, f: F) -> Vec<Poll<Option<VecDiff<A::Item>>>>
-    where A: SignalVec,
-          F: FnOnce() {
+where
+    A: SignalVec,
+    F: FnOnce(),
+{
     pin_mut!(signal);
     // TODO is the as_mut correct ?
     get_polls(f, |cx| Pin::as_mut(&mut signal).poll_vec_change(cx))
 }
 
-
 #[allow(dead_code)]
 pub fn get_signal_map_polls<A, F>(signal: A, f: F) -> Vec<Poll<Option<MapDiff<A::Key, A::Value>>>>
-    where A: SignalMap,
-          F: FnOnce() {
+where
+    A: SignalMap,
+    F: FnOnce(),
+{
     pin_mut!(signal);
     // TODO is the as_mut correct ?
     get_polls(f, |cx| Pin::as_mut(&mut signal).poll_map_change(cx))
 }
 
-
 #[allow(dead_code)]
-pub fn get_all_polls<A, B, F>(signal: A, mut initial: B, mut f: F) -> Vec<Poll<Option<A::Item>>> where A: Signal, F: FnMut(&B, &mut Context) -> B {
+pub fn get_all_polls<A, B, F>(signal: A, mut initial: B, mut f: F) -> Vec<Poll<Option<A::Item>>>
+where
+    A: Signal,
+    F: FnMut(&B, &mut Context) -> B,
+{
     let mut output = vec![];
 
     // TODO is this correct ?
@@ -182,15 +185,15 @@ pub fn get_all_polls<A, B, F>(signal: A, mut initial: B, mut f: F) -> Vec<Poll<O
                 Poll::Ready(Some(_)) => {
                     output.push(x);
                     continue;
-                },
+                }
                 Poll::Ready(None) => {
                     output.push(x);
                     Poll::Ready(())
-                },
+                }
                 Poll::Pending => {
                     output.push(x);
                     Poll::Pending
-                },
+                }
             };
 
             return x;
@@ -200,9 +203,12 @@ pub fn get_all_polls<A, B, F>(signal: A, mut initial: B, mut f: F) -> Vec<Poll<O
     output
 }
 
-
 #[allow(dead_code)]
-pub fn map_poll_vec<A, B, C>(signal: A, mut callback: C) -> Vec<B> where A: SignalVec, C: FnMut(&A, Poll<Option<VecDiff<A::Item>>>) -> B {
+pub fn map_poll_vec<A, B, C>(signal: A, mut callback: C) -> Vec<B>
+where
+    A: SignalVec,
+    C: FnMut(&A, Poll<Option<VecDiff<A::Item>>>) -> B,
+{
     let mut changes = vec![];
 
     // TODO is this correct ?
@@ -217,15 +223,15 @@ pub fn map_poll_vec<A, B, C>(signal: A, mut callback: C) -> Vec<B> where A: Sign
                 Poll::Ready(Some(_)) => {
                     changes.push(callback(&signal, x));
                     continue;
-                },
+                }
                 Poll::Ready(None) => {
                     changes.push(callback(&signal, x));
                     Poll::Ready(())
-                },
+                }
                 Poll::Pending => {
                     changes.push(callback(&signal, x));
                     Poll::Pending
-                },
+                }
             };
         }
     }));
@@ -234,7 +240,11 @@ pub fn map_poll_vec<A, B, C>(signal: A, mut callback: C) -> Vec<B> where A: Sign
 }
 
 #[allow(dead_code)]
-pub fn map_poll_map<A, B, C>(signal: A, mut callback: C) -> Vec<B> where A: SignalMap, C: FnMut(&A, Poll<Option<MapDiff<A::Key, A::Value>>>) -> B {
+pub fn map_poll_map<A, B, C>(signal: A, mut callback: C) -> Vec<B>
+where
+    A: SignalMap,
+    C: FnMut(&A, Poll<Option<MapDiff<A::Key, A::Value>>>) -> B,
+{
     let mut changes = vec![];
 
     // TODO is this correct ?
@@ -249,15 +259,15 @@ pub fn map_poll_map<A, B, C>(signal: A, mut callback: C) -> Vec<B> where A: Sign
                 Poll::Ready(Some(_)) => {
                     changes.push(callback(&signal, x));
                     continue;
-                },
+                }
                 Poll::Ready(None) => {
                     changes.push(callback(&signal, x));
                     Poll::Ready(())
-                },
+                }
                 Poll::Pending => {
                     changes.push(callback(&signal, x));
                     Poll::Pending
-                },
+                }
             };
         }
     }));
@@ -265,12 +275,12 @@ pub fn map_poll_map<A, B, C>(signal: A, mut callback: C) -> Vec<B> where A: Sign
     changes
 }
 
-
 #[allow(dead_code)]
 pub fn assert_signal_eq<A, S>(signal: S, expected: Vec<Poll<Option<A>>>)
-    where A: std::fmt::Debug + PartialEq,
-          S: Signal<Item = A> {
-
+where
+    A: std::fmt::Debug + PartialEq,
+    S: Signal<Item = A>,
+{
     assert_eq!(
         // TODO a little gross
         get_all_polls(signal, (), |_, _| {}),
@@ -280,32 +290,26 @@ pub fn assert_signal_eq<A, S>(signal: S, expected: Vec<Poll<Option<A>>>)
 
 #[allow(dead_code)]
 pub fn assert_signal_vec_eq<A, S>(signal: S, expected: Vec<Poll<Option<VecDiff<A>>>>)
-    where A: std::fmt::Debug + PartialEq,
-          S: SignalVec<Item = A> {
-
+where
+    A: std::fmt::Debug + PartialEq,
+    S: SignalVec<Item = A>,
+{
     let actual = map_poll_vec(signal, |_output, change| change);
 
-    assert_eq!(
-        actual,
-        expected,
-    );
+    assert_eq!(actual, expected,);
 }
 
 #[allow(dead_code)]
 pub fn assert_signal_map_eq<K, V, S>(signal: S, expected: Vec<Poll<Option<MapDiff<K, V>>>>)
-    where K: std::fmt::Debug + PartialEq,
-          V: std::fmt::Debug + PartialEq,
-          S: SignalMap<Key = K, Value = V> {
-
+where
+    K: std::fmt::Debug + PartialEq,
+    V: std::fmt::Debug + PartialEq,
+    S: SignalMap<Key = K, Value = V>,
+{
     let actual = map_poll_map(signal, |_output, change| change);
 
-    assert_eq!(
-        actual,
-        expected,
-    );
+    assert_eq!(actual, expected,);
 }
-
-
 
 #[allow(dead_code)]
 #[must_use = "Source does nothing unless polled"]
@@ -328,10 +332,9 @@ impl<A> Source<A> {
                 Poll::Pending => {
                     cx.waker().wake_by_ref();
                     Poll::Pending
-                },
+                }
                 Poll::Ready(change) => Poll::Ready(Some(change)),
             }
-
         } else {
             Poll::Ready(None)
         }
@@ -351,7 +354,10 @@ impl<A> SignalVec for Source<VecDiff<A>> {
     type Item = A;
 
     #[inline]
-    fn poll_vec_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
+    fn poll_vec_change(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+    ) -> Poll<Option<VecDiff<Self::Item>>> {
         self.poll(cx)
     }
 }
@@ -361,7 +367,10 @@ impl<K, V> SignalMap for Source<MapDiff<K, V>> {
     type Value = V;
 
     #[inline]
-    fn poll_map_change(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
+    fn poll_map_change(
+        mut self: Pin<&mut Self>,
+        cx: &mut Context,
+    ) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
         self.poll(cx)
     }
 }

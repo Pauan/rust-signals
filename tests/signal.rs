@@ -1,14 +1,13 @@
-use std::rc::Rc;
-use std::cell::Cell;
-use std::task::Poll;
 use futures_signals::cancelable_future;
-use futures_signals::signal::{Signal, SignalExt, Mutable, channel, always};
+use futures_signals::signal::{always, channel, Mutable, Signal, SignalExt};
 use futures_signals::signal_vec::VecDiff;
-use futures_util::future::{ready, poll_fn};
+use futures_util::future::{poll_fn, ready};
 use pin_utils::pin_mut;
+use std::cell::Cell;
+use std::rc::Rc;
+use std::task::Poll;
 
 mod util;
-
 
 #[test]
 fn test_always() {
@@ -120,7 +119,6 @@ fn test_send_sync() {
     let _: Box<dyn Send + Sync> = Box::new(a.1);
 }
 
-
 #[test]
 fn test_map() {
     let input = util::Source::new(vec![
@@ -143,26 +141,28 @@ fn test_map() {
 
     let output = input.map(move |x| x * 10);
 
-    util::assert_signal_eq(output, vec![
-        Poll::Ready(Some(0)),
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(10)),
-        Poll::Ready(Some(50)),
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(0)),
-        Poll::Pending,
-        Poll::Ready(Some(30)),
-        Poll::Pending,
-        Poll::Ready(None),
-    ]);
+    util::assert_signal_eq(
+        output,
+        vec![
+            Poll::Ready(Some(0)),
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Ready(Some(10)),
+            Poll::Ready(Some(50)),
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Ready(Some(0)),
+            Poll::Pending,
+            Poll::Ready(Some(30)),
+            Poll::Pending,
+            Poll::Ready(None),
+        ],
+    );
 }
-
 
 #[test]
 fn test_eq() {
@@ -196,36 +196,38 @@ fn test_eq() {
 
     let output = input.eq(1);
 
-    util::assert_signal_eq(output, vec![
-        Poll::Ready(Some(false)),
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(true)),
-        Poll::Pending,
-        Poll::Ready(Some(false)),
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(true)),
-        Poll::Ready(Some(false)),
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(true)),
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(false)),
-        Poll::Ready(Some(true)),
-        Poll::Pending,
-        Poll::Ready(Some(false)),
-        Poll::Pending,
-        Poll::Ready(None),
-    ]);
+    util::assert_signal_eq(
+        output,
+        vec![
+            Poll::Ready(Some(false)),
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Ready(Some(true)),
+            Poll::Pending,
+            Poll::Ready(Some(false)),
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Ready(Some(true)),
+            Poll::Ready(Some(false)),
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Ready(Some(true)),
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Ready(Some(false)),
+            Poll::Ready(Some(true)),
+            Poll::Pending,
+            Poll::Ready(Some(false)),
+            Poll::Pending,
+            Poll::Ready(None),
+        ],
+    );
 }
-
 
 #[test]
 fn test_neq() {
@@ -259,36 +261,38 @@ fn test_neq() {
 
     let output = input.neq(1);
 
-    util::assert_signal_eq(output, vec![
-        Poll::Ready(Some(true)),
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(false)),
-        Poll::Pending,
-        Poll::Ready(Some(true)),
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(false)),
-        Poll::Ready(Some(true)),
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(false)),
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(true)),
-        Poll::Ready(Some(false)),
-        Poll::Pending,
-        Poll::Ready(Some(true)),
-        Poll::Pending,
-        Poll::Ready(None),
-    ]);
+    util::assert_signal_eq(
+        output,
+        vec![
+            Poll::Ready(Some(true)),
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Ready(Some(false)),
+            Poll::Pending,
+            Poll::Ready(Some(true)),
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Ready(Some(false)),
+            Poll::Ready(Some(true)),
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Ready(Some(false)),
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Ready(Some(true)),
+            Poll::Ready(Some(false)),
+            Poll::Pending,
+            Poll::Ready(Some(true)),
+            Poll::Pending,
+            Poll::Ready(None),
+        ],
+    );
 }
-
 
 #[test]
 fn test_map_future() {
@@ -305,7 +309,6 @@ fn test_map_future() {
             poll_fn(move |_| {
                 if first.get() {
                     Poll::Pending
-
                 } else {
                     Poll::Ready(value)
                 }
@@ -335,7 +338,6 @@ fn test_map_future() {
         .run();
 }
 
-
 #[test]
 fn test_switch_signal_vec() {
     let input = util::Source::new(vec![
@@ -357,13 +359,12 @@ fn test_switch_signal_vec() {
 
     let output = input.switch_signal_vec(move |test| {
         if test {
-            util::Source::new(vec![
-                Poll::Ready(VecDiff::Push { value: 10 }),
-            ])
-
+            util::Source::new(vec![Poll::Ready(VecDiff::Push { value: 10 })])
         } else {
             util::Source::new(vec![
-                Poll::Ready(VecDiff::Replace { values: vec![0, 1, 2, 3, 4, 5] }),
+                Poll::Ready(VecDiff::Replace {
+                    values: vec![0, 1, 2, 3, 4, 5],
+                }),
                 Poll::Ready(VecDiff::Push { value: 6 }),
                 Poll::Pending,
                 Poll::Pending,
@@ -372,21 +373,25 @@ fn test_switch_signal_vec() {
         }
     });
 
-    util::assert_signal_vec_eq(output, vec![
-        Poll::Ready(Some(VecDiff::Push { value: 10 })),
-        Poll::Pending,
-        Poll::Ready(Some(VecDiff::Replace { values: vec![0, 1, 2, 3, 4, 5] })),
-        Poll::Ready(Some(VecDiff::Push { value: 6 })),
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(VecDiff::InsertAt { index: 0, value: 7 })),
-        Poll::Pending,
-        Poll::Ready(Some(VecDiff::Replace { values: vec![] })),
-        Poll::Ready(Some(VecDiff::Push { value: 10 })),
-        Poll::Ready(None)
-    ]);
+    util::assert_signal_vec_eq(
+        output,
+        vec![
+            Poll::Ready(Some(VecDiff::Push { value: 10 })),
+            Poll::Pending,
+            Poll::Ready(Some(VecDiff::Replace {
+                values: vec![0, 1, 2, 3, 4, 5],
+            })),
+            Poll::Ready(Some(VecDiff::Push { value: 6 })),
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Ready(Some(VecDiff::InsertAt { index: 0, value: 7 })),
+            Poll::Pending,
+            Poll::Ready(Some(VecDiff::Replace { values: vec![] })),
+            Poll::Ready(Some(VecDiff::Push { value: 10 })),
+            Poll::Ready(None),
+        ],
+    );
 }
-
 
 #[test]
 fn test_throttle() {
@@ -414,7 +419,6 @@ fn test_throttle() {
             if done {
                 done = false;
                 Poll::Ready(())
-
             } else {
                 done = true;
                 context.waker().wake_by_ref();
@@ -423,25 +427,27 @@ fn test_throttle() {
         })
     });
 
-    util::assert_signal_eq(output, vec![
-        Poll::Ready(Some(true)),
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(false)),
-        Poll::Ready(Some(false)),
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Pending,
-        Poll::Ready(Some(false)),
-        Poll::Ready(Some(true)),
-        Poll::Pending,
-        Poll::Ready(None),
-    ]);
+    util::assert_signal_eq(
+        output,
+        vec![
+            Poll::Ready(Some(true)),
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Ready(Some(false)),
+            Poll::Ready(Some(false)),
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Pending,
+            Poll::Ready(Some(false)),
+            Poll::Ready(Some(true)),
+            Poll::Pending,
+            Poll::Ready(None),
+        ],
+    );
 }
-
 
 #[test]
 fn test_throttle_timing() {

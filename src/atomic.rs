@@ -1,6 +1,5 @@
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-
 /*#[derive(Debug)]
 pub(crate) struct Atomic<A> {
     // TODO only box if the value is too big
@@ -47,7 +46,6 @@ impl<A> Drop for Atomic<A> {
     }
 }*/
 
-
 /// The same as `Atomic<Option<A>>` except faster and uses less memory.
 ///
 /// This is because it represents `None` as a null pointer, which avoids boxing.
@@ -68,7 +66,6 @@ impl<A> AtomicOption<A> {
     fn from_ptr(ptr: *mut A) -> Option<A> {
         if ptr.is_null() {
             None
-
         } else {
             // This is safe because we only do this for pointers created with `Box::into_raw`
             unsafe { Some(*Box::from_raw(ptr)) }
@@ -106,7 +103,9 @@ impl<A> Drop for AtomicOption<A> {
 
         if !ptr.is_null() {
             // This is safe because we only do this for pointers created with `Box::into_raw`
-            unsafe { drop(Box::from_raw(ptr)); }
+            unsafe {
+                drop(Box::from_raw(ptr));
+            }
         }
     }
 }

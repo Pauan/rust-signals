@@ -1,10 +1,9 @@
-#![recursion_limit="128"]
-#![warn(unreachable_pub)]
+//! It is *very highly* recommended to read the tutorial.
+//! It explains all of the concepts you will need to use Signals effectively.
+#![recursion_limit = "128"]
+#![warn(unreachable_pub, missing_debug_implementations, macro_use_extern_crate)]
 // missing_docs
-#![deny(warnings, missing_debug_implementations, macro_use_extern_crate)]
-
-///! It is *very highly* recommended to read the tutorial.
-///! It explains all of the concepts you will need to use Signals effectively.
+#![deny(warnings)]
 
 #[cfg(test)]
 extern crate futures_executor;
@@ -15,13 +14,12 @@ extern crate futures_executor;
 pub mod internal;
 
 pub mod signal;
-pub mod signal_vec;
 pub mod signal_map;
+pub mod signal_vec;
 
 mod atomic;
 mod future;
-pub use crate::future::{cancelable_future, CancelableFutureHandle, CancelableFuture};
-
+pub use crate::future::{cancelable_future, CancelableFuture, CancelableFutureHandle};
 
 /// # Tutorial
 ///
