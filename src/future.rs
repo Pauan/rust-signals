@@ -1,20 +1,18 @@
 use std::pin::Pin;
 // TODO use parking_lot ?
-use std::sync::{Arc, Weak, Mutex};
 use std::future::Future;
-use std::task::{Poll, Waker, Context};
+use std::sync::{Arc, Mutex, Weak};
+use std::task::{Context, Poll, Waker};
 // TODO use parking_lot ?
-use std::sync::atomic::{AtomicBool, Ordering};
 use discard::{Discard, DiscardOnDrop};
 use pin_project::pin_project;
-
+use std::sync::atomic::{AtomicBool, Ordering};
 
 #[derive(Debug)]
 struct CancelableFutureState {
     is_cancelled: AtomicBool,
     waker: Mutex<Option<Waker>>,
 }
-
 
 #[derive(Debug)]
 pub struct CancelableFutureHandle {
@@ -37,7 +35,6 @@ impl Discard for CancelableFutureHandle {
     }
 }
 
-
 #[pin_project(project = CancelableFutureProj)]
 #[derive(Debug)]
 #[must_use = "Futures do nothing unless polled"]
@@ -49,14 +46,19 @@ pub struct CancelableFuture<A, B> {
 }
 
 impl<A, B> Future for CancelableFuture<A, B>
-    where A: Future,
-          B: FnOnce() -> A::Output {
-
+where
+    A: Future,
+    B: FnOnce() -> A::Output,
+{
     type Output = A::Output;
 
     // TODO should this inline ?
     fn poll(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Self::Output> {
-        let CancelableFutureProj { state, mut future, when_cancelled } = self.project();
+        let CancelableFutureProj {
+            state,
+            mut future,
+            when_cancelled,
+        } = self.project();
 
         // TODO is this correct ?
         if state.is_cancelled.load(Ordering::SeqCst) {
@@ -65,27 +67,32 @@ impl<A, B> Future for CancelableFuture<A, B>
             let callback = when_cancelled.take().unwrap();
             // TODO figure out how to call the callback immediately when discard is called, e.g. using two Arc<Mutex<>>
             Poll::Ready(callback())
-
         } else {
             match future.as_pin_mut().unwrap().poll(cx) {
                 Poll::Pending => {
                     // TODO is this correct ?
                     *state.waker.lock().unwrap() = Some(cx.waker().clone());
                     Poll::Pending
-                },
+                }
                 a => a,
             }
         }
     }
 }
 
-
 // TODO figure out a more efficient way to implement this
 // TODO replace with futures_util::abortable ?
-pub fn cancelable_future<A, B>(future: A, when_cancelled: B) -> (DiscardOnDrop<CancelableFutureHandle>, CancelableFuture<A, B>)
-    where A: Future,
-          B: FnOnce() -> A::Output {
-
+pub fn cancelable_future<A, B>(
+    future: A,
+    when_cancelled: B,
+) -> (
+    DiscardOnDrop<CancelableFutureHandle>,
+    CancelableFuture<A, B>,
+)
+where
+    A: Future,
+    B: FnOnce() -> A::Output,
+{
     let state = Arc::new(CancelableFutureState {
         is_cancelled: AtomicBool::new(false),
         waker: Mutex::new(None),

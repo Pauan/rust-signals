@@ -1,10 +1,9 @@
-use futures_signals::map_ref;
-use futures_signals::signal::{SignalExt, Mutable, Broadcaster, always, from_stream};
 use futures_executor::block_on_stream;
+use futures_signals::map_ref;
+use futures_signals::signal::{always, from_stream, Broadcaster, Mutable, SignalExt};
 use std::task::Poll;
 
 mod util;
-
 
 #[test]
 fn test_broadcaster() {
@@ -44,29 +43,45 @@ fn test_polls() {
     let mut mutable = Some(mutable);
     let mut broadcaster = Some(broadcaster);
 
-    let polls = util::get_all_polls(map_ref!(signal1, signal2 => (*signal1, *signal2)), 0, |state, cx| {
-        match *state {
-            0 => {},
-            1 => { cx.waker().wake_by_ref(); },
-            2 => { mutable.as_ref().unwrap().set(5); },
-            3 => { cx.waker().wake_by_ref(); },
-            4 => { mutable.take(); },
-            5 => { broadcaster.take(); },
-            _ => {},
-        }
+    let polls = util::get_all_polls(
+        map_ref!(signal1, signal2 => (*signal1, *signal2)),
+        0,
+        |state, cx| {
+            match *state {
+                0 => {}
+                1 => {
+                    cx.waker().wake_by_ref();
+                }
+                2 => {
+                    mutable.as_ref().unwrap().set(5);
+                }
+                3 => {
+                    cx.waker().wake_by_ref();
+                }
+                4 => {
+                    mutable.take();
+                }
+                5 => {
+                    broadcaster.take();
+                }
+                _ => {}
+            }
 
-        state + 1
-    });
+            state + 1
+        },
+    );
 
-    assert_eq!(polls, vec![
-        Poll::Ready(Some((1, 1))),
-        Poll::Pending,
-        Poll::Ready(Some((5, 5))),
-        Poll::Pending,
-        Poll::Ready(None),
-    ]);
+    assert_eq!(
+        polls,
+        vec![
+            Poll::Ready(Some((1, 1))),
+            Poll::Pending,
+            Poll::Ready(Some((5, 5))),
+            Poll::Pending,
+            Poll::Ready(None),
+        ]
+    );
 }
-
 
 #[test]
 fn test_broadcaster_signal_ref() {
@@ -78,7 +93,6 @@ fn test_broadcaster_signal_ref() {
     });
 }
 
-
 #[test]
 fn test_broadcaster_always() {
     let broadcaster = Broadcaster::new(always(1));
@@ -88,7 +102,6 @@ fn test_broadcaster_always() {
         assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(None));
     });
 }
-
 
 #[test]
 fn test_broadcaster_drop() {
@@ -101,7 +114,6 @@ fn test_broadcaster_drop() {
         assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(None));
     });
 }
-
 
 #[test]
 fn test_broadcaster_multiple() {
@@ -117,7 +129,6 @@ fn test_broadcaster_multiple() {
         assert_eq!(signal2.poll_change_unpin(cx), Poll::Ready(None));
     });
 }
-
 
 #[test]
 fn test_block_on_stream() {

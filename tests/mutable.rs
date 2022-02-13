@@ -1,8 +1,7 @@
-use std::task::Poll;
 use futures_signals::signal::Mutable;
+use std::task::Poll;
 
 mod util;
-
 
 // Verifies that lock_mut only notifies when it is mutated
 #[test]
@@ -18,11 +17,10 @@ fn test_lock_mut() {
             }
         });
 
-        assert_eq!(polls, vec![
-            Poll::Ready(Some(1)),
-            Poll::Pending,
-            Poll::Ready(None),
-        ]);
+        assert_eq!(
+            polls,
+            vec![Poll::Ready(Some(1)), Poll::Pending, Poll::Ready(None),]
+        );
     }
 
     {
@@ -36,15 +34,17 @@ fn test_lock_mut() {
             }
         });
 
-        assert_eq!(polls, vec![
-            Poll::Ready(Some(1)),
-            Poll::Pending,
-            Poll::Ready(Some(5)),
-            Poll::Ready(None),
-        ]);
+        assert_eq!(
+            polls,
+            vec![
+                Poll::Ready(Some(1)),
+                Poll::Pending,
+                Poll::Ready(Some(5)),
+                Poll::Ready(None),
+            ]
+        );
     }
 }
-
 
 /*#[test]
 fn test_lock_panic() {

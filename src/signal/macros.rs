@@ -108,7 +108,6 @@ macro_rules! map_mut {
     ($($input:tt)*) => { $crate::__internal_map_split!(__internal_map_mut, (), $($input)*) };
 }
 
-
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __internal_map_ref_pairs {
@@ -406,7 +405,6 @@ macro_rules! __internal_map_ref {
 macro_rules! map_ref {
     ($($input:tt)*) => { $crate::__internal_map_split!(__internal_map_ref, (), $($input)*) };
 }
-
 
 #[doc(hidden)]
 #[macro_export]

@@ -1,9 +1,8 @@
-use std::task::Poll;
 use futures_signals::cancelable_future;
 use futures_util::future::{ready, FutureExt};
+use std::task::Poll;
 
 mod util;
-
 
 #[test]
 fn test_cancelable_future() {
