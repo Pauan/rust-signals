@@ -530,3 +530,54 @@ fn test_throttle_timing() {
         assert_eq!(output.poll_change(cx), Poll::Ready(None));
     });
 }
+
+#[test]
+fn test_modify() {
+    #[derive(Debug, Clone, Copy, PartialEq)]
+    struct State {
+        counter: usize,
+    }
+
+    let inc_counter_if_odd = |state: &mut State| {
+        if state.counter % 2 == 1 {
+            state.counter += 1;
+            return true;
+        }
+        false
+    };
+
+    util::with_noop_context(|cx| {
+        let state = Mutable::new(State { counter: 1 });
+        let initial_state = state.get();
+        let modified_state = {
+            let mut modified_state = initial_state;
+            assert!(inc_counter_if_odd(&mut modified_state));
+            modified_state
+        };
+        assert_ne!(initial_state, modified_state);
+
+        let signal = state.signal();
+        pin_mut!(signal);
+
+        // Initial value
+        assert_eq!(
+            signal.as_mut().poll_change(cx),
+            Poll::Ready(Some(initial_state))
+        );
+
+        // Modified
+        assert_eq!(signal.as_mut().poll_change(cx), Poll::Pending);
+        assert!(state.modify(inc_counter_if_odd));
+        assert_eq!(state.get(), modified_state);
+        assert_eq!(
+            signal.as_mut().poll_change(cx),
+            Poll::Ready(Some(modified_state))
+        );
+
+        // Unmodified
+        assert_eq!(signal.as_mut().poll_change(cx), Poll::Pending);
+        assert!(!state.modify(inc_counter_if_odd));
+        assert_eq!(state.get(), modified_state);
+        assert_eq!(signal.as_mut().poll_change(cx), Poll::Pending);
+    });
+}

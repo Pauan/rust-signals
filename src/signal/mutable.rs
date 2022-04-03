@@ -1,6 +1,7 @@
 use super::Signal;
 use std;
 use std::fmt;
+use std::panic;
 use std::pin::Pin;
 use std::marker::Unpin;
 use std::ops::{Deref, DerefMut};
@@ -307,6 +308,40 @@ impl<A> Mutable<A> {
         if f(&state.value, &value) {
             state.value = value;
             state.notify(true);
+        }
+    }
+
+    /// Conditionally modify the value in place
+    ///
+    /// Borrows the value mutably and modifies it in place.
+    ///
+    /// The value is only considered as modified if the modifying closure
+    /// returned `true`. Otherwise the value is assumed to be unmodified
+    /// despite the mutable borrow before.
+    ///
+    /// Returns the result of the closure, i.e. if the value has been modified.
+    pub fn modify<F>(&self, modify: F) -> bool
+    where
+        F: FnOnce(&mut A) -> bool,
+    {
+        let mut locked_state = self.state().lock.write().unwrap();
+
+        let result =
+            panic::catch_unwind(panic::AssertUnwindSafe(|| modify(&mut locked_state.value)));
+        // If modify() panicked forward the panic to the caller without poisoning the lock.
+        match result {
+            Ok(modified) => {
+                if modified {
+                    locked_state.notify(modified);
+                }
+                modified
+            }
+            Err(panicked) => {
+                // Drop the lock to avoid poisoning it.
+                drop(locked_state);
+                // Forward the panic to the caller.
+                panic::resume_unwind(panicked);
+            }
         }
     }
 
