@@ -510,6 +510,16 @@ pub trait SignalVecExt: SignalVec {
 impl<T: ?Sized> SignalVecExt for T where T: SignalVec {}
 
 
+/// An owned dynamically typed [`SignalVec`].
+///
+/// This is useful if you don't know the static type, or if you need
+/// indirection.
+pub type BoxSignalVec<'a, T> = Pin<Box<dyn SignalVec<Item = T> + Send + 'a>>;
+
+/// Same as [`BoxSignalVec`], but without the `Send` requirement.
+pub type LocalBoxSignalVec<'a, T> = Pin<Box<dyn SignalVec<Item = T> + 'a>>;
+
+
 #[derive(Debug)]
 #[must_use = "SignalVecs do nothing unless polled"]
 pub struct Always<A> {

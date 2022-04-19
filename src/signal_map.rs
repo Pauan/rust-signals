@@ -154,6 +154,16 @@ pub trait SignalMapExt: SignalMap {
 impl<T: ?Sized> SignalMapExt for T where T: SignalMap {}
 
 
+/// An owned dynamically typed [`SignalMap`].
+///
+/// This is useful if you don't know the static type, or if you need
+/// indirection.
+pub type BoxSignalMap<'a, Key, Value> = Pin<Box<dyn SignalMap<Key = Key, Value = Value> + Send + 'a>>;
+
+/// Same as [`BoxSignalMap`], but without the `Send` requirement.
+pub type LocalBoxSignalMap<'a, Key, Value> = Pin<Box<dyn SignalMap<Key = Key, Value = Value> + 'a>>;
+
+
 #[pin_project(project = MapValueProj)]
 #[derive(Debug)]
 #[must_use = "SignalMaps do nothing unless polled"]
