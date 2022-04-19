@@ -1,4 +1,4 @@
-## NEXT
+## 0.3.25 - (2022-04-18)
 * The `signals::channel` implementation is now lock-free (if the allocator is lock-free).
 * `Broadcaster` now impls `Clone`.
 * `MutableVec` now impls `Clone`.
