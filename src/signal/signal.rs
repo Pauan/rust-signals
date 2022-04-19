@@ -633,7 +633,7 @@ pub fn from_future<A>(future: A) -> FromFuture<A> where A: Future {
 #[must_use = "Signals do nothing unless polled"]
 pub struct FromStream<A> {
     #[pin]
-    stream: A,
+    stream: Option<A>,
     first: bool,
 }
 
@@ -641,22 +641,44 @@ impl<A> Signal for FromStream<A> where A: Stream {
     type Item = Option<A::Item>;
 
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let this = self.project();
+        let mut this = self.project();
 
-        match this.stream.poll_next(cx) {
-            Poll::Ready(None) => {
-                Poll::Ready(None)
-            },
+        let mut value = None;
 
-            Poll::Ready(Some(value)) => {
+        let done = loop {
+            match this.stream.as_mut().as_pin_mut().map(|stream| stream.poll_next(cx)) {
+                None => {
+                    break true;
+                },
+
+                Some(Poll::Ready(None)) => {
+                    this.stream.set(None);
+                    break true;
+                },
+
+                Some(Poll::Ready(Some(new_value))) => {
+                    value = Some(new_value);
+                    continue;
+                },
+
+                Some(Poll::Pending) => {
+                    break false;
+                },
+            }
+        };
+
+        match value {
+            Some(value) => {
                 *this.first = false;
                 Poll::Ready(Some(Some(value)))
             },
-
-            Poll::Pending => {
+            None => {
                 if *this.first {
                     *this.first = false;
                     Poll::Ready(Some(None))
+
+                } else if done {
+                    Poll::Ready(None)
 
                 } else {
                     Poll::Pending
@@ -668,7 +690,7 @@ impl<A> Signal for FromStream<A> where A: Stream {
 
 #[inline]
 pub fn from_stream<A>(stream: A) -> FromStream<A> where A: Stream {
-    FromStream { stream, first: true }
+    FromStream { stream: Some(stream), first: true }
 }
 
 
