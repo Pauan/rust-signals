@@ -11,6 +11,7 @@ use futures_util::stream::StreamExt;
 use pin_project::pin_project;
 
 use crate::internal::Map2;
+use crate::signal::Broadcaster;
 use crate::signal_vec::{VecDiff, SignalVec};
 
 
@@ -507,6 +508,16 @@ pub trait SignalExt: Signal {
             signal: self,
             location: Location::caller(),
         }
+    }
+
+    /// A convenience method for calling [`Broadcaster::new`].
+    ///
+    /// This allows you to clone / split a `Signal` into multiple `Signal`s.
+    ///
+    /// See the documentation for [`Broadcaster`] for more details.
+    #[inline]
+    fn broadcast(self) -> Broadcaster<Self> where Self: Sized {
+        Broadcaster::new(self)
     }
 
     /// A convenience for calling `Signal::poll_change` on `Unpin` types.
