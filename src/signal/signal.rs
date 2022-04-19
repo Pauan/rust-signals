@@ -532,6 +532,16 @@ pub trait SignalExt: Signal {
 impl<T: ?Sized> SignalExt for T where T: Signal {}
 
 
+/// An owned dynamically typed [`Signal`].
+///
+/// This is useful if you don't know the static type, or if you need
+/// indirection.
+pub type BoxSignal<'a, T> = Pin<Box<dyn Signal<Item = T> + Send + 'a>>;
+
+/// Same as [`BoxSignal`], but without the `Send` requirement.
+pub type LocalBoxSignal<'a, T> = Pin<Box<dyn Signal<Item = T> + 'a>>;
+
+
 // TODO make this into a method later
 #[inline]
 pub fn not<A>(signal: A) -> impl Signal<Item = bool>
