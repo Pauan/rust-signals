@@ -308,6 +308,7 @@ pub fn assert_signal_map_eq<K, V, S>(signal: S, expected: Vec<Poll<Option<MapDif
 
 
 #[allow(dead_code)]
+#[derive(Debug)]
 #[must_use = "Source does nothing unless polled"]
 pub struct Source<A> {
     changes: Vec<Poll<A>>,

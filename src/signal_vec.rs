@@ -321,6 +321,16 @@ pub trait SignalVecExt: SignalVec {
         }
     }
 
+    #[inline]
+    #[track_caller]
+    #[cfg(feature = "debug")]
+    fn debug(self) -> SignalVecDebug<Self> where Self: Sized, Self::Item: std::fmt::Debug {
+        SignalVecDebug {
+            signal: self,
+            location: std::panic::Location::caller(),
+        }
+    }
+
     /// Creates a `SignalVec` which uses a closure to sort the values.
     ///
     /// When the output `SignalVec` is spawned:
@@ -1678,6 +1688,32 @@ impl<A> Signal for SumSignal<A>
         } else {
             Poll::Pending
         }
+    }
+}
+
+
+#[pin_project(project = SignalVecDebugProj)]
+#[derive(Debug)]
+#[must_use = "SignalVecs do nothing unless polled"]
+#[cfg(feature = "debug")]
+pub struct SignalVecDebug<A> {
+    #[pin]
+    signal: A,
+    location: &'static std::panic::Location<'static>,
+}
+
+#[cfg(feature = "debug")]
+impl<A> SignalVec for SignalVecDebug<A> where A: SignalVec, A::Item: std::fmt::Debug {
+    type Item = A::Item;
+
+    fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
+        let SignalVecDebugProj { signal, location } = self.project();
+
+        let poll = signal.poll_vec_change(cx);
+
+        log::trace!("[{}] {:#?}", location, poll);
+
+        poll
     }
 }
 

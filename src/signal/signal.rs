@@ -1,4 +1,3 @@
-use std::fmt::Debug;
 use std::pin::Pin;
 use std::marker::Unpin;
 use std::future::Future;
@@ -502,7 +501,7 @@ pub trait SignalExt: Signal {
     #[inline]
     #[track_caller]
     #[cfg(feature = "debug")]
-    fn debug(self) -> SignalDebug<Self> where Self: Sized, Self::Item: Debug {
+    fn debug(self) -> SignalDebug<Self> where Self: Sized, Self::Item: std::fmt::Debug {
         SignalDebug {
             signal: self,
             location: std::panic::Location::caller(),
@@ -589,7 +588,7 @@ pub struct SignalDebug<A> {
 }
 
 #[cfg(feature = "debug")]
-impl<A> Signal for SignalDebug<A> where A: Signal, A::Item: Debug {
+impl<A> Signal for SignalDebug<A> where A: Signal, A::Item: std::fmt::Debug {
     type Item = A::Item;
 
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
