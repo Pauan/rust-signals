@@ -1,5 +1,6 @@
 ## Unreleased
 * Introducing a `debug` feature to make the [`log` crate](https://crates.io/crates/log) optional.
+* Adding in `SignalVecExt::debug` method which prints each `VecDiff` change to the console.
 
 ## 0.3.25 - (2022-04-18)
 * The `signals::channel` implementation is now lock-free (if the allocator is lock-free).
