@@ -584,6 +584,24 @@ enum MaybeSignalState<S, E> {
     Value(Option<E>),
 }
 
+impl<S, E> MaybeSignalState<S, E> where S: Signal {
+    fn poll<A, B, C>(self: Pin<&mut Self>, cx: &mut Context, map_signal: A, map_value: B) -> Poll<Option<C>>
+        where A: FnOnce(S::Item) -> C,
+              B: FnOnce(E) -> C {
+        match self.project() {
+            MaybeSignalStateProj::Signal(signal) => {
+                signal.poll_change(cx).map(|value| value.map(map_signal))
+            },
+            MaybeSignalStateProj::Value(value) => {
+                match value.take() {
+                    Some(value) => Poll::Ready(Some(map_value(value))),
+                    None => Poll::Ready(None),
+                }
+            },
+        }
+    }
+}
+
 
 #[pin_project]
 #[derive(Debug)]
@@ -597,20 +615,7 @@ impl<S, E> Signal for ResultSignal<S, E> where S: Signal {
     type Item = Result<S::Item, E>;
 
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let this = self.project();
-
-        match this.state.project() {
-            MaybeSignalStateProj::Signal(signal) => {
-                // Wraps the value in Ok
-                signal.poll_change(cx).map(|value| value.map(|x| Ok(x)))
-            },
-            MaybeSignalStateProj::Value(value) => {
-                match value.take() {
-                    Some(value) => Poll::Ready(Some(Err(value))),
-                    None => Poll::Ready(None),
-                }
-            },
-        }
+        self.project().state.poll(cx, Ok, Err)
     }
 }
 
@@ -647,20 +652,7 @@ impl<S> Signal for OptionSignal<S> where S: Signal {
     type Item = Option<S::Item>;
 
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let this = self.project();
-
-        match this.state.project() {
-            MaybeSignalStateProj::Signal(signal) => {
-                // Wraps the value in Some
-                signal.poll_change(cx).map(|value| value.map(|x| Some(x)))
-            },
-            MaybeSignalStateProj::Value(value) => {
-                match value.take() {
-                    Some(value) => Poll::Ready(Some(value)),
-                    None => Poll::Ready(None),
-                }
-            },
-        }
+        self.project().state.poll(cx, Some, |x| x)
     }
 }
 
