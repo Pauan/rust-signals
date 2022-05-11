@@ -1,3 +1,6 @@
+## 0.3.27 - (2022-05-10)
+* Adding in `option` and `result` functions.
+
 ## 0.3.26 - (2022-05-10)
 * Introducing a `debug` feature to make the [`log` crate](https://crates.io/crates/log) optional.
 * Adding in `SignalVecExt::debug` method which prints each `VecDiff` change to the console.
