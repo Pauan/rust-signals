@@ -2,7 +2,7 @@ use std::rc::Rc;
 use std::cell::Cell;
 use std::task::Poll;
 use futures_signals::cancelable_future;
-use futures_signals::signal::{Signal, SignalExt, Mutable, channel, always};
+use futures_signals::signal::{Signal, SignalExt, Mutable, Always, channel, always, option, result};
 use futures_signals::signal_vec::VecDiff;
 use futures_util::future::{ready, poll_fn};
 use pin_utils::pin_mut;
@@ -19,6 +19,79 @@ fn test_always() {
         assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(None));
     });
 }
+
+
+#[test]
+fn test_option() {
+    let mut signal = option::<Always<()>>(None);
+
+    util::with_noop_context(|cx| {
+        assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(Some(None)));
+        assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(None));
+    });
+}
+
+#[test]
+fn test_option_signal() {
+    let test_value = 0;
+
+    let input = match test_value {
+        0 => Some(util::Source::new(vec![
+            Poll::Ready(0),
+            Poll::Pending,
+            Poll::Ready(3),
+            Poll::Pending,
+        ])),
+        _ => None,
+    };
+
+    let output = option(input);
+
+    util::assert_signal_eq(output, vec![
+        Poll::Ready(Some(Some(0))),
+        Poll::Pending,
+        Poll::Ready(Some(Some(3))),
+        Poll::Pending,
+        Poll::Ready(None),
+    ]);
+}
+
+
+#[test]
+fn test_result() {
+    let mut signal = result::<Always<()>, _>(Err(5));
+
+    util::with_noop_context(|cx| {
+        assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(Some(Err(5))));
+        assert_eq!(signal.poll_change_unpin(cx), Poll::Ready(None));
+    });
+}
+
+#[test]
+fn test_result_signal() {
+    let test_value = 0;
+
+    let input = match test_value {
+        0 => Ok(util::Source::new(vec![
+            Poll::Ready(1),
+            Poll::Pending,
+            Poll::Ready(3),
+            Poll::Pending,
+        ])),
+        _ => Err("hello"),
+    };
+
+    let output = result(input);
+
+    util::assert_signal_eq(output, vec![
+        Poll::Ready(Some(Ok(1))),
+        Poll::Pending,
+        Poll::Ready(Some(Ok(3))),
+        Poll::Pending,
+        Poll::Ready(None),
+    ]);
+}
+
 
 #[test]
 fn test_mutable() {

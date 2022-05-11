@@ -577,6 +577,113 @@ pub fn or<A, B>(left: A, right: B) -> impl Signal<Item = bool>
 }
 
 
+#[pin_project(project = MaybeSignalStateProj)]
+#[derive(Debug)]
+enum MaybeSignalState<S, E> {
+    Signal(#[pin] S),
+    Value(Option<E>),
+}
+
+
+#[pin_project]
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct ResultSignal<S, E> {
+    #[pin]
+    state: MaybeSignalState<S, E>,
+}
+
+impl<S, E> Signal for ResultSignal<S, E> where S: Signal {
+    type Item = Result<S::Item, E>;
+
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+
+        match this.state.project() {
+            MaybeSignalStateProj::Signal(signal) => {
+                // Wraps the value in Ok
+                signal.poll_change(cx).map(|value| value.map(|x| Ok(x)))
+            },
+            MaybeSignalStateProj::Value(value) => {
+                match value.take() {
+                    Some(value) => Poll::Ready(Some(Err(value))),
+                    None => Poll::Ready(None),
+                }
+            },
+        }
+    }
+}
+
+/// Converts a `Result<Signal<A>, B>` into a `Signal<Result<A, B>>`.
+///
+/// This is mostly useful with [`SignalExt::switch`] or [`SignalExt::flatten`].
+///
+/// If the value is `Err(value)` then it behaves like [`always`], it just returns that
+/// value.
+///
+/// If the value is `Ok(signal)` then it will return the result of the signal,
+/// except wrapped in `Ok`.
+pub fn result<S, E>(value: Result<S, E>) -> ResultSignal<S, E> where S: Signal {
+    match value {
+        Ok(signal) => ResultSignal {
+            state: MaybeSignalState::Signal(signal),
+        },
+        Err(value) => ResultSignal {
+            state: MaybeSignalState::Value(Some(value)),
+        },
+    }
+}
+
+
+#[pin_project]
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct OptionSignal<S> where S: Signal {
+    #[pin]
+    state: MaybeSignalState<S, Option<S::Item>>,
+}
+
+impl<S> Signal for OptionSignal<S> where S: Signal {
+    type Item = Option<S::Item>;
+
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let this = self.project();
+
+        match this.state.project() {
+            MaybeSignalStateProj::Signal(signal) => {
+                // Wraps the value in Some
+                signal.poll_change(cx).map(|value| value.map(|x| Some(x)))
+            },
+            MaybeSignalStateProj::Value(value) => {
+                match value.take() {
+                    Some(value) => Poll::Ready(Some(value)),
+                    None => Poll::Ready(None),
+                }
+            },
+        }
+    }
+}
+
+/// Converts an `Option<Signal<A>>` into a `Signal<Option<A>>`.
+///
+/// This is mostly useful with [`SignalExt::switch`] or [`SignalExt::flatten`].
+///
+/// If the value is `None` then it behaves like [`always`], it just returns `None`.
+///
+/// If the value is `Some(signal)` then it will return the result of the signal,
+/// except wrapped in `Some`.
+pub fn option<S>(value: Option<S>) -> OptionSignal<S> where S: Signal {
+    match value {
+        Some(signal) => OptionSignal {
+            state: MaybeSignalState::Signal(signal),
+        },
+        None => OptionSignal {
+            state: MaybeSignalState::Value(Some(None)),
+        },
+    }
+}
+
+
 #[pin_project]
 #[derive(Debug)]
 #[must_use = "Signals do nothing unless polled"]
