@@ -1,3 +1,6 @@
+## 0.3.28 - (2022-05-15)
+* Adding in `apply_vec_diff` method to `MutableVec`.
+
 ## 0.3.27 - (2022-05-10)
 * Adding in `option` and `result` functions.
 
