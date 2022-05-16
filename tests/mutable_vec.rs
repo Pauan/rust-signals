@@ -378,3 +378,31 @@ fn test_extend() {
         Poll::Ready(None),
     ]);
 }
+
+
+#[test]
+fn test_apply_vec_diff() {
+    is_eq(vec![], vec![11, 10, 0, 3], |v| {
+        MutableVecLockMut::apply_vec_diff(v, VecDiff::Push { value: 6 });
+        MutableVecLockMut::apply_vec_diff(v, VecDiff::Pop {});
+        MutableVecLockMut::apply_vec_diff(v, VecDiff::InsertAt { index: 0, value: 4 });
+        MutableVecLockMut::apply_vec_diff(v, VecDiff::Clear {});
+        MutableVecLockMut::apply_vec_diff(v, VecDiff::Replace { values: vec![0, 1, 2, 3] });
+        MutableVecLockMut::apply_vec_diff(v, VecDiff::Move { old_index: 0, new_index: 2 });
+        MutableVecLockMut::apply_vec_diff(v, VecDiff::UpdateAt { index: 1, value: 10 });
+        MutableVecLockMut::apply_vec_diff(v, VecDiff::RemoveAt { index: 0 });
+        MutableVecLockMut::apply_vec_diff(v, VecDiff::InsertAt { index: 0, value: 11 });
+    }, vec![
+        Poll::Pending,
+        Poll::Ready(Some(VecDiff::Push { value: 6 })),
+        Poll::Ready(Some(VecDiff::Pop {})),
+        Poll::Ready(Some(VecDiff::Push { value: 4 })),
+        Poll::Ready(Some(VecDiff::Clear {})),
+        Poll::Ready(Some(VecDiff::Replace { values: vec![0, 1, 2, 3] })),
+        Poll::Ready(Some(VecDiff::Move { old_index: 0, new_index: 2 })),
+        Poll::Ready(Some(VecDiff::UpdateAt { index: 1, value: 10 })),
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 0 })),
+        Poll::Ready(Some(VecDiff::InsertAt { index: 0, value: 11 })),
+        Poll::Ready(None),
+    ]);
+}

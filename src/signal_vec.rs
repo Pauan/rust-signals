@@ -2757,6 +2757,19 @@ mod mutable_vec {
         pub fn replace_cloned(&mut self, values: Vec<A>) {
             self.lock.replace_clone(values)
         }
+
+        pub fn apply_vec_diff(this: &mut Self, diff: VecDiff<A>) {
+            match diff {
+                VecDiff::Replace { values } => this.replace_cloned(values),
+                VecDiff::InsertAt { index, value } => this.insert_cloned(index, value),
+                VecDiff::UpdateAt { index, value } => this.set_cloned(index, value),
+                VecDiff::RemoveAt { index } => { this.remove(index); },
+                VecDiff::Move { old_index, new_index } => this.move_from_to(old_index, new_index),
+                VecDiff::Push { value } => this.push_cloned(value),
+                VecDiff::Pop {} => { this.pop().unwrap(); },
+                VecDiff::Clear {} => this.clear(),
+            }
+        }
     }
 
     make_shared!(MutableVecLockMut<'a, A>, MutableVecLockMut<'b, B>);
