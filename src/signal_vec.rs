@@ -218,6 +218,49 @@ pub trait SignalVecExt: SignalVec {
         }
     }
 
+    /// Chains two `SignalVec`s together.
+    ///
+    /// The output `SignalVec` will contain all of the items in `self`,
+    /// followed by all of the items in `other`.
+    ///
+    /// This behaves just like the [`Iterator::chain`](https://doc.rust-lang.org/std/iter/trait.Iterator.html#method.chain)
+    /// method, except it will automatically keep the output `SignalVec` in sync with the
+    /// two input `SignalVec`s.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use futures_signals::signal_vec::{always, SignalVecExt};
+    /// # let left = always(vec![1, 2, 3]);
+    /// # let right = always(vec![4, 5, 6]);
+    /// // left = [1, 2, 3]
+    /// // right = [4, 5, 6]
+    /// let chained = left.chain(right);
+    /// // chained = [1, 2, 3, 4, 5, 6]
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// This is a fairly efficient method: it is *guaranteed* constant time, regardless of how big `self` or `other` are.
+    ///
+    /// In addition, it does not do any heap allocation, the only internal state it keeps is 2 `usize`.
+    ///
+    /// The only exception is when `self` or `other` notifies with `VecDiff::Replace` or `VecDiff::Clear`,
+    /// in which case it is linear time (and it heap allocates a single
+    /// [`VecDeque`](https://doc.rust-lang.org/std/collections/struct.VecDeque.html)).
+    #[inline]
+    fn chain<S>(self, other: S) -> Chain<Self, S>
+        where S: SignalVec<Item = Self::Item>,
+              Self: Sized {
+        Chain {
+            left: Some(self),
+            right: Some(other),
+            left_len: 0,
+            right_len: 0,
+            pending: VecDeque::new(),
+        }
+    }
+
     #[inline]
     fn to_signal_map<A, F>(self, callback: F) -> ToSignalMap<Self, F>
         where F: FnMut(&[Self::Item]) -> A,
@@ -627,6 +670,291 @@ impl<A, B, F> SignalVec for Map<A, F>
         let MapProj { signal, callback } = self.project();
 
         signal.poll_vec_change(cx).map(|some| some.map(|change| change.map(|value| callback(value))))
+    }
+}
+
+
+// TODO investigate whether it's better to process left or right first
+#[pin_project(project = ChainProj)]
+#[derive(Debug)]
+#[must_use = "SignalVecs do nothing unless polled"]
+pub struct Chain<A, B> where A: SignalVec {
+    #[pin]
+    left: Option<A>,
+    #[pin]
+    right: Option<B>,
+    left_len: usize,
+    right_len: usize,
+    pending: VecDeque<VecDiff<A::Item>>,
+}
+
+impl<'a, A, B> ChainProj<'a, A, B> where A: SignalVec, B: SignalVec<Item = A::Item> {
+    fn is_replace(change: Option<Poll<Option<VecDiff<A::Item>>>>) -> Result<Vec<A::Item>, Option<Poll<Option<VecDiff<A::Item>>>>> {
+        match change {
+            Some(Poll::Ready(Some(VecDiff::Replace { values }))) => Ok(values),
+            _ => Err(change),
+        }
+    }
+
+    fn is_clear(change: Option<Poll<Option<VecDiff<A::Item>>>>) -> Result<(), Option<Poll<Option<VecDiff<A::Item>>>>> {
+        match change {
+            Some(Poll::Ready(Some(VecDiff::Clear {}))) => Ok(()),
+            _ => Err(change),
+        }
+    }
+
+    fn process_replace(&mut self, mut left_values: Vec<A::Item>, cx: &mut Context) -> Option<VecDiff<A::Item>> {
+        match Self::is_replace(self.right.as_mut().as_pin_mut().map(|s| s.poll_vec_change(cx))) {
+            Ok(mut right_values) => {
+                *self.left_len = left_values.len();
+                *self.right_len = right_values.len();
+                left_values.append(&mut right_values);
+                Some(VecDiff::Replace { values: left_values })
+            },
+            Err(change) => {
+                let removing = *self.left_len;
+                let adding = left_values.len();
+
+                *self.left_len = adding;
+
+                let output = if *self.right_len == 0 {
+                    Some(VecDiff::Replace { values: left_values })
+
+                } else {
+                    self.pending.reserve(removing + adding);
+
+                    for index in (0..removing).rev() {
+                        self.pending.push_back(VecDiff::RemoveAt { index });
+                    }
+
+                    for (index, value) in left_values.into_iter().enumerate() {
+                        self.pending.push_back(VecDiff::InsertAt { index, value });
+                    }
+
+                    None
+                };
+
+                if let Some(change) = self.process_right_change(change) {
+                    self.pending.push_back(change);
+                }
+
+                output
+            },
+        }
+    }
+
+    fn process_clear(&mut self, cx: &mut Context) -> Option<VecDiff<A::Item>> {
+        match Self::is_clear(self.right.as_mut().as_pin_mut().map(|s| s.poll_vec_change(cx))) {
+            Ok(()) => {
+                *self.left_len = 0;
+                *self.right_len = 0;
+                Some(VecDiff::Clear {})
+            },
+            Err(change) => {
+                let removing = *self.left_len;
+
+                *self.left_len = 0;
+
+                let output = if *self.right_len == 0 {
+                    Some(VecDiff::Clear {})
+
+                } else {
+                    self.pending.reserve(removing);
+
+                    for index in (0..removing).rev() {
+                        self.pending.push_back(VecDiff::RemoveAt { index });
+                    }
+
+                    None
+                };
+
+                if let Some(change) = self.process_right_change(change) {
+                    self.pending.push_back(change);
+                }
+
+                output
+            },
+        }
+    }
+
+    fn process_left(&mut self, cx: &mut Context) -> Option<VecDiff<A::Item>> {
+        match self.left.as_mut().as_pin_mut().map(|s| s.poll_vec_change(cx)) {
+            Some(Poll::Ready(Some(change))) => {
+                match change {
+                    VecDiff::Replace { values } => {
+                        self.process_replace(values, cx)
+                    },
+                    VecDiff::InsertAt { index, value } => {
+                        *self.left_len += 1;
+                        Some(VecDiff::InsertAt { index, value })
+                    },
+                    VecDiff::UpdateAt { index, value } => {
+                        Some(VecDiff::UpdateAt { index, value })
+                    },
+                    VecDiff::Move { old_index, new_index } => {
+                        Some(VecDiff::Move { old_index, new_index })
+                    },
+                    VecDiff::RemoveAt { index } => {
+                        *self.left_len -= 1;
+                        Some(VecDiff::RemoveAt { index })
+                    },
+                    VecDiff::Push { value } => {
+                        let index = *self.left_len;
+                        *self.left_len += 1;
+
+                        if *self.right_len == 0 {
+                            Some(VecDiff::Push { value })
+
+                        } else {
+                            Some(VecDiff::InsertAt { index, value })
+                        }
+                    },
+                    VecDiff::Pop {} => {
+                        *self.left_len -= 1;
+
+                        if *self.right_len == 0 {
+                            Some(VecDiff::Pop {})
+
+                        } else {
+                            Some(VecDiff::RemoveAt { index: *self.left_len })
+                        }
+                    },
+                    VecDiff::Clear {} => {
+                        self.process_clear(cx)
+                    },
+                }
+            },
+            Some(Poll::Ready(None)) => {
+                self.left.set(None);
+                None
+            },
+            Some(Poll::Pending) => None,
+            None => None,
+        }
+    }
+
+    fn process_right_change(&mut self, change: Option<Poll<Option<VecDiff<A::Item>>>>) -> Option<VecDiff<A::Item>> {
+        match change {
+            Some(Poll::Ready(Some(change))) => {
+                match change {
+                    VecDiff::Replace { values } => {
+                        let removing = *self.right_len;
+                        let adding = values.len();
+
+                        *self.right_len = adding;
+
+                        if *self.left_len == 0 {
+                            Some(VecDiff::Replace { values })
+
+                        } else {
+                            self.pending.reserve(removing + adding);
+
+                            for _ in 0..removing {
+                                self.pending.push_back(VecDiff::Pop {});
+                            }
+
+                            for value in values.into_iter() {
+                                self.pending.push_back(VecDiff::Push { value });
+                            }
+
+                            None
+                        }
+                    },
+                    VecDiff::InsertAt { index, value } => {
+                        *self.right_len += 1;
+                        Some(VecDiff::InsertAt { index: index + *self.left_len, value })
+                    },
+                    VecDiff::UpdateAt { index, value } => {
+                        Some(VecDiff::UpdateAt { index: index + *self.left_len, value })
+                    },
+                    VecDiff::Move { old_index, new_index } => {
+                        Some(VecDiff::Move {
+                            old_index: old_index + *self.left_len,
+                            new_index: new_index + *self.left_len,
+                        })
+                    },
+                    VecDiff::RemoveAt { index } => {
+                        *self.right_len -= 1;
+                        Some(VecDiff::RemoveAt { index: index + *self.left_len })
+                    },
+                    VecDiff::Push { value } => {
+                        *self.right_len += 1;
+                        Some(VecDiff::Push { value })
+                    },
+                    VecDiff::Pop {} => {
+                        *self.right_len -= 1;
+                        Some(VecDiff::Pop {})
+                    },
+                    VecDiff::Clear {} => {
+                        let removing = *self.right_len;
+
+                        *self.right_len = 0;
+
+                        if *self.left_len == 0 {
+                            Some(VecDiff::Clear {})
+
+                        } else {
+                            self.pending.reserve(removing);
+
+                            for _ in 0..removing {
+                                self.pending.push_back(VecDiff::Pop {});
+                            }
+
+                            None
+                        }
+                    },
+                }
+            },
+            Some(Poll::Ready(None)) => {
+                self.right.set(None);
+                None
+            },
+            Some(Poll::Pending) => None,
+            None => None,
+        }
+    }
+
+    fn process_right(&mut self, cx: &mut Context) -> Option<VecDiff<A::Item>> {
+        let change = self.right.as_mut().as_pin_mut().map(|s| s.poll_vec_change(cx));
+        self.process_right_change(change)
+    }
+}
+
+impl<A, B> SignalVec for Chain<A, B>
+    where A: SignalVec,
+          B: SignalVec<Item = A::Item> {
+    type Item = A::Item;
+
+    #[inline]
+    fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
+        let mut this = self.project();
+
+        loop {
+            if let Some(change) = this.pending.pop_front() {
+                return Poll::Ready(Some(change));
+            }
+
+            if let Some(change) = this.process_left(cx) {
+                return Poll::Ready(Some(change));
+
+            } else if let Some(change) = this.pending.pop_front() {
+                return Poll::Ready(Some(change));
+            }
+
+            if let Some(change) = this.process_right(cx) {
+                return Poll::Ready(Some(change));
+
+            } else if let Some(change) = this.pending.pop_front() {
+                return Poll::Ready(Some(change));
+            }
+
+            if this.left.is_none() && this.right.is_none() {
+                return Poll::Ready(None);
+
+            } else {
+                return Poll::Pending;
+            }
+        }
     }
 }
 

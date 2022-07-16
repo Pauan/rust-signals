@@ -267,6 +267,7 @@ pub fn map_poll_map<A, B, C>(signal: A, mut callback: C) -> Vec<B> where A: Sign
 
 
 #[allow(dead_code)]
+#[track_caller]
 pub fn assert_signal_eq<A, S>(signal: S, expected: Vec<Poll<Option<A>>>)
     where A: std::fmt::Debug + PartialEq,
           S: Signal<Item = A> {
@@ -279,6 +280,7 @@ pub fn assert_signal_eq<A, S>(signal: S, expected: Vec<Poll<Option<A>>>)
 }
 
 #[allow(dead_code)]
+#[track_caller]
 pub fn assert_signal_vec_eq<A, S>(signal: S, expected: Vec<Poll<Option<VecDiff<A>>>>)
     where A: std::fmt::Debug + PartialEq,
           S: SignalVec<Item = A> {
@@ -292,6 +294,7 @@ pub fn assert_signal_vec_eq<A, S>(signal: S, expected: Vec<Poll<Option<VecDiff<A
 }
 
 #[allow(dead_code)]
+#[track_caller]
 pub fn assert_signal_map_eq<K, V, S>(signal: S, expected: Vec<Poll<Option<MapDiff<K, V>>>>)
     where K: std::fmt::Debug + PartialEq,
           V: std::fmt::Debug + PartialEq,
