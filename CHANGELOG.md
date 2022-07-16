@@ -1,3 +1,6 @@
+## 0.3.29 - (2022-07-15)
+* Adding in `SignalVecExt::chain` method for concatenating two `SignalVec`.
+
 ## 0.3.28 - (2022-05-15)
 * Adding in `apply_vec_diff` method to `MutableVec`.
 
