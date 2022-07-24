@@ -15,6 +15,7 @@ use crate::signal::{Signal, Mutable, ReadOnlyMutable};
 
 // TODO make this non-exhaustive
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum VecDiff<A> {
     Replace {
         values: Vec<A>,

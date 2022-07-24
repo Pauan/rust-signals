@@ -27,8 +27,9 @@ version = "0.4.14"
 optional = true
 
 [dependencies.serde]
-version = "1.0.98"
+version = "1.0.140"
 optional = true
+features = ["derive"]
 
 [dev-dependencies]
 futures-executor = "0.3.0"
