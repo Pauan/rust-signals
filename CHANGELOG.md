@@ -1,3 +1,6 @@
+## 0.3.30 - (2022-07-24)
+* Adding in serde `Serialize` and `Deserialize` for `VecDiff`.
+
 ## 0.3.29 - (2022-07-15)
 * Adding in `SignalVecExt::chain` method for concatenating two `SignalVec`.
 
