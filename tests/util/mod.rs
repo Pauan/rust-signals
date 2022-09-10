@@ -7,6 +7,7 @@ use std::task::{Poll, Context};
 use futures_signals::signal_vec::{VecDiff, SignalVec};
 use futures_signals::signal_map::{MapDiff, SignalMap};
 use futures_signals::signal::Signal;
+use futures_core::Stream;
 use futures_util::future::poll_fn;
 use futures_util::task::{waker, ArcWake};
 use futures_executor::block_on;
@@ -155,6 +156,16 @@ pub fn get_signal_vec_polls<A, F>(signal: A, f: F) -> Vec<Poll<Option<VecDiff<A:
 
 
 #[allow(dead_code)]
+pub fn get_stream_polls<A, F>(stream: A, f: F) -> Vec<Poll<Option<A::Item>>>
+    where A: Stream,
+          F: FnOnce() {
+    pin_mut!(stream);
+    // TODO is the as_mut correct ?
+    get_polls(f, |cx| Pin::as_mut(&mut stream).poll_next(cx))
+}
+
+
+#[allow(dead_code)]
 pub fn get_signal_map_polls<A, F>(signal: A, f: F) -> Vec<Poll<Option<MapDiff<A::Key, A::Value>>>>
     where A: SignalMap,
           F: FnOnce() {
@@ -281,6 +292,18 @@ pub fn assert_signal_eq<A, S>(signal: S, expected: Vec<Poll<Option<A>>>)
 
 #[allow(dead_code)]
 #[track_caller]
+pub fn assert_stream_eq<A, S>(stream: S, expected: Vec<Poll<Option<A>>>)
+    where A: std::fmt::Debug + PartialEq,
+          S: Stream<Item = A> {
+
+    assert_eq!(
+        get_stream_polls(stream, || {}),
+        expected,
+    );
+}
+
+#[allow(dead_code)]
+#[track_caller]
 pub fn assert_signal_vec_eq<A, S>(signal: S, expected: Vec<Poll<Option<VecDiff<A>>>>)
     where A: std::fmt::Debug + PartialEq,
           S: SignalVec<Item = A> {
@@ -339,6 +362,15 @@ impl<A> Source<A> {
         } else {
             Poll::Ready(None)
         }
+    }
+}
+
+impl<A> Stream for Source<A> {
+    type Item = A;
+
+    #[inline]
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        self.poll(cx)
     }
 }
 

@@ -6,5 +6,6 @@ mod mutable;
 mod neq;
 mod option;
 mod result;
+mod sample_stream_cloned;
 mod switch_signal_vec;
 mod throttle;
