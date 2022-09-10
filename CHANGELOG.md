@@ -1,3 +1,7 @@
+## 0.3.31 - (2022-09-10)
+* Adding in serde `Serialize` and `Deserialize` for `MapDiff`.
+* Adding in `SignalExt::sample_stream_cloned` method.
+
 ## 0.3.30 - (2022-07-24)
 * Adding in serde `Serialize` and `Deserialize` for `VecDiff`.
 
