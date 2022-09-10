@@ -459,6 +459,23 @@ pub trait SignalExt: Signal {
         }
     }
 
+    /// Creates a `Stream` which samples the value of `self` whenever the `Stream` has a new value.
+    ///
+    /// # Performance
+    ///
+    /// This is ***extremely*** efficient: it does not do any heap allocation, and it has *very* little overhead.
+    #[inline]
+    fn sample_stream_cloned<A>(self, stream: A) -> SampleStreamCloned<Self, A>
+        where A: Stream,
+              A::Item: Clone,
+              Self: Sized {
+        SampleStreamCloned {
+            signal: Some(self),
+            stream: stream,
+            value: None,
+        }
+    }
+
     #[inline]
     // TODO file Rust bug about bad error message when `callback` isn't marked as `mut`
     fn for_each<U, F>(self, callback: F) -> ForEach<Self, U, F>
@@ -882,6 +899,56 @@ impl<A, B, C> Signal for Switch<A, B, C>
     #[inline]
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
         self.project().inner.poll_change(cx)
+    }
+}
+
+
+#[pin_project]
+#[derive(Debug)]
+#[must_use = "Streams do nothing unless polled"]
+pub struct SampleStreamCloned<A, B> where A: Signal, B: Stream {
+    #[pin]
+    signal: Option<A>,
+    #[pin]
+    stream: B,
+    value: Option<A::Item>,
+}
+
+impl<A, B> Stream for SampleStreamCloned<A, B>
+    where A: Signal,
+          A::Item: Clone,
+          B: Stream {
+    type Item = (A::Item, B::Item);
+
+    #[inline]
+    fn poll_next(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let mut this = self.project();
+
+        this.stream.as_mut().poll_next(cx).map(|option| {
+            option.map(|value| {
+                loop {
+                    break match this.signal.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
+                        Some(Poll::Ready(Some(value))) => {
+                            *this.value = Some(value);
+                            continue;
+                        },
+                        Some(Poll::Ready(None)) => {
+                            this.signal.set(None);
+                        },
+                        _ => {},
+                    };
+                }
+
+                match this.value {
+                    Some(ref signal) => {
+                        (signal.clone(), value)
+                    },
+                    None => {
+                        unreachable!()
+                    },
+                }
+            })
+        })
     }
 }
 

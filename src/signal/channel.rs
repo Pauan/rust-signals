@@ -10,6 +10,7 @@ use crate::atomic::AtomicOption;
 #[derive(Debug)]
 struct Inner<A> {
     value: AtomicOption<A>,
+    // TODO use AtomicWaker ?
     waker: AtomicOption<Waker>,
     senders: AtomicUsize,
 }
