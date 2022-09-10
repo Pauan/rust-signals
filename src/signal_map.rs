@@ -10,6 +10,7 @@ use pin_project::pin_project;
 
 // TODO make this non-exhaustive
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum MapDiff<K, V> {
     Replace {
         entries: Vec<(K, V)>,
