@@ -7,7 +7,6 @@ use futures_util::stream;
 use futures_util::stream::StreamExt;
 use pin_project::pin_project;
 
-use crate::internal::Map2;
 use crate::signal::Broadcaster;
 use crate::signal_vec::{VecDiff, SignalVec};
 
@@ -581,7 +580,11 @@ pub fn not<A>(signal: A) -> impl Signal<Item = bool>
 pub fn and<A, B>(left: A, right: B) -> impl Signal<Item = bool>
     where A: Signal<Item = bool>,
           B: Signal<Item = bool> {
-    Map2::new(left, right, |a, b| *a && *b)
+    crate::map_ref! {
+        let a = left,
+        let b = right =>
+        *a && *b
+    }
 }
 
 // TODO make this into a method later
@@ -590,7 +593,11 @@ pub fn and<A, B>(left: A, right: B) -> impl Signal<Item = bool>
 pub fn or<A, B>(left: A, right: B) -> impl Signal<Item = bool>
     where A: Signal<Item = bool>,
           B: Signal<Item = bool> {
-    Map2::new(left, right, |a, b| *a || *b)
+    crate::map_ref! {
+        let a = left,
+        let b = right =>
+        *a || *b
+    }
 }
 
 

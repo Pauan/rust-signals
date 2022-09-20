@@ -21,6 +21,7 @@ futures-channel = "0.3.0"
 futures-util = "0.3.0"
 discard = "1.0.3"
 pin-project = "1.0.2"
+gensym = "0.1.0"
 
 [dependencies.log]
 version = "0.4.14"

@@ -385,6 +385,85 @@ macro_rules! map_tests {
                     assert_eq!(s.poll_change_unpin(cx), Poll::Ready(None));
                 });
             }
+
+            #[test]
+            fn foo() {
+                use futures_signals::signal::{Signal, Mutable};
+
+                let foo = Mutable::new(0);
+                let bar = Mutable::new(1);
+                let qux = Mutable::new(2);
+                let corge = Mutable::new(3);
+
+                let mut output = $name! {
+                    let foo = foo.signal().map_future(|value| async move { value }),
+                    let bar = bar.signal(),
+                    let qux = qux.signal(),
+                    let corge = corge.signal() => {
+                        foo.unwrap_or(0) + *bar + *qux + *corge
+                    }
+                };
+
+                /*
+                use futures_signals::internal::{MapRef1, MapRefSignal};
+
+                let mut output = {
+                    let mut foo = MapRef1::new(foo.signal().map_future(|value| async move { value }));
+                    let mut bar = MapRef1::new(bar.signal());
+                    let mut qux = MapRef1::new(qux.signal());
+                    let mut corge = MapRef1::new(corge.signal());
+
+                    MapRefSignal::new(move |cx| {
+                        let mut foo = foo.unsafe_pin();
+                        let mut bar = bar.unsafe_pin();
+                        let mut qux = qux.unsafe_pin();
+                        let mut corge = corge.unsafe_pin();
+
+                        let result = foo.as_mut().poll(cx)
+                            .merge(bar.as_mut().poll(cx))
+                            .merge(qux.as_mut().poll(cx))
+                            .merge(corge.as_mut().poll(cx));
+
+                        if result.changed {
+                            let foo = foo.value_mut();
+                            let bar = bar.value_mut();
+                            let qux = qux.value_mut();
+                            let corge = corge.value_mut();
+
+                            Poll::Ready(Some({
+                                foo.unwrap_or(0) + *bar + *qux + *corge
+                            }))
+
+                        } else if result.done {
+                            Poll::Ready(None)
+
+                        } else {
+                            Poll::Pending
+                        }
+                    })
+                };*/
+
+                let mut output = unsafe { ::std::pin::Pin::new_unchecked(&mut output) };
+
+                util::with_noop_context(|cx| {
+                    assert_eq!(output.as_mut().poll_change(cx), Poll::Ready(Some(6)));
+                    assert_eq!(output.as_mut().poll_change(cx), Poll::Pending);
+                    assert_eq!(output.as_mut().poll_change(cx), Poll::Pending);
+
+                    foo.set(11);
+                    corge.set(2);
+
+                    assert_eq!(output.as_mut().poll_change(cx), Poll::Ready(Some(16)));
+                    assert_eq!(output.as_mut().poll_change(cx), Poll::Pending);
+                    assert_eq!(output.as_mut().poll_change(cx), Poll::Pending);
+
+                    qux.set(22);
+
+                    assert_eq!(output.as_mut().poll_change(cx), Poll::Ready(Some(36)));
+                    assert_eq!(output.as_mut().poll_change(cx), Poll::Pending);
+                    assert_eq!(output.as_mut().poll_change(cx), Poll::Pending);
+                });
+            }
         }
     };
 }
