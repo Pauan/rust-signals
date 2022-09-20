@@ -48,12 +48,6 @@ macro_rules! __internal_identifier {
         $crate::__internal_map!($macro, { $($bindings)* $gensym = $name, }, => $($rest)+)
     }};
 
-    ($gensym:ident, $macro:ident, { $($bindings:tt)* }, let $name:pat = $value:expr => move $($rest:tt)+) => {{
-        let mut $gensym = $crate::internal::MapRef1::new($value);
-
-        $crate::__internal_map!($macro, { $($bindings)* $gensym = $name, }, => $($rest)+)
-    }};
-
     ($gensym:ident, $macro:ident, { $($bindings:tt)* }, $name:ident, $($rest:tt)+) => {{
         let mut $gensym = $crate::internal::MapRef1::new($name);
 
@@ -65,17 +59,17 @@ macro_rules! __internal_identifier {
 
         $crate::__internal_map!($macro, { $($bindings)* $gensym = $name, }, => $($rest)+)
     }};
-
-    ($gensym:ident, $macro:ident, { $($bindings:tt)* }, $name:ident => move $($rest:tt)+) => {{
-        let mut $gensym = $crate::internal::MapRef1::new($name);
-
-        $crate::__internal_map!($macro, { $($bindings)* $gensym = $name, }, => $($rest)+)
-    }};
 }
 
 #[doc(hidden)]
 #[macro_export]
 macro_rules! __internal_map {
+    // This is only included for backwards compatibility
+    // TODO remove in next major version
+    ($macro:ident, { $($bindings:tt)* }, => move $f:expr) => {
+        $crate::__internal_map!($macro, { $($bindings)* }, => $f)
+    };
+
     ($macro:ident, { $($bindings:tt)* }, => $f:expr) => {
         $crate::internal::MapRefSignal::new(move |cx| {
             $crate::__internal_map_pin!($($bindings)*);
@@ -260,7 +254,7 @@ macro_rules! map_mut {
 /// You can combine an *infinite* number of Signals, there is no limit.
 ///
 /// However, keep in mind that each input Signal has a small performance cost.
-/// The cost is very small, but it grows linearly with the number of input Signals.
+/// The cost is ***very*** small, but it grows linearly with the number of input Signals.
 ///
 /// You shouldn't normally worry about it, just don't put thousands of input Signals
 /// into a `map_ref` (this basically *never* happens in practice).
@@ -302,15 +296,10 @@ macro_rules! map_mut {
 ///
 /// # Performance
 ///
-/// If you use 1 or 2 input Signals it is ***extremely*** fast, and everything is stack allocated.
+/// Everything is stack allocated, there are no heap allocations, performance is optimal.
 ///
-/// If you use 3+ input Signals, it will do a heap allocation for each input Signal.
-/// However, this heap allocation only happens once, when the `map_ref` is created.
-/// It does *not* do any heap allocation while polling. So it's still ***very*** fast.
-///
-/// In addition, if you use 3+ input Signals, there is a *very* small additional performance
-/// cost on every poll, and this additional cost scales linearly with the number of input
-/// Signals.
+/// Because it must poll all of the input Signals, the performance is proportional to the
+/// number of Signals. However, polling is ***very*** fast.
 #[macro_export]
 macro_rules! map_ref {
     ($($input:tt)*) => {

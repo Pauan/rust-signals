@@ -277,7 +277,7 @@ macro_rules! map_tests {
                 let mut s = $name! {
                     let $($ref)+ ($($arg)+ a1, $($arg)+ a2) = always((1, 2)),
                     let $($ref)+ ($($arg)+ b1, $($arg)+ b2) = always((3, 4)),
-                    let $($ref)+ ($($arg)+ c1, $($arg)+ c2) = always((5, 6)) => {
+                    let $($ref)+ ($($arg)+ c1, $($arg)+ c2) = always((5, 6)) => move {
                         let a1: u32 = *a1;
                         let a2: u32 = *a2;
                         let b1: u32 = *b1;
