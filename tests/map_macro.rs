@@ -143,10 +143,36 @@ macro_rules! map_tests {
 
 
             #[test]
+            fn test_no_move() {
+                let a = always(1);
+
+                let mut s = $name!(a => *a + 5);
+
+                util::with_noop_context(|cx| {
+                    assert_eq!(s.poll_change_unpin(cx), Poll::Ready(Some(6)));
+                    assert_eq!(s.poll_change_unpin(cx), Poll::Ready(None));
+                });
+            }
+
+
+            #[test]
+            fn test_move() {
+                let a = always(1);
+
+                let mut s = $name!(a => move *a + 5);
+
+                util::with_noop_context(|cx| {
+                    assert_eq!(s.poll_change_unpin(cx), Poll::Ready(Some(6)));
+                    assert_eq!(s.poll_change_unpin(cx), Poll::Ready(None));
+                });
+            }
+
+
+            #[test]
             fn let_1() {
                 let a2 = always(1);
 
-                let mut s = $name!(let a = a2 => {
+                let mut s = $name!(let a = a2 => move {
                     let a: u32 = *a;
                     a + 1
                 });
