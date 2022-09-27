@@ -49,8 +49,28 @@ fn test_switch_signal_vec() {
         Poll::Pending,
         Poll::Ready(Some(VecDiff::InsertAt { index: 0, value: 7 })),
         Poll::Pending,
+        Poll::Ready(Some(VecDiff::Replace { values: vec![10] })),
+        Poll::Ready(None),
+    ]);
+}
+
+
+#[test]
+fn test_switch_signal_vec_bug() {
+    let input = util::Source::new(vec![
+        Poll::Ready(util::Source::new(vec![
+            Poll::Ready(vec![]),
+            Poll::Pending,
+            Poll::Ready(vec!["hello", "world"]),
+        ])),
+    ]);
+
+    let output = input.switch_signal_vec(|messages| messages.to_signal_vec());
+
+    util::assert_signal_vec_eq(output, vec![
         Poll::Ready(Some(VecDiff::Replace { values: vec![] })),
-        Poll::Ready(Some(VecDiff::Push { value: 10 })),
-        Poll::Ready(None)
+        Poll::Pending,
+        Poll::Ready(Some(VecDiff::Replace { values: vec!["hello", "world"] })),
+        Poll::Ready(None),
     ]);
 }

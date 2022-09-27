@@ -453,8 +453,7 @@ pub trait SignalExt: Signal {
             signal: Some(self),
             signal_vec: None,
             callback,
-            is_empty: true,
-            pending: None,
+            len: 0,
         }
     }
 
@@ -1568,8 +1567,7 @@ pub struct SwitchSignalVec<A, B, C> where B: SignalVec {
     #[pin]
     signal_vec: Option<B>,
     callback: C,
-    is_empty: bool,
-    pending: Option<VecDiff<B::Item>>,
+    len: usize,
 }
 
 impl<A, B, C> SignalVec for SwitchSignalVec<A, B, C>
@@ -1579,115 +1577,133 @@ impl<A, B, C> SignalVec for SwitchSignalVec<A, B, C>
     type Item = B::Item;
 
     fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
-        let SwitchSignalVecProj { mut signal, mut signal_vec, callback, is_empty, pending } = self.project();
+        let SwitchSignalVecProj { mut signal, mut signal_vec, callback, len } = self.project();
 
-        match pending.take() {
-            Some(value) => Poll::Ready(Some(value)),
-            None => {
-                let mut signal_value = None;
+        let mut signal_value = None;
 
-                // TODO is this loop a good idea ?
-                let signal_done = loop {
-                    break match signal.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
-                        None => {
-                            Poll::Ready(None)
-                        },
-                        Some(Poll::Pending) => {
-                            Poll::Pending
-                        },
-                        Some(Poll::Ready(None)) => {
-                            signal.set(None);
-                            Poll::Ready(None)
-                        },
-                        Some(Poll::Ready(Some(value))) => {
-                            signal_value = Some(value);
-                            continue;
-                        },
-                    }
-                };
+        let signal_done = loop {
+            break match signal.as_mut().as_pin_mut().map(|signal| signal.poll_change(cx)) {
+                None => {
+                    true
+                },
+                Some(Poll::Pending) => {
+                    false
+                },
+                Some(Poll::Ready(None)) => {
+                    signal.set(None);
+                    true
+                },
+                Some(Poll::Ready(Some(value))) => {
+                    signal_value = Some(value);
+                    continue;
+                },
+            }
+        };
 
-                fn done<A>(is_empty: &mut bool, signal_done: Poll<Option<VecDiff<A>>>) -> Poll<Option<VecDiff<A>>> {
-                    if *is_empty {
-                        signal_done
+        fn new_signal_vec<A>(len: &mut usize) -> Poll<Option<VecDiff<A>>> {
+            if *len == 0 {
+                Poll::Pending
+
+            } else {
+                *len = 0;
+                Poll::Ready(Some(VecDiff::Replace { values: vec![] }))
+            }
+        }
+
+        fn calculate_len<A>(len: &mut usize, vec_diff: &VecDiff<A>) {
+            match vec_diff {
+                VecDiff::Replace { values } => {
+                    *len = values.len();
+                },
+                VecDiff::InsertAt { .. } | VecDiff::Push { .. } => {
+                    *len += 1;
+                },
+                VecDiff::RemoveAt { .. } | VecDiff::Pop {} => {
+                    *len -= 1;
+                },
+                VecDiff::Clear {} => {
+                    *len = 0;
+                },
+                VecDiff::UpdateAt { .. } | VecDiff::Move { .. } => {},
+            }
+        }
+
+        if let Some(value) = signal_value {
+            signal_vec.set(Some(callback(value)));
+
+            match signal_vec.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(cx)) {
+                None => {
+                    if signal_done {
+                        Poll::Ready(None)
 
                     } else {
-                        *is_empty = true;
-                        Poll::Ready(Some(VecDiff::Replace { values: vec![] }))
+                        new_signal_vec(len)
                     }
-                }
+                },
 
-                fn replace<A>(is_empty: &mut bool, values: Vec<A>) -> Poll<Option<VecDiff<A>>> {
-                    let new_is_empty = values.is_empty();
+                Some(Poll::Pending) => {
+                    new_signal_vec(len)
+                },
 
-                    if *is_empty && new_is_empty {
-                        Poll::Pending
+                Some(Poll::Ready(None)) => {
+                    signal_vec.set(None);
+
+                    if signal_done {
+                        Poll::Ready(None)
 
                     } else {
-                        *is_empty = new_is_empty;
+                        new_signal_vec(len)
+                    }
+                },
+
+                Some(Poll::Ready(Some(vec_diff))) => {
+                    if *len == 0 {
+                        calculate_len(len, &vec_diff);
+                        Poll::Ready(Some(vec_diff))
+
+                    } else {
+                        let mut values = vec![];
+
+                        vec_diff.apply_to_vec(&mut values);
+
+                        *len = values.len();
+
                         Poll::Ready(Some(VecDiff::Replace { values }))
                     }
-                }
+                },
+            }
 
-                if let Some(value) = signal_value {
-                    signal_vec.set(Some(callback(value)));
+        } else {
+            match signal_vec.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(cx)) {
+                None => {
+                    if signal_done {
+                        Poll::Ready(None)
 
-                    match signal_vec.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(cx)) {
-                        None => {
-                            done(is_empty, signal_done)
-                        },
-
-                        Some(Poll::Pending) => {
-                            done(is_empty, Poll::Pending)
-                        },
-
-                        Some(Poll::Ready(None)) => {
-                            signal_vec.set(None);
-                            done(is_empty, signal_done)
-                        },
-
-                        Some(Poll::Ready(Some(VecDiff::Replace { values }))) => {
-                            replace(is_empty, values)
-                        },
-
-                        Some(Poll::Ready(Some(vec_diff))) => {
-                            if *is_empty {
-                                *is_empty = false;
-                                Poll::Ready(Some(vec_diff))
-
-                            } else {
-                                *pending = Some(vec_diff);
-                                *is_empty = true;
-                                Poll::Ready(Some(VecDiff::Replace { values: vec![] }))
-                            }
-                        },
+                    } else {
+                        Poll::Pending
                     }
+                },
 
-                } else {
-                    match signal_vec.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(cx)) {
-                        None => {
-                            signal_done
-                        },
+                Some(Poll::Pending) => {
+                    Poll::Pending
+                },
 
-                        Some(Poll::Pending) => {
-                            Poll::Pending
-                        },
+                Some(Poll::Ready(None)) => {
+                    signal_vec.set(None);
 
-                        Some(Poll::Ready(None)) => {
-                            signal_vec.set(None);
-                            signal_done
-                        },
+                    if signal_done {
+                        Poll::Ready(None)
 
-                        Some(Poll::Ready(Some(VecDiff::Replace { values }))) => {
-                            replace(is_empty, values)
-                        },
-
-                        Some(Poll::Ready(Some(vec_diff))) => {
-                            *is_empty = false;
-                            Poll::Ready(Some(vec_diff))
-                        },
+                    } else {
+                        Poll::Pending
                     }
-                }
-            },
+                },
+
+                Some(Poll::Ready(Some(vec_diff))) => {
+                    calculate_len(len, &vec_diff);
+                    Poll::Ready(Some(vec_diff))
+                },
+            }
         }
     }
 }
