@@ -239,6 +239,17 @@ impl<A> fmt::Debug for ReadOnlyMutable<A> where A: fmt::Debug {
 #[repr(transparent)]
 pub struct Mutable<A>(ReadOnlyMutable<A>);
 
+impl<A:Default> Mutable<A> {
+    pub fn replace_object_with<F>(&self, f: F) where F: FnOnce(A) -> A {
+        let mut state = self.state().lock.write().unwrap();
+        let old_value=std::mem::take(&mut state.value);
+        let new_value = f(old_value);
+        state.value=new_value;
+        
+        state.notify(true);
+    }
+}
+
 impl<A> Mutable<A> {
     // TODO should this inline ?
     pub fn new(value: A) -> Self {
