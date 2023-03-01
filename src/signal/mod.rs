@@ -1,4 +1,6 @@
 mod macros;
+// TODO resolve properly
+#[allow(unreachable_pub)]
 pub use self::macros::*;
 
 mod broadcaster;

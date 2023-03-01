@@ -1,4 +1,6 @@
 use crate::signal::Signal;
+use std::collections::{BTreeMap, VecDeque};
+use std::cmp::Ord;
 use std::pin::Pin;
 use std::marker::Unpin;
 use std::future::Future;
@@ -106,6 +108,19 @@ pub trait SignalMapExt: SignalMap {
         }
     }
 
+    #[inline]
+    fn map_value_signal<A, F>(self, callback: F) -> MapValueSignal<Self, A, F>
+        where A: Signal,
+              F: FnMut(Self::Value) -> A,
+              Self: Sized {
+        MapValueSignal {
+            signal: Some(self),
+            signals: BTreeMap::new(),
+            pending: VecDeque::new(),
+            callback,
+        }
+    }
+
     /// Returns a signal that tracks the value of a particular key in the map.
     #[inline]
     fn key_cloned(self, key: Self::Key) -> MapWatchKeySignal<Self>
@@ -186,6 +201,155 @@ impl<A, B, F> SignalMap for MapValue<A, F>
         let MapValueProj { signal, callback } = self.project();
 
         signal.poll_map_change(cx).map(|some| some.map(|change| change.map(|value| callback(value))))
+    }
+}
+
+// This is an optimization to allow a SignalMap to efficiently "return" multiple MapDiff
+// TODO can this be made more efficient ?
+struct PendingBuilder<A> {
+    first: Option<A>,
+    rest: VecDeque<A>,
+}
+
+impl<A> PendingBuilder<A> {
+    fn new() -> Self {
+        Self {
+            first: None,
+            rest: VecDeque::new(),
+        }
+    }
+
+    fn push(&mut self, value: A) {
+        if let None = self.first {
+            self.first = Some(value);
+
+        } else {
+            self.rest.push_back(value);
+        }
+    }
+}
+
+fn unwrap<A>(x: Poll<Option<A>>) -> A {
+    match x {
+        Poll::Ready(Some(x)) => x,
+        _ => panic!("Signal did not return a value"),
+    }
+}
+
+#[pin_project(project = MapValueSignalProj)]
+#[derive(Debug)]
+#[must_use = "SignalMaps do nothing unless polled"]
+pub struct MapValueSignal<A, B, F> where A: SignalMap, B: Signal {
+    #[pin]
+    signal: Option<A>,
+    // TODO is there a more efficient way to implement this ?
+    signals: BTreeMap<A::Key, Option<Pin<Box<B>>>>,
+    pending: VecDeque<MapDiff<A::Key, B::Item>>,
+    callback: F,
+}
+
+impl<A, B, F> SignalMap for MapValueSignal<A, B, F>
+    where A: SignalMap,
+          A::Key: Clone + Ord,
+          B: Signal,
+          F: FnMut(A::Value) -> B {
+    type Key = A::Key;
+    type Value = B::Item;
+
+    fn poll_map_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
+        let MapValueSignalProj { mut signal, signals, pending, callback } = self.project();
+
+        if let Some(diff) = pending.pop_front() {
+            return Poll::Ready(Some(diff));
+        }
+
+        let mut new_pending = PendingBuilder::new();
+
+        let done = loop {
+            break match signal.as_mut().as_pin_mut().map(|signal| signal.poll_map_change(cx)) {
+                None => {
+                    true
+                },
+                Some(Poll::Ready(None)) => {
+                    signal.set(None);
+                    true
+                },
+                Some(Poll::Ready(Some(change))) => {
+                    new_pending.push(match change {
+                        MapDiff::Replace { entries } => {
+                            *signals = BTreeMap::new();
+
+                            MapDiff::Replace {
+                                entries: entries.into_iter().map(|(key, value)| {
+                                    let mut signal = Box::pin(callback(value));
+                                    let poll = (key.clone(), unwrap(signal.as_mut().poll_change(cx)));
+                                    signals.insert(key, Some(signal));
+                                    poll
+                                }).collect()
+                            }
+                        },
+
+                        MapDiff::Insert { key, value } => {
+                            let mut signal = Box::pin(callback(value));
+                            let poll = unwrap(signal.as_mut().poll_change(cx));
+                            signals.insert(key.clone(), Some(signal));
+                            MapDiff::Insert { key, value: poll }
+                        },
+
+                        MapDiff::Update { key, value } => {
+                            let mut signal = Box::pin(callback(value));
+                            let poll = unwrap(signal.as_mut().poll_change(cx));
+                            *signals.get_mut(&key).expect("The key is not in the map") = Some(signal);
+                            MapDiff::Update { key, value: poll }
+                        },
+
+                        MapDiff::Remove { key } => {
+                            signals.remove(&key);
+                            MapDiff::Remove { key }
+                        },
+
+                        MapDiff::Clear {} => {
+                            signals.clear();
+                            MapDiff::Clear {}
+                        },
+                    });
+
+                    continue;
+                },
+                Some(Poll::Pending) => false,
+            };
+        };
+
+        let mut has_pending = false;
+
+        // TODO ensure that this is as efficient as possible
+        // TODO make this more efficient (e.g. using a similar strategy as FuturesUnordered)
+        for (key, signal) in signals.into_iter() {
+            // TODO use a loop until the value stops changing ?
+            match signal.as_mut().map(|s| s.as_mut().poll_change(cx)) {
+                Some(Poll::Ready(Some(value))) => {
+                    new_pending.push(MapDiff::Update { key: key.clone(), value });
+                },
+                Some(Poll::Ready(None)) => {
+                    *signal = None;
+                },
+                Some(Poll::Pending) => {
+                    has_pending = true;
+                },
+                None => {},
+            }
+        }
+
+        if let Some(first) = new_pending.first {
+            *pending = new_pending.rest;
+            Poll::Ready(Some(first))
+
+        } else if done && !has_pending {
+            Poll::Ready(None)
+
+        } else {
+            Poll::Pending
+        }
     }
 }
 
