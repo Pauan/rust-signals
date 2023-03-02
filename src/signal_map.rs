@@ -1,6 +1,6 @@
 use crate::signal::Signal;
-use std::collections::{BTreeMap, VecDeque};
 use std::cmp::Ord;
+use std::collections::{BTreeMap, VecDeque};
 use std::pin::Pin;
 use std::marker::Unpin;
 use std::future::Future;
@@ -180,6 +180,36 @@ pub type BoxSignalMap<'a, Key, Value> = Pin<Box<dyn SignalMap<Key = Key, Value =
 pub type LocalBoxSignalMap<'a, Key, Value> = Pin<Box<dyn SignalMap<Key = Key, Value = Value> + 'a>>;
 
 
+#[derive(Debug)]
+#[must_use = "SignalMaps do nothing unless polled"]
+pub struct Always<K, V> {
+    entries: Option<Vec<(K, V)>>,
+}
+
+impl<K, V> Unpin for Always<K, V> {}
+
+impl<K, V> SignalMap for Always<K, V> {
+    type Key = K;
+    type Value = V;
+
+    #[inline]
+    fn poll_map_change(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
+        Poll::Ready(self.entries.take().map(|entries| MapDiff::Replace { entries }))
+    }
+}
+
+/// Converts a `Vec<(K, V)>` into a `SignalMap<Key = K, Value = V>`
+///
+/// This has no performance cost.
+#[inline]
+// TODO `Vec<(K, V)>` -> `BTreeMap<K, V>`?
+pub fn always<K, V>(entries: Vec<(K, V)>) -> Always<K, V> {
+    Always {
+        entries: Some(entries),
+    }
+}
+
+
 #[pin_project(project = MapValueProj)]
 #[derive(Debug)]
 #[must_use = "SignalMaps do nothing unless polled"]
@@ -206,6 +236,7 @@ impl<A, B, F> SignalMap for MapValue<A, F>
 
 // This is an optimization to allow a SignalMap to efficiently "return" multiple MapDiff
 // TODO can this be made more efficient ?
+// TODO refactor `signal_map`'s and `signal_vec`'s `PendingBuilder` & `unwrap` into common helpers?
 struct PendingBuilder<A> {
     first: Option<A>,
     rest: VecDeque<A>,

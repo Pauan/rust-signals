@@ -1,6 +1,7 @@
 ## NEXT
 * Fixing bug with `SignalExt::switch_signal_vec`.
 * Adding in `SignalExt::map_value_signal` method.
+* Adding in `signal_map::always` method.
 
 ## 0.3.31 - (2022-09-10)
 * Adding in serde `Serialize` and `Deserialize` for `MapDiff`.
