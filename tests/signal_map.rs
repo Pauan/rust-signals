@@ -1,6 +1,6 @@
 use std::task::Poll;
 use futures_signals::signal::{self, SignalExt};
-use futures_signals::signal_map::{MapDiff, SignalMapExt};
+use futures_signals::signal_map::{self, MapDiff, SignalMapExt};
 
 mod util;
 
@@ -102,6 +102,31 @@ fn map_value_signal_const_signal() {
             value: 2,
         })),
         Poll::Ready(Some(MapDiff::Clear {})),
+        Poll::Ready(None),
+    ]);
+}
+
+#[test]
+fn map_value_signal_const_map() {
+    let map_signal = signal_map::always(vec![(1, 1), (2, 1), (3, 2), (4, 3)]);
+
+    let output = map_signal.map_value_signal(|value| {
+        let input = util::Source::new(vec![
+            Poll::Ready(2),
+            Poll::Pending,
+            Poll::Ready(3),
+        ]);
+        input.map(move |multiplier| value * multiplier)
+    });
+
+    util::assert_signal_map_eq(output, vec![
+        Poll::Ready(Some(MapDiff::Replace {
+            entries: vec![(1, 2), (2, 2), (3, 4), (4, 6)],
+        })),
+        Poll::Ready(Some(MapDiff::Update { key: 1, value: 3 })),
+        Poll::Ready(Some(MapDiff::Update { key: 2, value: 3 })),
+        Poll::Ready(Some(MapDiff::Update { key: 3, value: 6 })),
+        Poll::Ready(Some(MapDiff::Update { key: 4, value: 9 })),
         Poll::Ready(None),
     ]);
 }
