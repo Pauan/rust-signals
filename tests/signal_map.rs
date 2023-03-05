@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::task::Poll;
 use futures_signals::signal::{self, SignalExt};
 use futures_signals::signal_map::{self, MapDiff, SignalMapExt};
@@ -108,7 +109,9 @@ fn map_value_signal_const_signal() {
 
 #[test]
 fn map_value_signal_const_map() {
-    let map_signal = signal_map::always(vec![(1, 1), (2, 1), (3, 2), (4, 3)]);
+    let map_signal = signal_map::always(
+        BTreeMap::from([(1, 1), (2, 1), (3, 2), (4, 3)])
+    );
 
     let output = map_signal.map_value_signal(|value| {
         let input = util::Source::new(vec![
