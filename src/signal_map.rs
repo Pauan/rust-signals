@@ -182,31 +182,35 @@ pub type LocalBoxSignalMap<'a, Key, Value> = Pin<Box<dyn SignalMap<Key = Key, Va
 
 #[derive(Debug)]
 #[must_use = "SignalMaps do nothing unless polled"]
-pub struct Always<K, V> {
-    map: Option<BTreeMap<K, V>>,
+pub struct Always<A> {
+    map: Option<A>,
 }
 
-impl<K, V> Unpin for Always<K, V> {}
+impl<A> Unpin for Always<A> {}
 
-impl<K, V> SignalMap for Always<K, V> {
+impl<A, K, V> SignalMap for Always<A> where A: IntoIterator<Item = (K, V)> {
     type Key = K;
     type Value = V;
 
     #[inline]
     fn poll_map_change(mut self: Pin<&mut Self>, _cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
-        let Some(map) = self.map.take() else {
-            return Poll::Ready(None);
-        };
-        let entries: Vec<(K, V)> = map.into_iter().collect();
-        Poll::Ready(Some(MapDiff::Replace { entries }))
+        match self.map.take() {
+            Some(map) => {
+                let entries: Vec<(K, V)> = map.into_iter().collect();
+                Poll::Ready(Some(MapDiff::Replace { entries }))
+            },
+            None => {
+                Poll::Ready(None)
+            },
+        }
     }
 }
 
-/// Converts a `BTreeMap<K, V>` into a `SignalMap<Key = K, Value = V>`
+/// Converts an `IntoIterator<Item = (K, V)>` into a `SignalMap<Key = K, Value = V>`.
 ///
-/// This has no performance cost.
+/// This will usually be a `BTreeMap<K, V>` or `Vec<(K, V)>`.
 #[inline]
-pub fn always<K, V>(map: BTreeMap<K, V>) -> Always<K, V> {
+pub fn always<A, K, V>(map: A) -> Always<A> where A: IntoIterator<Item = (K, V)> {
     Always {
         map: Some(map),
     }
