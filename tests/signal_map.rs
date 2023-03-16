@@ -135,6 +135,34 @@ fn map_value_signal_const_map() {
 }
 
 #[test]
+fn always_vec() {
+    let output = signal_map::always(
+        vec![(1, 1), (2, 1), (3, 2), (4, 3)]
+    );
+
+    util::assert_signal_map_eq(output, vec![
+        Poll::Ready(Some(MapDiff::Replace {
+            entries: vec![(1, 1), (2, 1), (3, 2), (4, 3)],
+        })),
+        Poll::Ready(None),
+    ]);
+}
+
+#[test]
+fn always_iter() {
+    let output = signal_map::always(
+        vec![(1, 1), (2, 2), (3, 3), (4, 4)].into_iter().map(|(k, v)| (k, v + 1))
+    );
+
+    util::assert_signal_map_eq(output, vec![
+        Poll::Ready(Some(MapDiff::Replace {
+            entries: vec![(1, 2), (2, 3), (3, 4), (4, 5)],
+        })),
+        Poll::Ready(None),
+    ]);
+}
+
+#[test]
 fn key_cloned_exists_at_start() {
     let input = util::Source::new(vec![
         Poll::Ready(MapDiff::Replace {

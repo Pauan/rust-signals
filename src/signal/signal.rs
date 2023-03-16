@@ -1074,22 +1074,24 @@ impl<A> Signal for Eq<A>
 
     #[inline]
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let EqProj { signal, matches, value } = self.project();
+        let EqProj { mut signal, matches, value } = self.project();
 
-        match signal.poll_change(cx) {
-            Poll::Ready(Some(new_value)) => {
-                let new = Some(new_value == *value);
+        loop {
+            return match signal.as_mut().poll_change(cx) {
+                Poll::Ready(Some(new_value)) => {
+                    let new = Some(new_value == *value);
 
-                if *matches != new {
-                    *matches = new;
-                    Poll::Ready(new)
+                    if *matches != new {
+                        *matches = new;
+                        Poll::Ready(new)
 
-                } else {
-                    Poll::Pending
-                }
-            },
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+                    } else {
+                        continue;
+                    }
+                },
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            }
         }
     }
 }
@@ -1112,22 +1114,24 @@ impl<A> Signal for Neq<A>
 
     #[inline]
     fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
-        let NeqProj { signal, matches, value } = self.project();
+        let NeqProj { mut signal, matches, value } = self.project();
 
-        match signal.poll_change(cx) {
-            Poll::Ready(Some(new_value)) => {
-                let new = Some(new_value != *value);
+        loop {
+            return match signal.as_mut().poll_change(cx) {
+                Poll::Ready(Some(new_value)) => {
+                    let new = Some(new_value != *value);
 
-                if *matches != new {
-                    *matches = new;
-                    Poll::Ready(new)
+                    if *matches != new {
+                        *matches = new;
+                        Poll::Ready(new)
 
-                } else {
-                    Poll::Pending
-                }
-            },
-            Poll::Ready(None) => Poll::Ready(None),
-            Poll::Pending => Poll::Pending,
+                    } else {
+                        continue;
+                    }
+                },
+                Poll::Ready(None) => Poll::Ready(None),
+                Poll::Pending => Poll::Pending,
+            }
         }
     }
 }
