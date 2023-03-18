@@ -365,6 +365,18 @@ pub trait SignalVecExt: SignalVec {
         }
     }
 
+    /// Flattens a `SignalVec<SignalVec<A>>` into a `SignalVec<A>`.
+    #[inline]
+    fn flatten(self) -> Flatten<Self>
+        where Self::Item: SignalVec,
+              Self: Sized {
+        Flatten {
+            signal: Some(self),
+            inner: vec![],
+            pending: VecDeque::new(),
+        }
+    }
+
     #[inline]
     #[track_caller]
     #[cfg(feature = "debug")]
@@ -955,6 +967,243 @@ impl<A, B> SignalVec for Chain<A, B>
             } else {
                 return Poll::Pending;
             }
+        }
+    }
+}
+
+
+#[derive(Debug)]
+struct FlattenState<A> {
+    // TODO is there a more efficient way to implement this ?
+    signal_vec: Option<Pin<Box<A>>>,
+    len: usize,
+}
+
+impl<A> FlattenState<A> where A: SignalVec {
+    fn new(signal_vec: A) -> Self {
+        Self {
+            signal_vec: Some(Box::pin(signal_vec)),
+            len: 0,
+        }
+    }
+
+    fn update_len(&mut self, diff: &VecDiff<A::Item>) {
+        match diff {
+            VecDiff::Replace { values } => {
+                self.len = values.len();
+            },
+            VecDiff::InsertAt { .. } | VecDiff::Push { .. } => {
+                self.len += 1;
+            },
+            VecDiff::RemoveAt { .. } | VecDiff::Pop {} => {
+                self.len -= 1;
+            },
+            VecDiff::Clear {} => {
+                self.len = 0;
+            },
+            VecDiff::UpdateAt { .. } | VecDiff::Move { .. } => {},
+        }
+    }
+
+    fn poll(&mut self, cx: &mut Context) -> Option<Poll<Option<VecDiff<A::Item>>>> {
+        self.signal_vec.as_mut().map(|s| s.poll_vec_change_unpin(cx))
+    }
+
+    fn poll_values(&mut self, cx: &mut Context) -> Vec<A::Item> {
+        let mut output = vec![];
+
+        loop {
+            match self.poll(cx) {
+                Some(Poll::Ready(Some(diff))) => {
+                    self.update_len(&diff);
+                    diff.apply_to_vec(&mut output);
+                },
+                Some(Poll::Ready(None)) => {
+                    self.signal_vec = None;
+                    break;
+                },
+                Some(Poll::Pending) | None => {
+                    break;
+                },
+            }
+        }
+
+        output
+    }
+
+    fn poll_pending(&mut self, cx: &mut Context, prev_len: usize, pending: &mut PendingBuilder<VecDiff<A::Item>>) -> bool {
+        loop {
+            return match self.poll(cx) {
+                Some(Poll::Ready(Some(diff))) => {
+                    let old_len = self.len;
+
+                    self.update_len(&diff);
+
+                    match diff {
+                        VecDiff::Replace { values } => {
+                            for index in 0..old_len {
+                                pending.push(VecDiff::RemoveAt { index: prev_len + index });
+                            }
+
+                            for (index, value) in values.into_iter().enumerate() {
+                                pending.push(VecDiff::InsertAt { index: prev_len + index, value });
+                            }
+                        },
+                        VecDiff::InsertAt { index, value } => {
+                            pending.push(VecDiff::InsertAt { index: prev_len + index, value });
+                        },
+                        VecDiff::UpdateAt { index, value } => {
+                            pending.push(VecDiff::UpdateAt { index: prev_len + index, value });
+                        },
+                        VecDiff::RemoveAt { index } => {
+                            pending.push(VecDiff::RemoveAt { index: prev_len + index });
+                        },
+                        VecDiff::Move { old_index, new_index } => {
+                            pending.push(VecDiff::Move { old_index: prev_len + old_index, new_index: prev_len + new_index });
+                        },
+                        VecDiff::Push { value } => {
+                            pending.push(VecDiff::InsertAt { index: prev_len + old_len, value });
+                        },
+                        VecDiff::Pop {} => {
+                            pending.push(VecDiff::RemoveAt { index: prev_len + (old_len - 1) });
+                        },
+                        VecDiff::Clear {} => {
+                            for index in 0..old_len {
+                                pending.push(VecDiff::RemoveAt { index: prev_len + index });
+                            }
+                        },
+                    }
+
+                    continue;
+                },
+                Some(Poll::Ready(None)) => {
+                    self.signal_vec = None;
+                    true
+                },
+                Some(Poll::Pending) => {
+                    false
+                },
+                None => {
+                    true
+                },
+            };
+        }
+    }
+}
+
+#[pin_project(project = FlattenProj)]
+#[must_use = "SignalVecs do nothing unless polled"]
+pub struct Flatten<A> where A: SignalVec, A::Item: SignalVec {
+    #[pin]
+    signal: Option<A>,
+    inner: Vec<FlattenState<A::Item>>,
+    pending: VecDeque<VecDiff<<A::Item as SignalVec>::Item>>,
+}
+
+impl<A> std::fmt::Debug for Flatten<A>
+    where A: SignalVec + std::fmt::Debug,
+          A::Item: SignalVec + std::fmt::Debug,
+          <A::Item as SignalVec>::Item: std::fmt::Debug {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Flatten")
+            .field("signal", &self.signal)
+            .field("inner", &self.inner)
+            .field("pending", &self.pending)
+            .finish()
+    }
+}
+
+impl<A> SignalVec for Flatten<A>
+    where A: SignalVec,
+          A::Item: SignalVec {
+    type Item = <A::Item as SignalVec>::Item;
+
+    // TODO implement this more efficiently
+    fn poll_vec_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<VecDiff<Self::Item>>> {
+        let mut this = self.project();
+
+        if let Some(diff) = this.pending.pop_front() {
+            return Poll::Ready(Some(diff));
+        }
+
+        let mut pending: PendingBuilder<VecDiff<<A::Item as SignalVec>::Item>> = PendingBuilder::new();
+
+        let top_done = loop {
+            break match this.signal.as_mut().as_pin_mut().map(|signal| signal.poll_vec_change(cx)) {
+                Some(Poll::Ready(Some(diff))) => {
+                    match diff {
+                        VecDiff::Replace { values } => {
+                            *this.inner = values.into_iter().map(FlattenState::new).collect();
+
+                            let values = this.inner.iter_mut()
+                                .flat_map(|state| state.poll_values(cx))
+                                .collect();
+
+                            return Poll::Ready(Some(VecDiff::Replace { values }));
+                        },
+                        VecDiff::InsertAt { index, value } => {
+                            this.inner.insert(index, FlattenState::new(value));
+                        },
+                        VecDiff::UpdateAt { index, value } => {
+                            this.inner[index] = FlattenState::new(value);
+                        },
+                        VecDiff::RemoveAt { index } => {
+                            this.inner.remove(index);
+                        },
+                        VecDiff::Move { old_index, new_index } => {
+                            let value = this.inner.remove(old_index);
+                            this.inner.insert(new_index, value);
+                        },
+                        VecDiff::Push { value } => {
+                            this.inner.push(FlattenState::new(value));
+                        },
+                        VecDiff::Pop {} => {
+                            this.inner.pop().unwrap();
+                        },
+                        VecDiff::Clear {} => {
+                            this.inner.clear();
+                            return Poll::Ready(Some(VecDiff::Clear {}));
+                        },
+                    }
+
+                    false
+                },
+                Some(Poll::Ready(None)) => {
+                    this.signal.set(None);
+                    true
+                },
+                Some(Poll::Pending) => {
+                    false
+                },
+                None => {
+                    true
+                },
+            };
+        };
+
+        let mut inner_done = true;
+
+        let mut prev_len = 0;
+
+        for state in this.inner.iter_mut() {
+            let done = state.poll_pending(cx, prev_len, &mut pending);
+
+            if !done {
+                inner_done = false;
+            }
+
+            prev_len += state.len;
+        }
+
+        if let Some(first) = pending.first {
+            *this.pending = pending.rest;
+            Poll::Ready(Some(first))
+
+        } else if inner_done && top_done {
+            Poll::Ready(None)
+
+        } else {
+            Poll::Pending
         }
     }
 }
