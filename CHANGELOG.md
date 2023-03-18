@@ -1,4 +1,4 @@
-## UNRELEASED
+## 0.3.32 - (2023-03-17)
 * Fixing bug with `SignalExt::switch_signal_vec`.
 * Adding in `SignalExt::map_value_signal` method.
 * Adding in `signal_map::always` method.
