@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::task::Poll;
 use futures_signals::signal_map::{MapDiff, MutableBTreeMap, MutableBTreeMapLockMut};
 
@@ -95,4 +96,15 @@ fn signal_map_cloned() {
         Poll::Ready(Some(MapDiff::Remove { key: 1 })),
         Poll::Ready(None)
     ]);
+}
+
+#[test]
+fn is_from_btreemap() {
+    let src = BTreeMap::from([(1,"test".to_string())]);
+    let _out: MutableBTreeMap<u8, String> = MutableBTreeMap::from(src);
+
+    let src = BTreeMap::from([(1,"test".to_string())]);
+    let _out: MutableBTreeMap<u8, String> = src.into();
+
+    let _out: MutableBTreeMap<u8, String> = [(1,"foo".to_string())].into();
 }

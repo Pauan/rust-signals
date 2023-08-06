@@ -1,3 +1,6 @@
+## 0.3.33 - (2023-08-06)
+* Added `From` impls. for the mutable types
+
 ## 0.3.32 - (2023-03-17)
 * Fixing bug with `SignalExt::switch_signal_vec`.
 * Adding in `SignalMapExt::map_value_signal` method.

@@ -809,10 +809,7 @@ mod mutable_btree_map {
         // TODO deprecate this and replace with From ?
         #[inline]
         pub fn with_values(values: BTreeMap<K, V>) -> Self {
-            Self(Arc::new(RwLock::new(MutableBTreeState {
-                values,
-                senders: vec![],
-            })))
+            Self::from(values)
         }
 
         // TODO return Result ?
@@ -836,6 +833,16 @@ mod mutable_btree_map {
         #[inline]
         pub fn new() -> Self {
             Self::with_values(BTreeMap::new())
+        }
+    }
+
+    impl<T, K, V> From<T> for MutableBTreeMap<K, V> where BTreeMap<K, V>: From<T> {
+        #[inline]
+        fn from(values: T) -> Self {
+            Self(Arc::new(RwLock::new(MutableBTreeState {
+                values: values.into(),
+                senders: vec![],
+            })))
         }
     }
 
