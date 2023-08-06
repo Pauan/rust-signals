@@ -3366,14 +3366,10 @@ mod mutable_vec {
     pub struct MutableVec<A>(Arc<RwLock<MutableVecState<A>>>);
 
     impl<A> MutableVec<A> {
-        // TODO deprecate this and replace with From ?
         // TODO deprecate this and replace with with_values ?
         #[inline]
         pub fn new_with_values(values: Vec<A>) -> Self {
-            MutableVec(Arc::new(RwLock::new(MutableVecState {
-                values,
-                senders: vec![],
-            })))
+            Self::from(values)
         }
 
         #[inline]
@@ -3400,6 +3396,16 @@ mod mutable_vec {
             MutableVecLockMut {
                 lock: self.0.write().unwrap(),
             }
+        }
+    }
+
+    impl<T, A> From<T> for MutableVec<A> where Vec<A>: From<T> {
+        #[inline]
+        fn from(values: T) -> Self {
+            MutableVec(Arc::new(RwLock::new(MutableVecState {
+                values: values.into(),
+                senders: vec![],
+            })))
         }
     }
 

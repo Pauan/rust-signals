@@ -321,6 +321,13 @@ impl<A> Mutable<A> {
     }
 }
 
+impl<A> From<A> for Mutable<A> {
+    #[inline]
+    fn from(value: A) -> Self {
+        Mutable::new(value)
+    }
+}
+
 impl<A> ::std::ops::Deref for Mutable<A> {
     type Target = ReadOnlyMutable<A>;
 

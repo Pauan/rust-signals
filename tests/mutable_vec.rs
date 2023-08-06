@@ -406,3 +406,14 @@ fn test_apply_vec_diff() {
         Poll::Ready(None),
     ]);
 }
+
+#[test]
+fn is_from_vec() {
+    let src = vec![1,2,3];
+    let _out: MutableVec<u8> = MutableVec::from(src);
+
+    let src = vec![1,2,3];
+    let _out: MutableVec<u8> = src.into();
+
+    let _out: MutableVec<u8> = [1,2,3].into();
+}

@@ -196,3 +196,12 @@ fn test_lock_mut_signal() {
         assert_eq!(output.poll_change_unpin(cx), Poll::Ready(None));
     });
 }*/
+
+#[test]
+fn is_from_t(){
+    let src = 0;
+    let _out: Mutable<u8> = Mutable::from(src);
+
+    let src = 0;
+    let _out: Mutable<u8> = src.into();
+}
