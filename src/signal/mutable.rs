@@ -242,13 +242,7 @@ pub struct Mutable<A>(ReadOnlyMutable<A>);
 impl<A> Mutable<A> {
     // TODO should this inline ?
     pub fn new(value: A) -> Self {
-        Mutable(ReadOnlyMutable(Arc::new(MutableState {
-            senders: AtomicUsize::new(1),
-            lock: RwLock::new(MutableLockState {
-                value,
-                signals: vec![],
-            }),
-        })))
+        Self::from(value)
     }
 
     #[inline]
@@ -324,7 +318,13 @@ impl<A> Mutable<A> {
 impl<A> From<A> for Mutable<A> {
     #[inline]
     fn from(value: A) -> Self {
-        Mutable::new(value)
+        Mutable(ReadOnlyMutable(Arc::new(MutableState {
+            senders: AtomicUsize::new(1),
+            lock: RwLock::new(MutableLockState {
+                value: value.into(),
+                signals: vec![],
+            }),
+        })))
     }
 }
 
