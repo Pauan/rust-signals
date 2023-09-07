@@ -513,6 +513,41 @@ pub trait SignalExt: Signal {
         }
     }
 
+    /// Conditionally stops the `Signal`.
+    ///
+    /// For each value in `self` it will call the `test` function.
+    ///
+    /// If `test` returns `true` then the `Signal` will stop emitting
+    /// any future values.
+    ///
+    /// The value which is passed to `test` is always emitted no matter
+    /// what.
+    ///
+    /// # Examples
+    ///
+    /// ```rust
+    /// # use futures_signals::signal::{always, SignalExt};
+    /// # let input = always(1);
+    /// // Stops the signal when x is above 5
+    /// let output = input.stop_if(|x| *x > 5);
+    /// ```
+    ///
+    /// # Performance
+    ///
+    /// This is ***extremely*** efficient: it is *guaranteed* constant time, and it does not do
+    /// any heap allocation.
+    #[inline]
+    fn stop_if<F>(self, test: F) -> StopIf<Self, F>
+        where F: FnMut(&Self::Item) -> bool,
+              Self: Sized {
+        StopIf {
+            signal: self,
+            stopped: false,
+            test,
+        }
+    }
+
+
     #[inline]
     #[track_caller]
     #[cfg(feature = "debug")]
@@ -1053,6 +1088,47 @@ impl<A, B, C> Signal for Map<A, B>
         let MapProj { signal, callback } = self.project();
 
         signal.poll_change(cx).map(|opt| opt.map(|value| callback(value)))
+    }
+}
+
+
+#[pin_project(project = StopIfProj)]
+#[derive(Debug)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct StopIf<A, B> {
+    #[pin]
+    signal: A,
+    stopped: bool,
+    test: B,
+}
+
+impl<A, B> Signal for StopIf<A, B>
+    where A: Signal,
+          B: FnMut(&A::Item) -> bool {
+    type Item = A::Item;
+
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        let StopIfProj { signal, stopped, test } = self.project();
+
+        if *stopped {
+            Poll::Ready(None)
+
+        } else {
+            match signal.poll_change(cx) {
+                Poll::Ready(Some(value)) => {
+                    if test(&value) {
+                        *stopped = true;
+                    }
+
+                    Poll::Ready(Some(value))
+                },
+                Poll::Ready(None) => {
+                    *stopped = true;
+                    Poll::Ready(None)
+                },
+                Poll::Pending => Poll::Pending,
+            }
+        }
     }
 }
 
