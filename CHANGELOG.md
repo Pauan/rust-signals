@@ -1,5 +1,6 @@
-## next: 0.3.33 - ?
-* Added `From` impls. for the mutable types
+## 0.3.33 - (2023-09-07)
+* Adding `From` impls for the `Mutable*` types.
+* Adding in `SignalExt::stop_if` method.
 
 ## 0.3.32 - (2023-03-17)
 * Fixing bug with `SignalExt::switch_signal_vec`.
