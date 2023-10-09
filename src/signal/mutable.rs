@@ -287,10 +287,10 @@ impl<A> Mutable<A> {
         state2.notify(true);
     }
 
-    pub fn set(&self, value: A) {
+    pub fn set<V: Into<A>>(&self, value: V) {
         let mut state = self.state().lock.write().unwrap();
 
-        state.value = value;
+        state.value = value.into();
 
         state.notify(true);
     }
@@ -321,7 +321,7 @@ impl<A> From<A> for Mutable<A> {
         Mutable(ReadOnlyMutable(Arc::new(MutableState {
             senders: AtomicUsize::new(1),
             lock: RwLock::new(MutableLockState {
-                value: value.into(),
+                value,
                 signals: vec![],
             }),
         })))
