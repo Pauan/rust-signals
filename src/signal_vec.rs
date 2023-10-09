@@ -3304,8 +3304,8 @@ mod mutable_vec {
 
         // TODO replace this with something else, like entry or IndexMut or whatever
         #[inline]
-        pub fn set(&mut self, index: usize, value: A) {
-            self.lock.set_copy(index, value)
+        pub fn set<V: Into<A>>(&mut self, index: usize, value: V) {
+            self.lock.set_copy(index, value.into())
         }
 
         #[inline]
