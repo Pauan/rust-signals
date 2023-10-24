@@ -5,7 +5,10 @@ use std::pin::Pin;
 use std::marker::Unpin;
 use std::ops::{Deref, DerefMut};
 // TODO use parking_lot ?
-use std::sync::{Arc, Weak, Mutex, RwLock, RwLockReadGuard, RwLockWriteGuard};
+use std::sync::{
+    Arc, Weak, Mutex, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard,
+    TryLockError, TryLockResult
+};
 // TODO use parking_lot ?
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::task::{Poll, Waker, Context};
@@ -165,16 +168,50 @@ impl<'a, A> Deref for MutableLockRef<'a, A> {
     }
 }
 
-
 #[repr(transparent)]
 pub struct ReadOnlyMutable<A>(Arc<MutableState<A>>);
 
 impl<A> ReadOnlyMutable<A> {
+
     // TODO return Result ?
     #[inline]
     pub fn lock_ref(&self) -> MutableLockRef<A> {
         MutableLockRef {
             lock: self.0.lock.read().unwrap(),
+        }
+    }
+
+    /// Attempts to acquire a read lock.
+    ///
+    /// If the access could not be granted at this time, then `Err` is returned.
+    /// Otherwise, an RAII guard is returned which will release the shared access
+    /// when it is dropped.
+    ///
+    /// This function does not block.
+    ///
+    /// This function does not provide any guarantees with respect to the ordering
+    /// of whether contentious readers or writers will acquire the lock first.
+    ///
+    /// # Errors
+    ///
+    /// This function will return the `Poisoned` error if the `ReadOnlyMutable`
+    //  is poisoned. A `ReadOnlyMutable` is poisoned whenever a writer panics
+    /// while holding an exclusive lock. `Poisoned` will only be returned if
+    /// the lock would have otherwise been acquired.
+    ///
+    /// This function will return the `WouldBlock` error if the
+    /// `ReadOnlyMutable` could not be acquired because it was already locked
+    /// exclusively.
+    #[inline]
+    pub fn try_lock_ref(&self) -> TryLockResult<MutableLockRef<A>> {
+        match self.0.lock.try_read() {
+            Ok(lock) => Ok(MutableLockRef { lock }),
+            Err(TryLockError::WouldBlock) => Err(TryLockError::WouldBlock),
+            Err(TryLockError::Poisoned(poison_error)) => {
+                let lock = poison_error.into_inner();
+                let poison_error = PoisonError::new(MutableLockRef { lock });
+                Err(TryLockError::Poisoned(poison_error))
+            }
         }
     }
 
@@ -186,6 +223,14 @@ impl<A> ReadOnlyMutable<A> {
         }
 
         signal
+    }
+
+    /** Obtain a signal that emits `()` whenever the underlying value is
+     *  changed.
+     *  The inner `RwLock` is not locked when polling this signal, so
+     *  polling this signal will never block. */ 
+    pub fn signal_changed(&self) -> ChangedSignal<A> {
+        ChangedSignal(self.signal_state())
     }
 
     #[inline]
@@ -313,6 +358,44 @@ impl<A> Mutable<A> {
             lock: self.state().lock.write().unwrap(),
         }
     }
+
+    /// Attempts to obtain a write lock.
+    ///
+    /// If the lock could not be acquired at this time, then `Err` is returned.
+    /// Otherwise, an RAII guard is returned which will release the lock when
+    /// it is dropped.
+    ///
+    /// This function does not block.
+    ///
+    /// This function does not provide any guarantees with respect to the ordering
+    /// of whether contentious readers or writers will acquire the lock first.
+    ///
+    /// # Errors
+    ///
+    /// This function will return the `Poisoned` error if the `Mutable` is
+    /// poisoned. A `Mutable` is poisoned whenever a writer panics while holding
+    /// an exclusive lock. `Poisoned` will only be returned if the lock would
+    /// have otherwise been acquired.
+    ///
+    /// This function will return the `WouldBlock` error if the `Mutable` could
+    /// not be acquired because it was already locked exclusively.
+    pub fn try_lock_mut(&self) -> TryLockResult<MutableLockMut<A>> {
+        match self.state().lock.try_write() {
+            Ok(lock) => Ok(MutableLockMut {
+                mutated: false,
+                lock,
+            }),
+            Err(TryLockError::WouldBlock) => Err(TryLockError::WouldBlock),
+            Err(TryLockError::Poisoned(poison_error)) => {
+                let lock = MutableLockMut {
+                    mutated: false,
+                    lock: poison_error.into_inner(),
+                };
+                let poison_error = PoisonError::new(lock);
+                Err(TryLockError::Poisoned(poison_error))
+            }
+        }
+    }
 }
 
 impl<A> From<A> for Mutable<A> {
@@ -401,6 +484,30 @@ impl<A> Drop for Mutable<A> {
                 // TODO is this necessary ?
                 lock.signals = vec![];
             }
+        }
+    }
+}
+
+/** A signal that emits `()` whenever the underlying value is changed.
+ *  The inner `RwLock` is not locked when polling this signal, so
+ *  polling this signal will never block. */
+// TODO remove it from signals when it's dropped
+#[derive(Debug)]
+#[repr(transparent)]
+#[must_use = "Signals do nothing unless polled"]
+pub struct ChangedSignal<A>(MutableSignalState<A>);
+
+impl<A> Signal for ChangedSignal<A> {
+    type Item = ();
+
+    fn poll_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<Self::Item>> {
+        if self.0.waker.is_changed() {
+            Poll::Ready(Some(()))
+        } else if self.0.state.senders.load(Ordering::SeqCst) == 0 {
+            Poll::Ready(None)
+        } else {
+            self.0.waker.set_waker(cx);
+            Poll::Pending
         }
     }
 }
