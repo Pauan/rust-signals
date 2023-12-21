@@ -99,6 +99,15 @@ impl<A> SignalMap for Pin<A>
 // TODO Seal this
 pub trait SignalMapExt: SignalMap {
     #[inline]
+    fn filter<F>(self, callback: F) -> FilterKey<Self, F>
+        where F: FnMut(&Self::Key) -> bool, Self: Sized, {
+        FilterKey {
+            signal: self,
+            callback,
+        }
+    }
+
+    #[inline]
     fn map_value<A, F>(self, callback: F) -> MapValue<Self, F>
         where F: FnMut(Self::Value) -> A,
               Self: Sized {
@@ -240,6 +249,71 @@ impl<A, B, F> SignalMap for MapValue<A, F>
         signal.poll_map_change(cx).map(|some| some.map(|change| change.map(|value| callback(value))))
     }
 }
+
+#[pin_project(project = FilterKeyProj)]
+#[derive(Debug)]
+#[must_use = "SignalMaps do nothing unless polled"]
+pub struct FilterKey<A, B> {
+    #[pin]
+    signal: A,
+    callback: B,
+}
+
+impl<A, F> SignalMap for crate::signal_map::FilterKey<A, F>
+    where A: SignalMap,
+          F: FnMut(&A::Key) -> bool {
+    type Key = A::Key;
+    type Value = A::Value;
+
+    // TODO should this inline ?
+    #[inline]
+    fn poll_map_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
+        let crate::signal_map::FilterKeyProj { signal, callback } = self.project();
+
+        let polled = signal.poll_map_change(cx);
+
+        match polled {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(polled_ready) => {
+                if let Some(polled_map_diff) = polled_ready {
+                    let maybe_out_diff = match polled_map_diff {
+                        MapDiff::Replace { entries } => {
+                            let entries = entries.into_iter().filter(|entry| callback(&entry.0)).collect::<Vec<_>>();
+                            Some(MapDiff::Replace { entries })
+                        }
+                        MapDiff::Insert { key, value } => {
+                            if callback(&key) {
+                                Some(MapDiff::Insert { key, value })
+                            } else { None }
+                        }
+                        MapDiff::Update { key, value } => {
+                            if callback(&key) {
+                                Some(MapDiff::Update { key, value })
+                            } else {
+                                None
+                            }
+                        }
+                        MapDiff::Remove { key } => {
+                            Some(MapDiff::Remove { key })
+                        }
+                        MapDiff::Clear {} => {
+                            Some(MapDiff::Clear {})
+                        }
+                    };
+
+                    if maybe_out_diff.is_some() {
+                        Poll::Ready(maybe_out_diff)
+                    } else {
+                        Poll::Pending
+                    }
+                } else {
+                    Poll::Ready(None)
+                }
+            }
+        }
+    }
+}
+
 
 // This is an optimization to allow a SignalMap to efficiently "return" multiple MapDiff
 // TODO can this be made more efficient ?
