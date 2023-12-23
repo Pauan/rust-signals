@@ -1,9 +1,10 @@
 use crate::signal::Signal;
 use std::cmp::Ord;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::marker::Unpin;
 use std::future::Future;
+use std::hash::Hash;
 use std::task::{Poll, Context};
 use futures_core::Stream;
 use futures_util::stream;
@@ -98,6 +99,16 @@ impl<A> SignalMap for Pin<A>
 
 // TODO Seal this
 pub trait SignalMapExt: SignalMap {
+    #[inline]
+    fn filter<F>(self, callback: F) -> Filter<Self, F>
+        where F: FnMut(&Self::Key, &Self::Value) -> bool, Self: Sized, {
+        Filter {
+            signal: self,
+            callback,
+            forwarded_keys: Default::default(),
+        }
+    }
+
     #[inline]
     fn map_value<A, F>(self, callback: F) -> MapValue<Self, F>
         where F: FnMut(Self::Value) -> A,
@@ -240,6 +251,102 @@ impl<A, B, F> SignalMap for MapValue<A, F>
         signal.poll_map_change(cx).map(|some| some.map(|change| change.map(|value| callback(value))))
     }
 }
+
+#[pin_project(project = FilterKeyProj)]
+#[derive(Debug)]
+#[must_use = "SignalMaps do nothing unless polled"]
+pub struct Filter<A: SignalMap, B> {
+    #[pin]
+    signal: A,
+    callback: B,
+    forwarded_keys: HashSet<A::Key>,
+}
+
+impl<A, F> SignalMap for crate::signal_map::Filter<A, F>
+    where A: SignalMap,
+          A::Key: Clone + Eq + Hash,
+          F: FnMut(&A::Key, &A::Value) -> bool {
+    type Key = A::Key;
+    type Value = A::Value;
+
+    // TODO should this inline ?
+    #[inline]
+    fn poll_map_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
+        let crate::signal_map::FilterKeyProj { signal, callback, forwarded_keys } = self.project();
+
+        let polled = signal.poll_map_change(cx);
+
+        match polled {
+            Poll::Pending => Poll::Pending,
+            Poll::Ready(polled_ready) => {
+                if let Some(polled_map_diff) = polled_ready {
+                    let maybe_out_diff = match polled_map_diff {
+                        MapDiff::Replace { entries } => {
+                            forwarded_keys.clear();
+
+                            let entries = entries.into_iter().filter(|entry| callback(&entry.0, &entry.1)).collect::<Vec<_>>();
+
+                            entries.iter().for_each(|(k, _v)| {
+                                forwarded_keys.insert((*k).clone());
+                            });
+
+                            Some(MapDiff::Replace { entries })
+                        }
+                        MapDiff::Insert { key, value } => {
+                            if callback(&key, &value) {
+                                forwarded_keys.insert(key.clone());
+
+                                Some(MapDiff::Insert { key, value })
+                            } else {
+                                if forwarded_keys.remove(&key) {
+                                    Some(MapDiff::Remove { key })
+                                } else {
+                                    None
+                                }
+                            }
+                        }
+                        MapDiff::Update { key, value } => {
+                            if callback(&key, &value) {
+                                forwarded_keys.insert(key.clone());
+
+                                Some(MapDiff::Update { key, value })
+                            } else {
+                                if forwarded_keys.remove(&key) {
+                                    Some(MapDiff::Remove { key })
+                                } else {
+                                    None
+                                }
+                            }
+                        }
+                        MapDiff::Remove { key } => {
+                            if forwarded_keys.remove(&key) {
+                                println!("removing key");
+                                Some(MapDiff::Remove { key })
+                            } else {
+                                println!("not removing key");
+                                None
+                            }
+                        }
+                        MapDiff::Clear {} => {
+                            forwarded_keys.clear();
+
+                            Some(MapDiff::Clear {})
+                        }
+                    };
+
+                    if maybe_out_diff.is_some() {
+                        Poll::Ready(maybe_out_diff)
+                    } else {
+                        Poll::Pending
+                    }
+                } else {
+                    Poll::Ready(None)
+                }
+            }
+        }
+    }
+}
+
 
 // This is an optimization to allow a SignalMap to efficiently "return" multiple MapDiff
 // TODO can this be made more efficient ?
