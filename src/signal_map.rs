@@ -1,9 +1,10 @@
 use crate::signal::Signal;
 use std::cmp::Ord;
-use std::collections::{BTreeMap, VecDeque};
+use std::collections::{BTreeMap, HashSet, VecDeque};
 use std::pin::Pin;
 use std::marker::Unpin;
 use std::future::Future;
+use std::hash::Hash;
 use std::task::{Poll, Context};
 use futures_core::Stream;
 use futures_util::stream;
@@ -99,11 +100,12 @@ impl<A> SignalMap for Pin<A>
 // TODO Seal this
 pub trait SignalMapExt: SignalMap {
     #[inline]
-    fn filter<F>(self, callback: F) -> FilterKey<Self, F>
-        where F: FnMut(&Self::Key) -> bool, Self: Sized, {
-        FilterKey {
+    fn filter<F>(self, callback: F) -> Filter<Self, F>
+        where F: FnMut(&Self::Key, &Self::Value) -> bool, Self: Sized, {
+        Filter {
             signal: self,
             callback,
+            forwarded_keys: Default::default(),
         }
     }
 
@@ -253,22 +255,24 @@ impl<A, B, F> SignalMap for MapValue<A, F>
 #[pin_project(project = FilterKeyProj)]
 #[derive(Debug)]
 #[must_use = "SignalMaps do nothing unless polled"]
-pub struct FilterKey<A, B> {
+pub struct Filter<A: SignalMap, B> {
     #[pin]
     signal: A,
     callback: B,
+    forwarded_keys: HashSet<A::Key>,
 }
 
-impl<A, F> SignalMap for crate::signal_map::FilterKey<A, F>
+impl<A, F> SignalMap for crate::signal_map::Filter<A, F>
     where A: SignalMap,
-          F: FnMut(&A::Key) -> bool {
+          A::Key: Clone + Eq + Hash,
+          F: FnMut(&A::Key, &A::Value) -> bool {
     type Key = A::Key;
     type Value = A::Value;
 
     // TODO should this inline ?
     #[inline]
     fn poll_map_change(self: Pin<&mut Self>, cx: &mut Context) -> Poll<Option<MapDiff<Self::Key, Self::Value>>> {
-        let crate::signal_map::FilterKeyProj { signal, callback } = self.project();
+        let crate::signal_map::FilterKeyProj { signal, callback, forwarded_keys } = self.project();
 
         let polled = signal.poll_map_change(cx);
 
@@ -278,25 +282,54 @@ impl<A, F> SignalMap for crate::signal_map::FilterKey<A, F>
                 if let Some(polled_map_diff) = polled_ready {
                     let maybe_out_diff = match polled_map_diff {
                         MapDiff::Replace { entries } => {
-                            let entries = entries.into_iter().filter(|entry| callback(&entry.0)).collect::<Vec<_>>();
+                            forwarded_keys.clear();
+
+                            let entries = entries.into_iter().filter(|entry| callback(&entry.0, &entry.1)).collect::<Vec<_>>();
+
+                            entries.iter().for_each(|(k, _v)| {
+                                forwarded_keys.insert((*k).clone());
+                            });
+
                             Some(MapDiff::Replace { entries })
                         }
                         MapDiff::Insert { key, value } => {
-                            if callback(&key) {
+                            if callback(&key, &value) {
+                                forwarded_keys.insert(key.clone());
+
                                 Some(MapDiff::Insert { key, value })
-                            } else { None }
+                            } else {
+                                if forwarded_keys.remove(&key) {
+                                    Some(MapDiff::Remove { key })
+                                } else {
+                                    None
+                                }
+                            }
                         }
                         MapDiff::Update { key, value } => {
-                            if callback(&key) {
+                            if callback(&key, &value) {
+                                forwarded_keys.insert(key.clone());
+
                                 Some(MapDiff::Update { key, value })
                             } else {
-                                None
+                                if forwarded_keys.remove(&key) {
+                                    Some(MapDiff::Remove { key })
+                                } else {
+                                    None
+                                }
                             }
                         }
                         MapDiff::Remove { key } => {
-                            Some(MapDiff::Remove { key })
+                            if forwarded_keys.remove(&key) {
+                                println!("removing key");
+                                Some(MapDiff::Remove { key })
+                            } else {
+                                println!("not removing key");
+                                None
+                            }
                         }
                         MapDiff::Clear {} => {
+                            forwarded_keys.clear();
+
                             Some(MapDiff::Clear {})
                         }
                     };

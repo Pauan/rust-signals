@@ -243,7 +243,7 @@ async fn test_filter_map() {
     use futures_util::StreamExt;
 
     let input = MutableBTreeMap::from([(1, "1".to_string()), (2, "2".to_string()), (3, "3".to_string())]);
-    let output_signal = input.signal_map_cloned().filter(|v| v % 2 == 0);
+    let output_signal = input.signal_map_cloned().filter(|key, _value| key % 2 == 0);
 
     let output: MutableBTreeMap<i32, String> = MutableBTreeMap::new();
     let output_cloned = output.clone();
