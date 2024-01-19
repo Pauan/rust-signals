@@ -1041,8 +1041,8 @@ impl<A> FlattenState<A> where A: SignalVec {
 
                     match diff {
                         VecDiff::Replace { values } => {
-                            for index in 0..old_len {
-                                pending.push(VecDiff::RemoveAt { index: prev_len + index });
+                            for _ in 0..old_len {
+                                pending.push(VecDiff::RemoveAt { index: prev_len });
                             }
 
                             for (index, value) in values.into_iter().enumerate() {
@@ -1068,8 +1068,8 @@ impl<A> FlattenState<A> where A: SignalVec {
                             pending.push(VecDiff::RemoveAt { index: prev_len + (old_len - 1) });
                         },
                         VecDiff::Clear {} => {
-                            for index in 0..old_len {
-                                pending.push(VecDiff::RemoveAt { index: prev_len + index });
+                            for _ in 0..old_len {
+                                pending.push(VecDiff::RemoveAt { index: prev_len });
                             }
                         },
                     }
@@ -1166,7 +1166,7 @@ impl<A> SignalVec for Flatten<A>
                         },
                     }
 
-                    false
+                    continue;
                 },
                 Some(Poll::Ready(None)) => {
                     this.signal.set(None);
