@@ -755,17 +755,12 @@ fn flatten() {
                 util::Source::new(vec![
                     Poll::Ready(VecDiff::Replace { values: vec![0, 1, 2, 3, 4, 5] }),
                     Poll::Pending,
-                    Poll::Ready(VecDiff::Push { value: 15 }),
+                    Poll::Ready(VecDiff::Replace { values: vec![2, 3, 4] }),
                 ]),
                 util::Source::new(vec![
                     Poll::Ready(VecDiff::Replace { values: vec![6, 7, 8, 9] }),
                     Poll::Pending,
-                    Poll::Ready(VecDiff::Push { value: 16 }),
-                ]),
-                util::Source::new(vec![
-                    Poll::Ready(VecDiff::Replace { values: vec![10, 11, 12, 13, 14] }),
-                    Poll::Pending,
-                    Poll::Ready(VecDiff::Push { value: 17 }),
+                    Poll::Ready(VecDiff::Clear {}),
                 ]),
             ],
         }),
@@ -775,11 +770,21 @@ fn flatten() {
 
     util::assert_signal_vec_eq(output, vec![
         Poll::Ready(Some(VecDiff::Replace {
-            values: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14],
+            values: vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9],
         })),
-        Poll::Ready(Some(VecDiff::InsertAt { index: 6, value: 15 })),
-        Poll::Ready(Some(VecDiff::InsertAt { index: 11, value: 16 })),
-        Poll::Ready(Some(VecDiff::InsertAt { index: 17, value: 17 })),
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 5 })),
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 4 })),
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 3 })),
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 2 })),
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 1 })),
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 0 })),
+        Poll::Ready(Some(VecDiff::InsertAt { index: 0, value: 2 })),
+        Poll::Ready(Some(VecDiff::InsertAt { index: 1, value: 3 })),
+        Poll::Ready(Some(VecDiff::InsertAt { index: 2, value: 4 })),
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 6 })),
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 5 })),
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 4 })),
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 3 })),
         Poll::Ready(None),
     ]);
 }
