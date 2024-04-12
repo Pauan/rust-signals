@@ -1166,7 +1166,7 @@ impl<A> SignalVec for Flatten<A>
                         },
                     }
 
-                    false
+                    continue;
                 },
                 Some(Poll::Ready(None)) => {
                     this.signal.set(None);

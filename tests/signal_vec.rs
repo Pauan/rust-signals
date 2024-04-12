@@ -788,3 +788,27 @@ fn flatten() {
         Poll::Ready(None),
     ]);
 }
+
+
+#[test]
+fn flatten_empty() {
+    let input = util::Source::new(vec![
+        Poll::Pending,
+        Poll::Ready(VecDiff::Push {
+            value: util::Source::new(vec![]),
+        }),
+        Poll::Ready(VecDiff::Push {
+            value: util::Source::new(vec![
+                Poll::Ready(VecDiff::Replace { values: vec![42] }),
+            ]),
+        }),
+    ]);
+
+    let output = input.flatten();
+
+    util::assert_signal_vec_eq(output, vec![
+        Poll::Pending,
+        Poll::Ready(Some(VecDiff::InsertAt { index: 0, value: 42 })),
+        Poll::Ready(None),
+    ]);
+}
