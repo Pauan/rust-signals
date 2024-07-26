@@ -1,3 +1,7 @@
+## 0.3.34 - (2024-07-25)
+* Fixing bug with flatten indices ([Issue 79](https://github.com/Pauan/rust-signals/issues/79)).
+* Fixing deadlock bug with flatten ([Issue 81](https://github.com/Pauan/rust-signals/issues/81)).
+
 ## 0.3.33 - (2023-09-07)
 * Adding `From` impls for the `Mutable*` types.
 * Adding in `SignalExt::stop_if` method.
