@@ -35,39 +35,11 @@ macro_rules! __internal_value_mut {
 
 #[doc(hidden)]
 #[macro_export]
-macro_rules! __internal_identifier {
-    ($gensym:ident, $macro:ident, { $($bindings:tt)* }, let $name:pat = $value:expr, $($rest:tt)+) => {{
-        let mut $gensym = $crate::internal::MapRef1::new($value);
-
-        $crate::__internal_map!($macro, { $($bindings)* $gensym = $name, }, $($rest)+)
-    }};
-
-    ($gensym:ident, $macro:ident, { $($bindings:tt)* }, let $name:pat = $value:expr => $($rest:tt)+) => {{
-        let mut $gensym = $crate::internal::MapRef1::new($value);
-
-        $crate::__internal_map!($macro, { $($bindings)* $gensym = $name, }, => $($rest)+)
-    }};
-
-    ($gensym:ident, $macro:ident, { $($bindings:tt)* }, $name:ident, $($rest:tt)+) => {{
-        let mut $gensym = $crate::internal::MapRef1::new($name);
-
-        $crate::__internal_map!($macro, { $($bindings)* $gensym = $name, }, $($rest)+)
-    }};
-
-    ($gensym:ident, $macro:ident, { $($bindings:tt)* }, $name:ident => $($rest:tt)+) => {{
-        let mut $gensym = $crate::internal::MapRef1::new($name);
-
-        $crate::__internal_map!($macro, { $($bindings)* $gensym = $name, }, => $($rest)+)
-    }};
-}
-
-#[doc(hidden)]
-#[macro_export]
 macro_rules! __internal_map {
     // This is only included for backwards compatibility
     // TODO remove in next major version
     ($macro:ident, { $($bindings:tt)* }, => move $f:expr) => {
-        $crate::__internal_map!($macro, { $($bindings)* }, => $f)
+        $crate::__internal_map!{$macro, { $($bindings)* }, => $f}
     };
 
     ($macro:ident, { $($bindings:tt)* }, => $f:expr) => {
@@ -90,8 +62,28 @@ macro_rules! __internal_map {
         })
     };
 
-    ($($rest:tt)*) => {
-        $crate::__internal_gensym!($crate::__internal_identifier!($($rest)*))
+    ($macro:ident, { $($bindings:tt)* }, let $name:pat = $value:expr, $($rest:tt)+) => {
+        let mut signal = $crate::internal::MapRef1::new($value);
+
+        $crate::__internal_map!{$macro, { $($bindings)* signal = $name, }, $($rest)+}
+    };
+
+    ($macro:ident, { $($bindings:tt)* }, let $name:pat = $value:expr => $($rest:tt)+) => {
+        let mut signal = $crate::internal::MapRef1::new($value);
+
+        $crate::__internal_map!{$macro, { $($bindings)* signal = $name, }, => $($rest)+}
+    };
+
+    ($macro:ident, { $($bindings:tt)* }, $name:ident, $($rest:tt)+) => {
+        let mut $name = $crate::internal::MapRef1::new($name);
+
+        $crate::__internal_map!{$macro, { $($bindings)* $name = $name, }, $($rest)+}
+    };
+
+    ($macro:ident, { $($bindings:tt)* }, $name:ident => $($rest:tt)+) => {
+        let mut $name = $crate::internal::MapRef1::new($name);
+
+        $crate::__internal_map!{$macro, { $($bindings)* $name = $name, }, => $($rest)+}
     };
 }
 
@@ -103,9 +95,9 @@ macro_rules! __internal_map {
 /// `map_ref` instead.
 #[macro_export]
 macro_rules! map_mut {
-    ($($input:tt)*) => {
-        $crate::__internal_map!(__internal_value_mut, {}, $($input)*)
-    };
+    ($($input:tt)*) => {{
+        $crate::__internal_map!{__internal_value_mut, {}, $($input)*}
+    }};
 }
 
 
@@ -302,7 +294,7 @@ macro_rules! map_mut {
 /// number of Signals. However, polling is ***very*** fast.
 #[macro_export]
 macro_rules! map_ref {
-    ($($input:tt)*) => {
-        $crate::__internal_map!(__internal_value_ref, {}, $($input)*)
-    };
+    ($($input:tt)*) => {{
+        $crate::__internal_map!{__internal_value_ref, {}, $($input)*}
+    }};
 }

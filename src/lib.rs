@@ -14,9 +14,6 @@ extern crate futures_executor;
 #[macro_use]
 pub mod internal;
 
-#[doc(hidden)]
-pub use gensym::gensym as __internal_gensym;
-
 pub mod signal;
 pub mod signal_vec;
 pub mod signal_map;
