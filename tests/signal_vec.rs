@@ -812,3 +812,162 @@ fn flatten_empty() {
         Poll::Ready(None),
     ]);
 }
+
+#[test]
+fn flatten_remove_immediate() {
+    let input = util::Source::new(vec![
+        Poll::Pending,
+        Poll::Ready(VecDiff::Push {
+            value: util::Source::new(vec![
+                Poll::Ready(VecDiff::Replace { values: vec![42] }),
+            ]),
+        }),
+        Poll::Ready(VecDiff::RemoveAt { index: 0 }),
+    ]);
+
+    let output = input.flatten();
+
+    util::assert_signal_vec_eq(output, vec![
+        Poll::Pending,
+        Poll::Ready(None),
+    ]);
+}
+
+#[test]
+fn flatten_remove_delayed() {
+    let input = util::Source::new(vec![
+        Poll::Pending,
+        Poll::Ready(VecDiff::Push {
+            value: util::Source::new(vec![
+                Poll::Ready(VecDiff::Replace { values: vec![42] }),
+            ]),
+        }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::RemoveAt { index: 0 }),
+    ]);
+
+    let output = input.flatten();
+
+    util::assert_signal_vec_eq(output, vec![
+        Poll::Pending,
+        Poll::Ready(Some(VecDiff::InsertAt { index: 0, value: 42 })),
+        Poll::Ready(Some(VecDiff::RemoveAt { index: 0 })),
+        Poll::Ready(None),
+    ]);
+}
+
+#[test]
+fn flatten_update_inner() {
+    let input = util::Source::new(vec![
+        Poll::Pending,
+        Poll::Ready(VecDiff::Push {
+            value: util::Source::new(vec![Poll::Ready(VecDiff::Replace { values: vec![42] })]),
+        }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::UpdateAt {
+            index: 0,
+            value: util::Source::new(vec![Poll::Ready(VecDiff::Replace { values: vec![43] })]),
+        }),
+    ]);
+
+    let output = input.flatten();
+
+    util::assert_signal_vec_eq(
+        output,
+        vec![
+            Poll::Pending,
+            Poll::Ready(Some(VecDiff::InsertAt { index: 0, value: 42 })),
+            Poll::Ready(Some(VecDiff::RemoveAt { index: 0 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 0, value: 43 })),
+            Poll::Ready(None),
+        ],
+    );
+}
+
+#[test]
+fn flatten_move_up() {
+    let input = util::Source::new(vec![
+        Poll::Pending,
+        Poll::Ready(VecDiff::Push {
+            value: util::Source::new(vec![Poll::Ready(VecDiff::Replace { values: vec![2, 3, 4] })]),
+        }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::Push {
+            value: util::Source::new(vec![Poll::Ready(VecDiff::Replace { values: vec![12, 13, 14] })]),
+        }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::Push {
+            value: util::Source::new(vec![Poll::Ready(VecDiff::Replace { values: vec![22, 23, 24] })]),
+        }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::Move {
+            old_index: 0, new_index: 2,
+        }),
+    ]);
+
+    let output = input.flatten();
+
+    util::assert_signal_vec_eq(
+        output,
+        vec![
+            Poll::Pending,
+            Poll::Ready(Some(VecDiff::InsertAt { index: 0, value: 2 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 1, value: 3 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 2, value: 4 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 3, value: 12 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 4, value: 13 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 5, value: 14 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 6, value: 22 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 7, value: 23 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 8, value: 24 })),
+            Poll::Ready(Some(VecDiff::Move { old_index: 0, new_index: 8 })),
+            Poll::Ready(Some(VecDiff::Move { old_index: 0, new_index: 8 })),
+            Poll::Ready(Some(VecDiff::Move { old_index: 0, new_index: 8 })),
+            Poll::Ready(None),
+        ],
+    );
+}
+
+#[test]
+fn flatten_move_down() {
+    let input = util::Source::new(vec![
+        Poll::Pending,
+        Poll::Ready(VecDiff::Push {
+            value: util::Source::new(vec![Poll::Ready(VecDiff::Replace { values: vec![2, 3, 4] })]),
+        }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::Push {
+            value: util::Source::new(vec![Poll::Ready(VecDiff::Replace { values: vec![12, 13, 14] })]),
+        }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::Push {
+            value: util::Source::new(vec![Poll::Ready(VecDiff::Replace { values: vec![22, 23, 24] })]),
+        }),
+        Poll::Pending,
+        Poll::Ready(VecDiff::Move {
+            old_index: 2, new_index: 0,
+        }),
+    ]);
+
+    let output = input.flatten();
+
+    util::assert_signal_vec_eq(
+        output,
+        vec![
+            Poll::Pending,
+            Poll::Ready(Some(VecDiff::InsertAt { index: 0, value: 2 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 1, value: 3 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 2, value: 4 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 3, value: 12 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 4, value: 13 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 5, value: 14 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 6, value: 22 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 7, value: 23 })),
+            Poll::Ready(Some(VecDiff::InsertAt { index: 8, value: 24 })),
+            Poll::Ready(Some(VecDiff::Move { old_index: 8, new_index: 0 })),
+            Poll::Ready(Some(VecDiff::Move { old_index: 8, new_index: 0 })),
+            Poll::Ready(Some(VecDiff::Move { old_index: 8, new_index: 0 })),
+            Poll::Ready(None),
+        ],
+    );
+}

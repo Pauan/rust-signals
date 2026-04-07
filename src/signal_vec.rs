@@ -1113,6 +1113,46 @@ impl<A> std::fmt::Debug for Flatten<A>
     }
 }
 
+fn fill_removals<A>(
+    inner: &[FlattenState<A>],
+    index: usize,
+    pending: &mut PendingBuilder<VecDiff<A::Item>>,
+) where
+    A: SignalVec,
+{
+    let removed_len = inner[index].len;
+    let prev_len: usize = inner[..index].iter().map(|state| state.len).sum();
+    for index in (0..removed_len).rev() {
+        pending.push(VecDiff::RemoveAt {
+            index: prev_len + index,
+        });
+    }
+}
+
+fn fill_moves<A>(
+    inner: &[FlattenState<A>],
+    old_index: usize,
+    new_index: usize,
+    pending: &mut PendingBuilder<VecDiff<A::Item>>,
+) where
+    A: SignalVec,
+{
+    let moved_len = inner[old_index].len;
+    let old_prev_len: usize = inner[..old_index].iter().map(|state| state.len).sum();
+    let new_prev_len: usize = inner[..new_index].iter().map(|state| state.len).sum();
+
+    if new_index < old_index {
+        (0..moved_len).for_each(|_| pending.push(VecDiff::Move {
+            old_index: old_prev_len + moved_len - 1,
+            new_index: new_prev_len,
+        }));
+    } else {
+        (0..moved_len).for_each(|_| pending.push(VecDiff::Move {
+            old_index: old_prev_len,
+            new_index: new_prev_len + moved_len - 1,
+        }));
+    }}
+
 impl<A> SignalVec for Flatten<A>
     where A: SignalVec,
           A::Item: SignalVec {
@@ -1145,20 +1185,26 @@ impl<A> SignalVec for Flatten<A>
                             this.inner.insert(index, FlattenState::new(value));
                         },
                         VecDiff::UpdateAt { index, value } => {
+                            fill_removals(&this.inner, index, &mut pending);
                             this.inner[index] = FlattenState::new(value);
                         },
                         VecDiff::RemoveAt { index } => {
+                            fill_removals(&this.inner, index, &mut pending);
                             this.inner.remove(index);
                         },
                         VecDiff::Move { old_index, new_index } => {
-                            let value = this.inner.remove(old_index);
-                            this.inner.insert(new_index, value);
+                            if old_index != new_index {
+                                fill_moves(&this.inner, old_index, new_index, &mut pending);
+                                let value = this.inner.remove(old_index);
+                                this.inner.insert(new_index, value);
+                            }
                         },
                         VecDiff::Push { value } => {
                             this.inner.push(FlattenState::new(value));
                         },
                         VecDiff::Pop {} => {
-                            this.inner.pop().unwrap();
+                            let len = this.inner.pop().unwrap().len;
+                            (0..len).for_each(|_| pending.push(VecDiff::Pop {}));
                         },
                         VecDiff::Clear {} => {
                             this.inner.clear();
@@ -1207,7 +1253,6 @@ impl<A> SignalVec for Flatten<A>
         }
     }
 }
-
 
 #[pin_project]
 #[must_use = "Signals do nothing unless polled"]
