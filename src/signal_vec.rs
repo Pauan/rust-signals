@@ -5,6 +5,7 @@ use std::marker::Unpin;
 use std::cmp::Ordering;
 use std::future::Future;
 use std::task::{Poll, Context};
+use bit_vec::BitVec;
 use futures_core::Stream;
 use futures_util::stream;
 use futures_util::stream::StreamExt;
@@ -323,7 +324,7 @@ pub trait SignalVecExt: SignalVec {
         where F: FnMut(&Self::Item) -> bool,
               Self: Sized {
         Filter {
-            indexes: vec![],
+            indexes: BitVec::new(),
             signal: self,
             callback,
         }
@@ -347,7 +348,7 @@ pub trait SignalVecExt: SignalVec {
         where F: FnMut(Self::Item) -> Option<A>,
               Self: Sized {
         FilterMap {
-            indexes: vec![],
+            indexes: BitVec::new(),
             signal: self,
             callback,
         }
@@ -2007,11 +2008,11 @@ impl<A: SignalVec> Stream for SignalVecStream<A> {
 }
 
 
-fn find_index(indexes: &[bool], index: usize) -> usize {
-    indexes[0..index].into_iter().filter(|x| **x).count()
+fn find_index(indexes: &BitVec, index: usize) -> usize {
+    indexes.iter().take(index).filter(|x| *x).count()
 }
 
-fn poll_filter_map<A, S, F>(indexes: &mut Vec<bool>, mut signal: Pin<&mut S>, cx: &mut Context, mut callback: F) -> Poll<Option<VecDiff<A>>>
+fn poll_filter_map<A, S, F>(indexes: &mut BitVec, mut signal: Pin<&mut S>, cx: &mut Context, mut callback: F) -> Poll<Option<VecDiff<A>>>
     where S: SignalVec,
           F: FnMut(S::Item) -> Option<A> {
 
@@ -2021,7 +2022,7 @@ fn poll_filter_map<A, S, F>(indexes: &mut Vec<bool>, mut signal: Pin<&mut S>, cx
             Poll::Ready(None) => Poll::Ready(None),
             Poll::Ready(Some(change)) => match change {
                 VecDiff::Replace { values } => {
-                    *indexes = Vec::with_capacity(values.len());
+                    *indexes = BitVec::with_capacity(values.len());
 
                     Poll::Ready(Some(VecDiff::Replace {
                         values: values.into_iter().filter_map(|value| {
@@ -2049,13 +2050,13 @@ fn poll_filter_map<A, S, F>(indexes: &mut Vec<bool>, mut signal: Pin<&mut S>, cx
                             Poll::Ready(Some(VecDiff::UpdateAt { index: find_index(indexes, index), value }))
 
                         } else {
-                            indexes[index] = true;
+                            indexes.set(index, true);
                             Poll::Ready(Some(VecDiff::InsertAt { index: find_index(indexes, index), value }))
                         }
 
                     } else {
                         if indexes[index] {
-                            indexes[index] = false;
+                            indexes.set(index, false);
                             Poll::Ready(Some(VecDiff::RemoveAt { index: find_index(indexes, index) }))
 
                         } else {
@@ -2110,7 +2111,7 @@ fn poll_filter_map<A, S, F>(indexes: &mut Vec<bool>, mut signal: Pin<&mut S>, cx
                 },
 
                 VecDiff::Clear {} => {
-                    indexes.clear();
+                    indexes.fill(false);
                     Poll::Ready(Some(VecDiff::Clear {}))
                 },
             },
@@ -2123,8 +2124,7 @@ fn poll_filter_map<A, S, F>(indexes: &mut Vec<bool>, mut signal: Pin<&mut S>, cx
 #[derive(Debug)]
 #[must_use = "SignalVecs do nothing unless polled"]
 pub struct Filter<A, B> {
-    // TODO use a bit vec for smaller size
-    indexes: Vec<bool>,
+    indexes: BitVec,
     #[pin]
     signal: A,
     callback: B,
@@ -2153,8 +2153,7 @@ impl<A, F> SignalVec for Filter<A, F>
 #[derive(Debug)]
 #[must_use = "SignalVecs do nothing unless polled"]
 pub struct FilterMap<S, F> {
-    // TODO use a bit vec for smaller size
-    indexes: Vec<bool>,
+    indexes: BitVec,
     #[pin]
     signal: S,
     callback: F,
