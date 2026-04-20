@@ -566,6 +566,12 @@ pub trait SignalVecExt: SignalVec {
     }
 
     #[inline]
+    fn boxed_sync<'a>(self) -> Pin<Box<dyn SignalVec<Item = Self::Item> + Send + Sync + 'a>>
+        where Self: Sized + Send + Sync + 'a {
+        Box::pin(self)
+    }
+
+    #[inline]
     fn boxed_local<'a>(self) -> Pin<Box<dyn SignalVec<Item = Self::Item> + 'a>>
         where Self: Sized + 'a {
         Box::pin(self)
@@ -581,6 +587,9 @@ impl<T: ?Sized> SignalVecExt for T where T: SignalVec {}
 /// This is useful if you don't know the static type, or if you need
 /// indirection.
 pub type BoxSignalVec<'a, T> = Pin<Box<dyn SignalVec<Item = T> + Send + 'a>>;
+
+/// Same as [`BoxSignalVec`], but with a `Sync` requirement.
+pub type SyncBoxSignalVec<'a, T> = Pin<Box<dyn SignalVec<Item = T> + Send + Sync + 'a>>;
 
 /// Same as [`BoxSignalVec`], but without the `Send` requirement.
 pub type LocalBoxSignalVec<'a, T> = Pin<Box<dyn SignalVec<Item = T> + 'a>>;

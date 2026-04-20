@@ -160,6 +160,12 @@ pub trait SignalMapExt: SignalMap {
     }
 
     #[inline]
+    fn boxed_sync<'a>(self) -> Pin<Box<dyn SignalMap<Key = Self::Key, Value = Self::Value> + Send + Sync + 'a>>
+        where Self: Sized + Send + Sync + 'a {
+        Box::pin(self)
+    }
+
+    #[inline]
     fn boxed_local<'a>(self) -> Pin<Box<dyn SignalMap<Key = Self::Key, Value = Self::Value> + 'a>>
         where Self: Sized + 'a {
         Box::pin(self)
@@ -175,6 +181,9 @@ impl<T: ?Sized> SignalMapExt for T where T: SignalMap {}
 /// This is useful if you don't know the static type, or if you need
 /// indirection.
 pub type BoxSignalMap<'a, Key, Value> = Pin<Box<dyn SignalMap<Key = Key, Value = Value> + Send + 'a>>;
+
+/// Same as [`BoxSignalMap`], but with a `Sync` requirement.
+pub type SyncBoxSignalMap<'a, Key, Value> = Pin<Box<dyn SignalMap<Key = Key, Value = Value> + Send + Sync + 'a>>;
 
 /// Same as [`BoxSignalMap`], but without the `Send` requirement.
 pub type LocalBoxSignalMap<'a, Key, Value> = Pin<Box<dyn SignalMap<Key = Key, Value = Value> + 'a>>;
