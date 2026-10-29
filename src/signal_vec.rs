@@ -12,6 +12,11 @@ use pin_project::pin_project;
 
 use crate::signal::{Signal, Mutable, ReadOnlyMutable};
 
+mod group_by_key;
+pub use self::group_by_key::{GroupByKey, GroupedVec};
+mod group_by_keys_signal;
+pub use self::group_by_keys_signal::GroupByKeysSignal;
+
 
 // TODO make this non-exhaustive
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -152,6 +157,66 @@ impl<A> SignalVec for Pin<A>
 
 // TODO Seal this
 pub trait SignalVecExt: SignalVec {
+    /// Groups each item under every distinct key supplied by its signal.
+    ///
+    /// Groups are sorted by key and members retain source order. Key lists are
+    /// sets: duplicates have no effect and an empty list hides the item. Changes
+    /// to a key set preserve members common to both sets, including consumers
+    /// created by `map`. Source updates replace the item's signal and value;
+    /// source replacements preserve groups shared with the new initial keys.
+    ///
+    /// The factory runs once per introduced or updated item. Only polling the
+    /// outer stream drives inputs, with ready source edits preceding key changes.
+    /// Removed items' signals are cancelled. Completed signals keep their last
+    /// memberships, and source completion waits for remaining key signals.
+    /// Member streams independently drain queued changes before ending.
+    ///
+    /// ```
+    /// use futures_signals::signal;
+    /// use futures_signals::signal_vec::{always, SignalVecExt};
+    /// let groups = always(vec![3, 2, 1]).group_by_keys_signal(|value| {
+    ///     signal::always(vec![value % 2, 10])
+    /// });
+    /// // Each item belongs to its parity group and to group 10.
+    /// # drop(groups);
+    /// ```
+    #[inline]
+    fn group_by_keys_signal<K, S, F>(self, callback: F) -> GroupByKeysSignal<Self, S, K, F>
+        where Self: Sized,
+              Self::Item: Clone,
+              K: Ord + Clone,
+              S: Signal<Item = Vec<K>>,
+              F: FnMut(&Self::Item) -> S {
+        GroupByKeysSignal::new(self, callback)
+    }
+
+    /// Groups values by a key, keeping groups sorted and members in source order.
+    ///
+    /// The callback borrows each introduced or updated value exactly once. Items
+    /// need not implement `Clone`. Individual edits preserve unchanged members;
+    /// keys surviving a `Replace` retain their group streams, though their
+    /// members may be replaced. Empty groups are removed and their streams end.
+    /// A key introduced again receives a new stream.
+    ///
+    /// Only polling the outer stream drives the source. Each member stream
+    /// independently drains the resulting changes. When the source ends or the
+    /// outer stream is dropped, member streams drain their queues and then end.
+    /// Dropping a member stream does not stop the other groups.
+    ///
+    /// ```
+    /// use futures_signals::signal_vec::{always, SignalVecExt};
+    /// let groups = always(vec![3, 2, 1]).group_by_key(|value| value % 2);
+    /// // Group 0 contains [2]; group 1 contains [3, 1].
+    /// # drop(groups);
+    /// ```
+    #[inline]
+    fn group_by_key<K, F>(self, callback: F) -> GroupByKey<Self, K, F>
+        where Self: Sized,
+              K: Ord + Clone,
+              F: FnMut(&Self::Item) -> K {
+        GroupByKey::new(self, callback)
+    }
+
     /// Creates a `SignalVec` which uses a closure to transform the values.
     ///
     /// When the output `SignalVec` is spawned:
