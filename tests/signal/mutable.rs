@@ -205,3 +205,39 @@ fn is_from_t(){
     let src = 0;
     let _out: Mutable<u8> = src.into();
 }
+// A waker whose first clone sets the Mutable: the set lands inside `poll_change`,
+// after its changed check and before it stores the waker.
+mod set_during_poll {
+    use std::cell::RefCell;
+    use std::pin::Pin;
+    use std::task::{Context, Poll, RawWaker, RawWakerVTable, Waker};
+    use futures_signals::signal::{Mutable, Signal};
+
+    thread_local! {
+        static SET_ON_CLONE: RefCell<Option<Mutable<u32>>> = RefCell::new(None);
+    }
+
+    unsafe fn clone(_: *const ()) -> RawWaker {
+        if let Some(mutable) = SET_ON_CLONE.with(|cell| cell.borrow_mut().take()) {
+            mutable.set(1);
+        }
+        RawWaker::new(std::ptr::null(), &VTABLE)
+    }
+
+    unsafe fn noop(_: *const ()) {}
+
+    static VTABLE: RawWakerVTable = RawWakerVTable::new(clone, noop, noop, noop);
+
+    #[test]
+    fn test_set_during_poll_is_not_lost() {
+        let mutable = Mutable::new(0);
+        let mut signal = mutable.signal();
+        let waker = unsafe { Waker::from_raw(RawWaker::new(std::ptr::null(), &VTABLE)) };
+        let mut cx = Context::from_waker(&waker);
+
+        assert_eq!(Pin::new(&mut signal).poll_change(&mut cx), Poll::Ready(Some(0)));
+
+        SET_ON_CLONE.with(|cell| *cell.borrow_mut() = Some(mutable.clone()));
+        assert_eq!(Pin::new(&mut signal).poll_change(&mut cx), Poll::Ready(Some(1)));
+    }
+}

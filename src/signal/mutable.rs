@@ -112,7 +112,17 @@ impl<A> MutableSignalState<A> {
 
         } else {
             self.waker.set_waker(cx);
-            Poll::Pending
+
+            // A change between the first check and `set_waker` found no waker to wake.
+            if self.waker.is_changed() {
+                let value = {
+                    let lock = self.state.lock.read().unwrap();
+                    f(&lock.value)
+                };
+                Poll::Ready(Some(value))
+            } else {
+                Poll::Pending
+            }
         }
     }
 }
